@@ -1,3 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* App-wide base styling (optional) */
+html, body, #__next {
+  height: 100%;
+}
+body {
+  @apply bg-white text-gray-900;
+}

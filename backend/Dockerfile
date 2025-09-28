@@ -1,23 +1,22 @@
-# Use official Python image
+# Lightweight Python base
 FROM python:3.11-slim
 
-# Set working directory inside container
-WORKDIR /code
+# Prevent Python from writing .pyc files / buffering stdout
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Install system dependencies (optional, useful for MongoDB drivers, etc.)
-RUN apt-get update && apt-get install -y build-essential
+# Create and use app directory
+WORKDIR /app
 
-# Copy requirements first (better caching)
+# Install deps first (cache-friendly)
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the backend code
-COPY . .
+# Copy app source
+COPY app ./app
 
-# Expose port for FastAPI
+# Expose FastAPI default port
 EXPOSE 8000
 
-# Default command (can be overridden in docker-compose.yml)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Run the server
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
