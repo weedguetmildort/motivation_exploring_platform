@@ -1,0 +1,16 @@
+FROM node:20.11.1-alpine
+
+# set working directory
+WORKDIR /app
+
+# install dependencies first (cache-friendly)
+COPY package*.json ./
+RUN npm install
+
+# copy rest of the frontend
+COPY . .
+
+# expose port
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]
