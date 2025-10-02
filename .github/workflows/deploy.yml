@@ -36,7 +36,10 @@ jobs:
         with:
           context: ./backend
           file: ./backend/Dockerfile
+          platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           # Heroku requires the image to be tagged as registry.heroku.com/<app>/web
           tags: |
             ${{ env.HEROKU_REGISTRY }}/${{ env.APP_BACKEND }}/web
@@ -49,7 +52,10 @@ jobs:
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
+          platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           tags: |
             ${{ env.HEROKU_REGISTRY }}/${{ env.APP_FRONTEND }}/web
           cache-from: type=gha
