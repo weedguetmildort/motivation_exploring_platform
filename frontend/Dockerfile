@@ -23,9 +23,14 @@ ENV NODE_ENV=production
 # COPY --from=builder /app/package*.json ./
 # COPY --from=builder /app/node_modules ./node_modules
 # COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
+
+# COPY --from=builder /app/.next/standalone ./
+# COPY --from=builder /app/.next/static ./.next/static
+# COPY --from=builder /app/public ./public
+
+COPY --from=builder /app/.next/standalone /app
+COPY --from=builder /app/.next/static /app/.next/static
+COPY --from=builder /app/public /app/public
 
 # Heroku (and many PaaS) inject $PORT; default to 3000 locally
 ENV PORT=3000
@@ -33,4 +38,5 @@ ENV PORT=3000
 # expose port
 EXPOSE 3000
 
-CMD ["sh", "-lc", "npx next start -p ${PORT}"]
+# CMD ["sh", "-lc", "npx next start -p ${PORT}"]
+CMD ["node", "server.js"]
