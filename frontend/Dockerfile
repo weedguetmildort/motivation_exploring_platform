@@ -12,6 +12,11 @@ RUN npm ci || npm install
 
 # copy rest of the frontend
 COPY . .
+
+# Accept backend URL from build args
+ARG BACKEND_URL
+ENV BACKEND_URL=$BACKEND_URL
+
 RUN npm run build
 
 # --- Runtime stage ---
