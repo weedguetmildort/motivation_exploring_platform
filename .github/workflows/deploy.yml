@@ -58,7 +58,7 @@ jobs:
           sbom: false
           no-cache: true
           build-args: |
-            BACKEND_URL=https://${{ secrets.HEROKU_APP_BACKEND }}.herokuapp.com
+            BACKEND_URL=https://${{ secrets.BACKEND_URL }}
           tags: |
             ${{ env.HEROKU_REGISTRY }}/${{ env.APP_FRONTEND }}/web
           cache-from: type=gha
