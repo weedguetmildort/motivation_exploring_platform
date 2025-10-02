@@ -6,7 +6,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://mep-frontend.herokuapp.com",
+        ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -14,6 +17,10 @@ app.add_middleware(
 @app.get("/")
 def read_root():
     return {"message": "Hello world from FastAPI!"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 # Mount the chat router
 app.include_router(chat_router)
