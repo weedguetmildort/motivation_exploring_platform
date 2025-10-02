@@ -66,6 +66,16 @@ jobs:
         run: |
           curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
 
+      - name: Set stack to container (backend)
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: heroku stack:set container -a ${{ secrets.HEROKU_APP_BACKEND }}
+
+      - name: Set stack to container (frontend)
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: heroku stack:set container -a ${{ secrets.HEROKU_APP_FRONTEND }}
+
       # Release both apps (uses HEROKU_API_KEY from env; no interactive login)
       - name: Release Backend
         run: |
