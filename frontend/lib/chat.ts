@@ -3,7 +3,7 @@ const BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") || "http://localhost:8000";
 
 export async function sendChat(message: string): Promise<string> {
-  const res = await fetch(`${BASE}/chat`, {
+  const res = await fetch("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),

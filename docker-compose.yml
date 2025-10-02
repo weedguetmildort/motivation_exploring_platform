@@ -15,7 +15,7 @@ services:
       - WATCHPACK_POLLING_INTERVAL=2000
       - CHOKIDAR_USEPOLLING=1
       - CHOKIDAR_INTERVAL=2000
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - BACKEND_URL=http://backend:8000
     working_dir: /app
     command: npm run dev
     restart: unless-stopped
