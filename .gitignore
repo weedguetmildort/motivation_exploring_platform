@@ -1,0 +1,23 @@
+# Node.js / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# Python / backend
+backend/__pycache__/
+backend/*.pyc
+backend/venv/
+backend/.env
+
+# Docker
+*.log
+*.env
+docker-compose.override.yml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode / IDE
+.vscode/
+.idea/

@@ -1,0 +1,89 @@
+name: Deploy to Heroku (Docker, Frontend + Backend)
+
+on:
+  push:
+    branches: [ "main" ]   # change if your default branch is different
+  workflow_dispatch:       # allow manual runs from the Actions tab
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+      HEROKU_EMAIL:   ${{ secrets.HEROKU_EMAIL }}
+      APP_BACKEND:    ${{ secrets.HEROKU_APP_BACKEND }}   # e.g., mep-backend
+      APP_FRONTEND:   ${{ secrets.HEROKU_APP_FRONTEND }}  # e.g., mep-frontend
+      HEROKU_REGISTRY: registry.heroku.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (multi-arch, optional)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Heroku Container Registry
+        run: |
+          echo "${HEROKU_API_KEY}" | docker login -u "${HEROKU_EMAIL}" --password-stdin ${HEROKU_REGISTRY}
+
+      # ------------ Backend ------------
+      - name: Build & Push Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          # Heroku requires the image to be tagged as registry.heroku.com/<app>/web
+          tags: |
+            ${{ env.HEROKU_REGISTRY }}/${{ env.APP_BACKEND }}/web
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ------------ Frontend ------------
+      - name: Build & Push Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          no-cache: true
+          build-args: |
+            BACKEND_URL=https://${{ secrets.BACKEND_URL }}
+          tags: |
+            ${{ env.HEROKU_REGISTRY }}/${{ env.APP_FRONTEND }}/web
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Install Heroku CLI to run container:release
+      - name: Install Heroku CLI
+        run: |
+          curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
+
+      - name: Set stack to container (backend)
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: heroku stack:set container -a ${{ secrets.HEROKU_APP_BACKEND }}
+
+      - name: Set stack to container (frontend)
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: heroku stack:set container -a ${{ secrets.HEROKU_APP_FRONTEND }}
+
+      # Release both apps (uses HEROKU_API_KEY from env; no interactive login)
+      - name: Release Backend
+        run: |
+          heroku container:release web -a "${APP_BACKEND}"
+
+      - name: Release Frontend
+        run: |
+          heroku container:release web -a "${APP_FRONTEND}"
