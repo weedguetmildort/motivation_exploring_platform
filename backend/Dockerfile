@@ -1,0 +1,29 @@
+# backend/Dockerfile
+# --- Base image ---
+FROM python:3.11-slim
+
+# Prevent Python from writing .pyc files / buffering stdout
+# Security & predictability
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Create and use app directory
+WORKDIR /app
+
+# System deps (only if needed; keep slim)
+# RUN apt-get update && apt-get install -y --no-install-recommends <packages> && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies first (cache-friendly)
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy app source
+COPY app ./app
+
+# Expose FastAPI default port
+# Heroku provides PORT; bind to it
+# Optional: scale workers via WEB_CONCURRENCY env (Heroku Labs sets it sometimes)
+EXPOSE 8000
+
+# Run the server
+CMD ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips '*'"]
