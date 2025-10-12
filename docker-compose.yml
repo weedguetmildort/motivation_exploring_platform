@@ -30,5 +30,21 @@ services:
       - "8000:8000"
     environment:
       - UF_OPENAI_API_KEY=${UF_OPENAI_API_KEY}
-      - UF_OPENAI_BASE_URL=https://api.ai.it.ufl.edu
+      - UF_OPENAI_BASE_URL=${UF_OPENAI_BASE_URL}
+      - MONGO_URL=mongodb://mongo:27017
+      - MONGO_DB=mep_dev
+    depends_on:
+      - mongo
     restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: motivation-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

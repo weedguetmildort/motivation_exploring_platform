@@ -1,5 +1,7 @@
 # motivation_exploring_platform
 
+https://ai-exploration-frontend-4dc13593856a.herokuapp.com/
+
 docker run --rm -it -v "$PWD/../frontend":/app -w /app node:20 \
   sh -lc "npm i -D typescript @types/react @types/react-dom @types/node"
 
