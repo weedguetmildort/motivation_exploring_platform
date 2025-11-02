@@ -1,9 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import QuestionBox from "../components/QuestionBox";
 import AnswerBox, { Choice } from "../components/AnswerBox";
+import ChatBox from "../components/ChatBox";
+import { getMe, type User } from "../lib/auth";
 
 export default function Playground() {
+  const [active, setActive] = useState("base");
   const [question, setQuestion] = useState("Conditional Probability");
   const [subtitle, setSubtitle] = useState(
     "You have two cards: one is red/red, the other is red/blue. A card is drawn and shows red. What is the probability the other side is also red?"
@@ -16,97 +19,126 @@ export default function Playground() {
   ]);
   const [selected, setSelected] = useState<string | null>(null);
 
+  const [user, setUser] = useState<User | null>(null);
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const res = await getMe();
+        if (!cancel) setUser(res.user);
+      } catch {
+        if (!cancel) window.location.href = "/login";
+      } finally {
+        if (!cancel) setChecking(false);
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  if (checking) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <div className="text-gray-500">Loading…</div>
+      </div>
+    );
+  }
+  if (!user) return null;
+
+  const isProd = process.env.NODE_ENV === "production";
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <header className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Components Playground</h1>
-          <Link href="/" className="text-blue-600 hover:underline">Home</Link>
+          <h1 className="text-2xl font-semibold">Playground</h1>
+          <Link  href="/dashboard" className="text-sm text-blue-600 underline">
+            Back to dashboard
+          </Link >
         </header>
 
-        <section className="rounded-xl bg-white p-4 shadow-sm border">
-          <h2 className="text-lg font-medium mb-3">QuestionBox Controls</h2>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="block text-sm text-gray-600 mb-1">Question</span>
-              <input
-                type="text"
-                className="w-full rounded-md border px-3 py-2"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                placeholder="Enter question text"
-              />
-            </label>
-            <label className="block sm:col-span-2">
-              <span className="block text-sm text-gray-600 mb-1">Subtitle (optional)</span>
-              <textarea
-                className="w-full rounded-md border px-3 py-2"
-                value={subtitle}
-                onChange={(e) => setSubtitle(e.target.value)}
-                rows={3}
-                placeholder="Add an optional subtitle"
-              />
-            </label>
-          </div>
-        </section>
+        {!isProd && (
 
-        <section>
-          <QuestionBox question={question} subtitle={subtitle || undefined} className="max-w-3xl mx-auto" />
-        </section>
-
-        <section className="rounded-xl bg-white p-4 shadow-sm border">
-          <h2 className="text-lg font-medium mb-3">AnswerBox</h2>
-          <div className="space-y-4">
-            <AnswerBox
-              choices={choices}
-              value={selected}
-              onChange={setSelected}
-              className="max-w-3xl"
-            />
-            <div className="text-sm text-gray-600">
-              Selected: <span className="font-medium">{selected ?? "(none)"}</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-xl bg-white p-4 shadow-sm border">
-          <h2 className="text-lg font-medium mb-3">Edit Choices</h2>
-          <div className="space-y-3">
-            {choices.map((c, idx) => (
-              <div key={c.id} className="flex gap-2 items-center">
-                <input
-                  type="text"
-                  className="flex-1 rounded-md border px-3 py-2"
-                  value={c.label}
-                  onChange={(e) => {
-                    const next = [...choices];
-                    next[idx] = { ...c, label: e.target.value };
-                    setChoices(next);
-                  }}
-                />
+          <section className="rounded-xl bg-white p-4 shadow-sm border">
+            <h2 className="text-lg font-medium mb-3">Case Selection</h2>
+            <div className="space-y-4 max-w-3xl mx-auto">
+              <p >*Should only be visible during development*</p>
+              <div className="flex justify-center gap-4 mt-8">
                 <button
-                  className="px-3 py-2 rounded-md border text-sm"
-                  onClick={() => {
-                    const next = choices.filter((x) => x.id !== c.id);
-                    setChoices(next);
-                    if (selected === c.id) setSelected(null);
-                  }}
+                  onClick={() => setActive("base")}
+                  aria-pressed={active === "base"}
+                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md
+                    ${
+                      active === "base"
+                        ? "bg-blue-600 text-white shadow-lg scale-105"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
                 >
-                  Remove
+                    Base Case
+                </button>
+                <button
+                  onClick={() => setActive("followup")}
+                  aria-pressed={active === "base"}
+                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md
+                    ${
+                      active === "followup"
+                        ? "bg-blue-600 text-white shadow-lg scale-105"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                >
+                  Follow-up Question Case
                 </button>
               </div>
-            ))}
-            <button
-              className="px-3 py-2 rounded-md border text-sm"
-              onClick={() => {
-                const id = Math.random().toString(36).slice(2, 7);
-                setChoices((prev) => [...prev, { id, label: `Option ${prev.length + 1}` }]);
-              }}
-            >
-              Add Choice
-            </button>
+              <div className="p-6 bg-white rounded-xl shadow-inner">
+                {active === "base" ? (
+                  <p className="text-lg text-gray-800">
+                    This is the <strong>Base Case</strong> content.
+                  </p>
+                ) : (
+                  <p className="text-lg text-gray-800">
+                    This should be the <strong>Follow-up Question Case</strong> content. *Coming Soon*
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+          {/* Left column: Question + Options stacked */}
+          <div className="grid gap-6">
+
+            <section className="rounded-xl bg-white p-4 shadow-sm border">
+              <h2 className="text-lg font-medium mb-3">Question</h2>
+              <div className="space-y-4">
+                <QuestionBox question={question} subtitle={subtitle || undefined} className="max-w-3xl mx-auto" />
+              </div>
+            </section>
+          
+
+            <section className="rounded-xl bg-white p-4 shadow-sm border">
+              <h2 className="text-lg font-medium mb-3">Options</h2>
+              <div className="space-y-4">
+                <AnswerBox
+                  choices={choices}
+                  value={selected}
+                  onChange={setSelected}
+                  className="max-w-3xl mx-auto"
+                />
+                <div className="text-sm text-gray-600">
+                  Selected: <span className="font-medium">{selected ?? "(none)"}</span>
+                </div>
+              </div>
+            </section>
           </div>
-        </section>
+
+          {/* Right column: Chat spans both rows on large screens */}
+          <section className="rounded-xl bg-white p-4 shadow-sm border lg:row-span-2">
+            <ChatBox/>
+          </section>
+        </div>
       </div>
     </div>
   );

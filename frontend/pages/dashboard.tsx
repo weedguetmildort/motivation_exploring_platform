@@ -51,6 +51,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
+
       <div className="grid gap-4 sm:grid-cols-2">
         <a
           href="/chat"
@@ -61,6 +62,15 @@ export default function DashboardPage() {
             Ask questions and explore motivation signals.
           </p>
         </a>
+        
+        <a
+          href="/playground"
+          className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+        >
+          <h2 className="mb-1 text-lg font-semibold">Playground</h2>
+          <p className="text-sm text-gray-600">Cases access</p>
+        </a>
+
 
         {/* Add more cards later: history, profile, settings, etc. */}
         <div className="rounded-2xl border p-5 opacity-70">
