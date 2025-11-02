@@ -9,6 +9,12 @@ backend/*.pyc
 backend/venv/
 backend/.env
 
+# Python virtual environments (anywhere)
+.venv/
+venv/
+**/.venv/
+**/venv/
+
 # Docker
 *.log
 *.env
