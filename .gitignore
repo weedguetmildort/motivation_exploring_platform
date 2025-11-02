@@ -1,0 +1,29 @@
+# Node.js / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# Python / backend
+backend/__pycache__/
+backend/*.pyc
+backend/venv/
+backend/.env
+
+# Python virtual environments (anywhere)
+.venv/
+venv/
+**/.venv/
+**/venv/
+
+# Docker
+*.log
+*.env
+docker-compose.override.yml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode / IDE
+.vscode/
+.idea/

@@ -1,0 +1,50 @@
+services:
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: motivation-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+      - WATCHPACK_POLLING_INTERVAL=2000
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=2000
+      - BACKEND_URL=http://backend:8000
+    working_dir: /app
+    command: npm run dev
+    restart: unless-stopped
+    tty: true
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: motivation-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - UF_OPENAI_API_KEY=${UF_OPENAI_API_KEY}
+      - UF_OPENAI_BASE_URL=${UF_OPENAI_BASE_URL}
+      - MONGO_URL=mongodb://mongo:27017
+      - MONGO_DB=mep_dev
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: motivation-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
