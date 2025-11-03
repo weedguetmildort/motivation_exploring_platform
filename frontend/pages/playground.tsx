@@ -4,9 +4,10 @@ import QuestionBox from "../components/QuestionBox";
 import AnswerBox, { Choice } from "../components/AnswerBox";
 import ChatBox from "../components/ChatBox";
 import { getMe, type User } from "../lib/auth";
+import FollowUpQuestionBox from "../components/FollowUpQuestionBox";
 
 export default function Playground() {
-  const [active, setActive] = useState("base");
+  const [active, setActive] = useState("followup");
   const [question, setQuestion] = useState("Conditional Probability");
   const [subtitle, setSubtitle] = useState(
     "You have two cards: one is red/red, the other is red/blue. A card is drawn and shows red. What is the probability the other side is also red?"
@@ -94,11 +95,11 @@ export default function Playground() {
               <div className="p-6 bg-white rounded-xl shadow-inner">
                 {active === "base" ? (
                   <p className="text-lg text-gray-800">
-                    This is the <strong>Base Case</strong> content.
+                    This should be the <strong>Base Case</strong> content. *Coming Soon*
                   </p>
                 ) : (
                   <p className="text-lg text-gray-800">
-                    This should be the <strong>Follow-up Question Case</strong> content. *Coming Soon*
+                    This is <strong>Follow-up Question Case</strong> content. 
                   </p>
                 )}
               </div>
@@ -130,6 +131,12 @@ export default function Playground() {
                 <div className="text-sm text-gray-600">
                   Selected: <span className="font-medium">{selected ?? "(none)"}</span>
                 </div>
+              </div>
+            </section>
+            <section className="rounded-xl bg-white p-4 shadow-sm border">
+              <h2 className="text-lg font-medium mb-3">Follow Up Questions</h2>
+              <div className="space-y-4">
+                <FollowUpQuestionBox/>
               </div>
             </section>
           </div>
