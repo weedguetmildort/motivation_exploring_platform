@@ -2,6 +2,7 @@ import React from "react";
 import { useEffect, useState } from "react";
 import ChatBox from "../components/ChatBox";
 import Link from "next/link";
+import FollowUpQuestionBox from "../components/FollowUpQuestionBox";
 
 export default function Landing() {
   return (
