@@ -42,12 +42,18 @@ export default function FollowUpQuestionBox ({
         //building a prompt for AI because it will not ramble on about topic 
         // being discussed but instead come up with related questions
         const prompt =
-        "You are a helpful assistant for a statistics student.\n" +
-        "The student is chatting with you about a problem.\n" +
-        "Here is the last thing you said to the student:\n\n" +
+        "You are a helpful assistant who generates short follow-up questions related ONLY to the student's last message. " +
+        "Your follow-up questions MUST be:\n" +
+        "• directly related to the statistics explanation you just gave\n" +
+        "• concise (1 sentence, max 12 words)\n" +
+        "• simple and beginner-friendly\n" +
+        "• NOT about homework, exams, studying, tutoring, or general statistics help\n" +
+        "• NOT long, detailed, or multi-part questions\n\n" +
+        "Here is the last thing you told the student:\n\n" +
         lastAiMessage +
-        "\n\nBased on this, generate 3 follow-up questions " +
-        "the student might ask next. Return them as a numbered list.";
+        "\n\nGenerate exactly 3 possible follow-up questions the student might ask next. " +
+        "Return ONLY the 3 questions as a numbered list (1., 2., 3.).";
+
 
         const reply = await sendChat(prompt); //how chatbox communicates to backend AI
         //will break up each question
