@@ -110,11 +110,11 @@ export default function Playground() {
               <div className="p-6 bg-white rounded-xl shadow-inner">
                 {active === "base" ? (
                   <p className="text-lg text-gray-800">
-                    This should be the <strong>Base Case</strong> content. *Coming Soon*
+                    This should be the <strong>Base Case</strong> content. Chat works, but no follow-up suggestions are shown.
                   </p>
                 ) : (
                   <p className="text-lg text-gray-800">
-                    This is <strong>Follow-up Question Case</strong> content.
+                    This is <strong>Follow-up Question Case</strong> content. Chat works and FollowUpQuestionBox renders under the last answer.
                   </p>
                 )}
               </div>
@@ -124,8 +124,9 @@ export default function Playground() {
 
         <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
           {/* Left column */}
-          <div className="grid gap-6">
-            <section className="rounded-xl bg-white p-4 shadow-sm border">
+          <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full">
+
+            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
               <h2 className="text-lg font-medium mb-3">Question</h2>
               <div className="space-y-4">
                 <QuestionBox
@@ -136,7 +137,7 @@ export default function Playground() {
               </div>
             </section>
 
-            <section className="rounded-xl bg-white p-4 shadow-sm border">
+            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
               <h2 className="text-lg font-medium mb-3">Options</h2>
               <div className="space-y-4">
                 <AnswerBox
@@ -152,25 +153,14 @@ export default function Playground() {
               </div>
             </section>
 
-            <section className="rounded-xl bg-white p-4 shadow-sm border">
-              <FollowUpQuestionBox
-                lastAiMessage={lastAiMessage}
-                onOptionClick={handleFollowupClick}
-              />
-              {selectedFollowup && (
-                <div className="text-xs text-gray-500 mt-2">
-                  Selected follow-up: {selectedFollowup}
-                </div>
-              )}
-            </section>
           </div>
 
           {/* Right column (Chat) */}
-          <section className="rounded-xl bg-white p-4 shadow-sm border lg:row-span-2">
             <ChatBox 
-            onAssistantMessage={setLastAiMessage}
-            externalQuestion={followupToSend}/>
-          </section>
+              onAssistantMessage={setLastAiMessage}
+              externalQuestion={followupToSend}
+              enableFollowups={active === "followup"}
+            />
         </div>
       </div>
     </div>
