@@ -22,6 +22,24 @@ export default function Playground() {
 
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
+
+  //track chat AI message + follow-up selection
+  const [lastAiMessage, setLastAiMessage] = useState<string | null>(null);
+  const [selectedFollowup, setSelectedFollowup] = useState<string | null>(null);
+  const [followupToSend, setFollowupToSend] = useState<string | null>(null);
+
+
+  function handleFollowupClick(question: string) {
+    setSelectedFollowup(question);
+    setFollowupToSend(question);
+    console.log("Follow-up option clicked:", question);
+  }
+  useEffect(() => {
+    if (lastAiMessage) {
+      setFollowupToSend(null);
+    }
+  }, [lastAiMessage]);
+
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -55,39 +73,36 @@ export default function Playground() {
       <div className="max-w-6xl mx-auto space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Playground</h1>
-          <Link  href="/dashboard" className="text-sm text-blue-600 underline">
+          <Link href="/dashboard" className="text-sm text-blue-600 underline">
             Back to dashboard
-          </Link >
+          </Link>
         </header>
 
         {!isProd && (
-
           <section className="rounded-xl bg-white p-4 shadow-sm border">
             <h2 className="text-lg font-medium mb-3">Case Selection</h2>
             <div className="space-y-4 max-w-3xl mx-auto">
-              <p >*Should only be visible during development*</p>
+              <p>*Should only be visible during development*</p>
               <div className="flex justify-center gap-4 mt-8">
                 <button
                   onClick={() => setActive("base")}
                   aria-pressed={active === "base"}
-                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md
-                    ${
-                      active === "base"
-                        ? "bg-blue-600 text-white shadow-lg scale-105"
-                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    }`}
+                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                    active === "base"
+                      ? "bg-blue-600 text-white shadow-lg scale-105"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
                 >
-                    Base Case
+                  Base Case
                 </button>
                 <button
                   onClick={() => setActive("followup")}
-                  aria-pressed={active === "base"}
-                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md
-                    ${
-                      active === "followup"
-                        ? "bg-blue-600 text-white shadow-lg scale-105"
-                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    }`}
+                  aria-pressed={active === "followup"}
+                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                    active === "followup"
+                      ? "bg-blue-600 text-white shadow-lg scale-105"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
                 >
                   Follow-up Question Case
                 </button>
@@ -99,7 +114,7 @@ export default function Playground() {
                   </p>
                 ) : (
                   <p className="text-lg text-gray-800">
-                    This is <strong>Follow-up Question Case</strong> content. 
+                    This is <strong>Follow-up Question Case</strong> content.
                   </p>
                 )}
               </div>
@@ -108,16 +123,18 @@ export default function Playground() {
         )}
 
         <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
-          {/* Left column: Question + Options stacked */}
+          {/* Left column */}
           <div className="grid gap-6">
-
             <section className="rounded-xl bg-white p-4 shadow-sm border">
               <h2 className="text-lg font-medium mb-3">Question</h2>
               <div className="space-y-4">
-                <QuestionBox question={question} subtitle={subtitle || undefined} className="max-w-3xl mx-auto" />
+                <QuestionBox
+                  question={question}
+                  subtitle={subtitle || undefined}
+                  className="max-w-3xl mx-auto"
+                />
               </div>
             </section>
-          
 
             <section className="rounded-xl bg-white p-4 shadow-sm border">
               <h2 className="text-lg font-medium mb-3">Options</h2>
@@ -129,21 +146,30 @@ export default function Playground() {
                   className="max-w-3xl mx-auto"
                 />
                 <div className="text-sm text-gray-600">
-                  Selected: <span className="font-medium">{selected ?? "(none)"}</span>
+                  Selected:{" "}
+                  <span className="font-medium">{selected ?? "(none)"}</span>
                 </div>
               </div>
             </section>
+
             <section className="rounded-xl bg-white p-4 shadow-sm border">
-              <h2 className="text-lg font-medium mb-3">Follow Up Questions</h2>
-              <div className="space-y-4">
-                <FollowUpQuestionBox/>
-              </div>
+              <FollowUpQuestionBox
+                lastAiMessage={lastAiMessage}
+                onOptionClick={handleFollowupClick}
+              />
+              {selectedFollowup && (
+                <div className="text-xs text-gray-500 mt-2">
+                  Selected follow-up: {selectedFollowup}
+                </div>
+              )}
             </section>
           </div>
 
-          {/* Right column: Chat spans both rows on large screens */}
+          {/* Right column (Chat) */}
           <section className="rounded-xl bg-white p-4 shadow-sm border lg:row-span-2">
-            <ChatBox/>
+            <ChatBox 
+            onAssistantMessage={setLastAiMessage}
+            externalQuestion={followupToSend}/>
           </section>
         </div>
       </div>

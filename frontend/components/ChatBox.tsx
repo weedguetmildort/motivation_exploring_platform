@@ -8,7 +8,12 @@ type Msg = {
   ts: number;
 };
 
-export default function ChatBox() {
+type ChatBoxProps = {
+  onAssistantMessage?:(message: string) => void;
+  externalQuestion?:string|null;
+};
+
+export default function ChatBox({onAssistantMessage,externalQuestion,}: ChatBoxProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
@@ -19,25 +24,33 @@ export default function ChatBox() {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
   }, [messages, pending]);
 
+  async function sendMessage(content:string){
+    const trimmed = content.trim();
+    if(!trimmed||pending) return;
+
+    setError(null);
+    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content, ts: Date.now() };
+    setMessages((m) => [...m, userMsg]);
+    
+    try{
+      setPending(true);
+      const reply = await sendChat(trimmed);
+      const botMsg: Msg = { id: crypto.randomUUID(), role: "assistant", content: reply, ts: Date.now() };
+      setMessages((m) => [...m, botMsg]);
+      if (onAssistantMessage) {
+        onAssistantMessage(reply);
+      }  
+    } catch (e){
+      setError("Failed to contact the server.");
+    } finally{
+      setPending(false);
+    }
+  }
   async function onSend() {
     const content = input.trim();
     if (!content || pending) return;
-
-    setError(null);
     setInput("");
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content, ts: Date.now() };
-    setMessages((m) => [...m, userMsg]);
-
-    try {
-      setPending(true);
-      const reply = await sendChat(content);
-      const botMsg: Msg = { id: crypto.randomUUID(), role: "assistant", content: reply, ts: Date.now() };
-      setMessages((m) => [...m, botMsg]);
-    } catch (e) {
-      setError("Failed to contact the server.");
-    } finally {
-      setPending(false);
-    }
+    await sendMessage(content);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -46,6 +59,10 @@ export default function ChatBox() {
       onSend();
     }
   }
+  useEffect(() => {
+    if(!externalQuestion) return;
+    sendMessage(externalQuestion);
+  }, [externalQuestion]);
 
   return (
     <div className="mx-auto max-w-2xl h-[80vh] flex flex-col rounded-2xl border bg-white shadow-sm">
