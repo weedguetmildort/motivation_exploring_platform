@@ -36,6 +36,13 @@ export default function DashboardPage() {
     try { await logout(); } finally { router.replace("/login"); }
   }
 
+  // Define admin emails - users with these emails will see the admin section
+  const ADMIN_EMAILS = [
+    'javian.sandino@ufl.edu'
+  ];
+
+  const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+
   return (
     <div className="min-h-screen p-6">
       <header className="mb-6 flex items-center justify-between">
@@ -70,6 +77,16 @@ export default function DashboardPage() {
           <h2 className="mb-1 text-lg font-semibold">Playground</h2>
           <p className="text-sm text-gray-600">Cases access</p>
         </a>
+
+        {isAdmin && (
+          <a
+            href="/admin"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition bg-blue-50 border-blue-200"
+          >
+            <h2 className="mb-1 text-lg font-semibold text-blue-900">Admin Panel</h2>
+            <p className="text-sm text-blue-700">Manage questions and content</p>
+          </a>
+        )}
 
 
         {/* Add more cards later: history, profile, settings, etc. */}
