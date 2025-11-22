@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import ChatBox from "../components/ChatBox";
-import { getMe, type User } from "../lib/auth";
+import { getMe, logout, type User } from "../lib/auth";
 
 // Simple client-side guard. For stronger security, also check auth on the backend per request.
 export default function ChatPage() {
@@ -10,21 +10,31 @@ export default function ChatPage() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
+    let cancel = false;
+
     (async () => {
       try {
-        const { user } = await getMe();
-        if (!cancelled) setUser(user);
+        const res = await getMe();
+        if (!cancel) {
+          if (!res.user.is_admin) {
+            // Non-admin → block access and redirect
+            window.location.href = "/dashboard";
+            return;
+          }
+          setUser(res.user);
+        }
       } catch {
-        if (!cancelled) router.replace("/login");
+        // Not logged in → send to login
+        if (!cancel) window.location.href = "/login";
       } finally {
-        if (!cancelled) setChecking(false);
+        if (!cancel) setChecking(false);
       }
     })();
+
     return () => {
-      cancelled = true;
+      cancel = true;
     };
-  }, [router]);
+  }, []);
 
   if (checking) {
     return (
@@ -41,9 +51,12 @@ export default function ChatPage() {
       <header className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Chat</h1>
         <div className="text-sm text-gray-600">Signed in as {user.email}</div>
-        <a href="/dashboard" className="text-sm text-blue-600 underline">
-          Back to dashboard
-        </a>
+          <button 
+            onClick={() => router.push("/dashboard")}
+            className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+          >
+            Back to Dashboard
+          </button>
       </header>
       <ChatBox />
     </div>

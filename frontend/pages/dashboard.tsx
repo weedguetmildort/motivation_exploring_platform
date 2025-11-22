@@ -36,22 +36,18 @@ export default function DashboardPage() {
     try { await logout(); } finally { router.replace("/login"); }
   }
 
-  // Define admin emails - users with these emails will see the admin section
-  const ADMIN_EMAILS = [
-    'javian.sandino@ufl.edu'
-  ];
-
-  const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
-
   return (
     <div className="min-h-screen p-6">
       <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <div>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-sm text-gray-600">Welcome, {user.email}</p>
+        </div>
         <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-600">{user.email}</span>
+          
           <button
             onClick={onLogout}
-            className="rounded-xl border px-3 py-1 text-sm hover:bg-gray-50"
+            className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
           >
             Log out
           </button>
@@ -60,39 +56,42 @@ export default function DashboardPage() {
 
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <a
-          href="/chat"
-          className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-        >
-          <h2 className="mb-1 text-lg font-semibold">Open Chat</h2>
-          <p className="text-sm text-gray-600">
-            Ask questions and explore motivation signals.
-          </p>
-        </a>
+        {user?.is_admin && (
+          <a
+            href="/chat"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg font-semibold">Open Chat</h2>
+            <p className="text-sm text-gray-600">
+              Ask questions and explore motivation signals.
+            </p>
+          </a>
+        )}
         
-        <a
-          href="/playground"
-          className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-        >
-          <h2 className="mb-1 text-lg font-semibold">Playground</h2>
-          <p className="text-sm text-gray-600">Cases access</p>
-        </a>
+        {user?.is_admin && (
+          <a
+            href="/playground"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg font-semibold">Playground</h2>
+            <p className="text-sm text-gray-600">Cases access</p>
+          </a>
+        )}
 
-        {isAdmin && (
+        {user?.is_admin && (
           <a
             href="/admin"
-            className="rounded-2xl border p-5 shadow-sm hover:shadow transition bg-blue-50 border-blue-200"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold text-blue-900">Admin Panel</h2>
-            <p className="text-sm text-blue-700">Manage questions and content</p>
+            <h2 className="mb-1 text-lg font-semibold">Admin Panel</h2>
+            <p className="text-sm text-gray-600">Manage questions and content</p>
           </a>
         )}
 
 
-        {/* Add more cards later: history, profile, settings, etc. */}
         <div className="rounded-2xl border p-5 opacity-70">
-          <h2 className="mb-1 text-lg font-semibold">Coming soon</h2>
-          <p className="text-sm text-gray-600">Conversation history, analytics…</p>
+          <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
+          <p className="text-sm text-gray-600">Begin the Quiz</p>
         </div>
       </div>
     </div>

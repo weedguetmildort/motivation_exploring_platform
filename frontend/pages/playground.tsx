@@ -3,10 +3,12 @@ import Link from "next/link";
 import QuestionBox from "../components/QuestionBox";
 import AnswerBox, { Choice } from "../components/AnswerBox";
 import ChatBox from "../components/ChatBox";
-import { getMe, type User } from "../lib/auth";
+import { getMe, logout, type User } from "../lib/auth";
 import FollowUpQuestionBox from "../components/FollowUpQuestionBox";
+import { useRouter } from "next/router";
 
 export default function Playground() {
+  const router = useRouter();
   const [active, setActive] = useState("followup");
   const [question, setQuestion] = useState("Conditional Probability");
   const [subtitle, setSubtitle] = useState(
@@ -42,16 +44,26 @@ export default function Playground() {
 
   useEffect(() => {
     let cancel = false;
+
     (async () => {
       try {
         const res = await getMe();
-        if (!cancel) setUser(res.user);
+        if (!cancel) {
+          if (!res.user.is_admin) {
+            // Non-admin → block access and redirect
+            window.location.href = "/dashboard";
+            return;
+          }
+          setUser(res.user);
+        }
       } catch {
+        // Not logged in → send to login
         if (!cancel) window.location.href = "/login";
       } finally {
         if (!cancel) setChecking(false);
       }
     })();
+
     return () => {
       cancel = true;
     };
@@ -68,14 +80,29 @@ export default function Playground() {
 
   const isProd = process.env.NODE_ENV === "production";
 
+  async function onLogout() {
+    try { await logout(); } finally { router.replace("/login"); }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-6xl mx-auto space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Playground</h1>
-          <Link href="/dashboard" className="text-sm text-blue-600 underline">
-            Back to dashboard
-          </Link>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => router.push("/dashboard")}
+              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+            >
+              Back to Dashboard
+            </button>
+            <button
+              onClick={onLogout}
+              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+            >
+              Logout
+            </button>
+          </div>
         </header>
 
         {!isProd && (
@@ -161,6 +188,14 @@ export default function Playground() {
               externalQuestion={followupToSend}
               enableFollowups={active === "followup"}
             />
+        </div>
+
+        <div>
+          <button
+            className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
+          >
+              Submit
+          </button>
         </div>
       </div>
     </div>

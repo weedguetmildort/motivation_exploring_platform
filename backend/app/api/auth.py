@@ -55,7 +55,11 @@ def get_current_user(request: Request) -> UserPublic:
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
 
-    return UserPublic(id=str(doc["_id"]), email=doc["email"])
+    return UserPublic(
+        id=str(doc["_id"]),
+        email=doc["email"],
+        is_admin=doc.get("is_admin", False),
+    )
 
 @router.post("/signup", response_model=AuthResponse)
 def signup(data: SignupRequest, request: Request, response: Response):
@@ -93,7 +97,11 @@ def login(data: LoginRequest, request: Request, response: Response):
     if not doc or not check_user_password(doc, data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    user_pub = UserPublic(id=str(doc["_id"]), email=doc["email"])
+    user_pub = UserPublic(
+        id=str(doc["_id"]),
+        email=doc["email"],
+        is_admin=doc.get("is_admin", False),
+    )
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)

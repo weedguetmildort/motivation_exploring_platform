@@ -10,7 +10,7 @@ import { apiFetch } from "./fetcher";
 export type User = {
   id: string;
   email: string;
-  // add more public fields as needed
+  is_admin: boolean;
 };
 
 export async function signup(email: string, password: string) {
