@@ -45,12 +45,12 @@ export default function DashboardPage() {
             <p className="text-sm text-gray-600">Welcome to the dashboard, {user.email}</p>
           </div>
           <div className="flex items-center gap-4">
-            {/* <button 
-              onClick={() => router.push("/dashboard")}
+            <button 
+              onClick={() => router.push("/profile")}
               className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
             >
-              Back to Dashboard
-            </button> */}
+              Profile
+            </button>
             <button
               onClick={onLogout}
               className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
