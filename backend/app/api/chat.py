@@ -44,10 +44,20 @@ def chat(req: ChatRequest, request: Request):
 
     # Get assistant reply from UF proxy
     try:
+        system_instruction = (
+            "You are a helpful assistant who generates clear and concise answers "
+            "to help students answer some quiz questions."
+        )
+
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": req.message},
+        ]
+
         # Send the user’s message to the proxy; keep it simple (non-streaming)
         resp = _client.chat.completions.create(
-            model="llama-3.3-70b-instruct",
-            messages=[{"role": "user", "content": req.message}],
+            model=os.getenv("UF_OPENAI_API_MODEL"),
+            messages=messages,
         )
         reply = (resp.choices[0].message.content or "").strip()
     except Exception as e:

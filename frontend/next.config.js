@@ -23,6 +23,7 @@ const nextConfig = {
         '/auth/:path*', 
         destination: `${process.env.BACKEND_URL}/auth/:path*`
       },
+      { source: "/api/questions/:path*", destination: `${backend}/questions/:path*` },
     ];
   },
 };
