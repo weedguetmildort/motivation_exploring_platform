@@ -194,6 +194,7 @@ export default function AdminPage() {
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">Admin Panel</h1>
+            <p className="text-sm text-gray-600">Manage questions and contents</p>
           </div>
           <div className="flex items-center gap-4">
             <button 
@@ -204,7 +205,7 @@ export default function AdminPage() {
             </button>
             <button
               onClick={onLogout}
-              className="bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded-lg text-sm"
+              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
             >
               Logout
             </button>

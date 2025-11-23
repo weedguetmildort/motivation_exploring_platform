@@ -85,10 +85,14 @@ export default function Playground() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <header className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Playground</h1>
+    <div className="min-h-screen bg-gray-50">
+
+      <header className="bg-white border-b px-6 py-4">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Playground</h1>
+            <p className="text-sm text-gray-600">Sandbox to see how it looks</p>
+          </div>
           <div className="flex items-center gap-4">
             <button 
               onClick={() => router.push("/dashboard")}
@@ -103,13 +107,14 @@ export default function Playground() {
               Logout
             </button>
           </div>
-        </header>
+        </div>
+      </header>
 
-        {!isProd && (
+      <div className="max-w-6xl mx-auto p-6">
+        
           <section className="rounded-xl bg-white p-4 shadow-sm border">
             <h2 className="text-lg font-medium mb-3">Case Selection</h2>
             <div className="space-y-4 max-w-3xl mx-auto">
-              <p>*Should only be visible during development*</p>
               <div className="flex justify-center gap-4 mt-8">
                 <button
                   onClick={() => setActive("base")}
@@ -147,9 +152,9 @@ export default function Playground() {
               </div>
             </div>
           </section>
-        )}
+        
 
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-6 px-0 pb-6">
           {/* Left column */}
           <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full">
 

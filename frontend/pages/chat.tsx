@@ -46,19 +46,38 @@ export default function ChatPage() {
 
   if (!user) return null; // redirected
 
+  async function onLogout() {
+    try { await logout(); } finally { router.replace("/login"); }
+  }
+
   return (
-    <div className="min-h-screen p-6">
-      <header className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Chat</h1>
-        <div className="text-sm text-gray-600">Signed in as {user.email}</div>
-          <button 
-            onClick={() => router.push("/dashboard")}
-            className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-          >
-            Back to Dashboard
-          </button>
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b px-6 py-4">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Chat</h1>
+            <p className="text-sm text-gray-600">Ask questions and interact with AI chatbot</p>
+          </div>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => router.push("/dashboard")}
+              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+            >
+              Back to Dashboard
+            </button>
+            <button
+              onClick={onLogout}
+              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
-      <ChatBox />
+
+      <div className="max-w-6xl mx-auto p-6">
+        <ChatBox />
+      </div>
     </div>
   );
 }
