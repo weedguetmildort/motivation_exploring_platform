@@ -179,7 +179,8 @@ export default function AdminPage() {
         body: JSON.stringify({ stem, subtitle, choices }),
       });
       setMessage("Question saved!");
-      // optionally clear form or keep it
+      // Refresh page
+      window.location.reload();
     } catch (err: any) {
       setMessage("Failed to save question.");
     } finally {
