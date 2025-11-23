@@ -10,7 +10,7 @@ import { apiFetch } from "./fetcher";
 export type User = {
   id: string;
   email: string;
-  // add more public fields as needed
+  is_admin: boolean;
 };
 
 export async function signup(email: string, password: string) {
@@ -35,4 +35,14 @@ export async function getMe() {
 export async function logout() {
   // If you implement it on the backend
   return apiFetch<void>("/auth/logout", { method: "POST" });
+}
+
+export async function changePassword(currentPassword: string, newPassword: string) {
+  return apiFetch<{ ok: boolean }>("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
 }

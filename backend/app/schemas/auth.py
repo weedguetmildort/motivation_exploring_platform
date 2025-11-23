@@ -11,3 +11,7 @@ class LoginRequest(BaseModel):
 
 class AuthResponse(BaseModel):
     user: UserPublic
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6)

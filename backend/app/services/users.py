@@ -6,7 +6,11 @@ from ..schemas.user import UserPublic
 from ..core.security import hash_password, verify_password
 
 def _to_public(doc: dict) -> UserPublic:
-    return UserPublic(id=str(doc["_id"]), email=doc["email"])
+    return UserPublic(
+        id=str(doc["_id"]),
+        email=doc["email"],
+        is_admin=doc.get("is_admin"),
+    )
 
 def get_users_collection(db) -> Collection:
     return db["users"]
@@ -19,6 +23,7 @@ def create_user(users: Collection, email: str, password: str) -> UserPublic:
         "email": email.lower(),
         "password_hash": hash_password(password),
         "created_at": datetime.utcnow(),
+        "is_admin": False,
     }
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id

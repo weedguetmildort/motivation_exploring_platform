@@ -5,6 +5,7 @@ class UserInDB(BaseModel):
     id: str
     email: EmailStr
     password_hash: str
+    is_admin: bool = False
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -13,9 +14,11 @@ class UserCreate(BaseModel):
 class UserPublic(BaseModel):
     id: str
     email: EmailStr
+    is_admin: bool
 
 class UserDBDoc(BaseModel):
     """Shape as stored in Mongo."""
     _id: str
     email: EmailStr
     password_hash: str
+    is_admin: bool = False

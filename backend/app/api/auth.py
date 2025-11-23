@@ -1,6 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
 from pymongo.errors import DuplicateKeyError
-from ..schemas.auth import SignupRequest, LoginRequest, AuthResponse
+from ..core.security import hash_password
+from ..schemas.auth import (
+    SignupRequest,
+    LoginRequest,
+    AuthResponse,
+    ChangePasswordRequest,
+)
 from ..schemas.user import UserPublic
 from ..services.users import (
     get_users_collection,
@@ -55,7 +61,11 @@ def get_current_user(request: Request) -> UserPublic:
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
 
-    return UserPublic(id=str(doc["_id"]), email=doc["email"])
+    return UserPublic(
+        id=str(doc["_id"]),
+        email=doc["email"],
+        is_admin=doc.get("is_admin", False),
+    )
 
 @router.post("/signup", response_model=AuthResponse)
 def signup(data: SignupRequest, request: Request, response: Response):
@@ -93,7 +103,11 @@ def login(data: LoginRequest, request: Request, response: Response):
     if not doc or not check_user_password(doc, data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    user_pub = UserPublic(id=str(doc["_id"]), email=doc["email"])
+    user_pub = UserPublic(
+        id=str(doc["_id"]),
+        email=doc["email"],
+        is_admin=doc.get("is_admin", False),
+    )
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
@@ -105,4 +119,33 @@ def me(user: UserPublic = Depends(get_current_user)):
 @router.post("/logout")
 def logout(response: Response):
     clear_session_cookie(response)
+    return {"ok": True}
+
+@router.post("/change-password")
+def change_password(
+    data: ChangePasswordRequest,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    """
+    Allow a logged-in user to change their password by providing
+    the current password and a new password.
+    """
+    users = get_users_collection(request.app.state.db)
+    doc = find_user_by_email(users, user.email)
+    if not doc:
+        # Should not normally happen if session is valid
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # verify current password
+    if not check_user_password(doc, data.current_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    # hash and store new password
+    new_hash = hash_password(data.new_password)
+    users.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {"password_hash": new_hash}},
+    )
+
     return {"ok": True}
