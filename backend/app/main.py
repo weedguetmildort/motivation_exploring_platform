@@ -5,15 +5,19 @@ from pymongo.errors import ServerSelectionTimeoutError
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api.chat import router as chat_router
+from .api.auth import router as auth_router
+from .api import questions as questions_router
+
+
+from .core.config import get_settings
 
 app = FastAPI()
+settings = get_settings()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://mep-frontend.herokuapp.com",
-        ],
+    allow_origins=settings.ALLOW_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -39,6 +43,11 @@ def _startup():
         # helpful indexes
         messages.create_index([("conversation_id", ASCENDING)])
         messages.create_index([("created_at", ASCENDING)])
+
+        # Ensure users collection indexes (unique email)
+        from .services.users import get_users_collection, ensure_indexes
+        ensure_indexes(get_users_collection(db))
+
         app.state.mongo_client = client
         app.state.db = db
         app.state.messages = messages
@@ -63,4 +72,6 @@ def health():
     return {"status": "ok"}
 
 # Mount the chat router
+app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(questions_router.router)
