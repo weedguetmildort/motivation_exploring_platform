@@ -81,7 +81,7 @@ export default function DashboardPage() {
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
               <h2 className="mb-1 text-lg font-semibold">Playground</h2>
-              <p className="text-sm text-gray-600">Cases access</p>
+              <p className="text-sm text-gray-600">Sandbox to see how the different quiz styles look</p>
             </a>
           )}
 
