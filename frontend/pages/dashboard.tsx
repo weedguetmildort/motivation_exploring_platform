@@ -95,11 +95,13 @@ export default function DashboardPage() {
             </a>
           )}
 
-
-          <div className="rounded-2xl border p-5 opacity-70">
+          <a
+            href="/quiz"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
             <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
-          </div>
+          </a>
         </div>
       </div>
     </div>
