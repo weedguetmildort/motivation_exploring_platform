@@ -26,8 +26,19 @@ export default function QuizPage() {
 
     (async () => {
       try {
+        // const res = await getMe();
+        // if (!cancel) setUser(res.user);
         const res = await getMe();
-        if (!cancel) setUser(res.user);
+        if (cancel) return;
+
+        const u = res.user;
+
+        if (!u.quiz_pre_survey_completed) {
+          router.replace("/quiz-survey");
+          return;
+        }
+
+        setUser(u);
       } catch {
         if (!cancel) router.replace("/login");
       } finally {

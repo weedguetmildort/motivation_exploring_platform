@@ -8,6 +8,8 @@ from .api.chat import router as chat_router
 from .api.auth import router as auth_router
 from .api import questions as questions_router
 from .api import quiz as quiz_router
+from .api import demographics as demographics_router
+from .api import quiz_survey as quiz_survey_router
 
 
 from .core.config import get_settings
@@ -77,3 +79,5 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(questions_router.router)
 app.include_router(quiz_router.router)
+app.include_router(demographics_router.router)
+app.include_router(quiz_survey_router.router)

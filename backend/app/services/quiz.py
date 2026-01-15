@@ -9,6 +9,7 @@ from .questions import get_questions_collection  # assuming you have this
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload
 
 QUIZ_ID = "main"  # single quiz for now
+MAX_QUIZ_QUESTIONS = 10
 
 def get_quiz_attempts_collection(db) -> Collection:
     return db["quiz_attempts"]
@@ -38,6 +39,8 @@ def _load_or_create_attempt(db, user_id: str, user_email: str) -> dict:
 
     import random
     random.shuffle(ids)
+
+    ids = ids[:MAX_QUIZ_QUESTIONS]
 
     now = datetime.utcnow()
     doc = {
@@ -129,6 +132,9 @@ def record_answer(db, user_id: str, question_id: str, choice_id: str) -> dict:
 
     if doc["status"] == "completed":
         raise HTTPException(status_code=400, detail="Quiz already completed")
+    
+    if question_id not in set(doc.get("question_order", [])):
+        raise HTTPException(status_code=400, detail="Question not part of this quiz attempt")
 
     now = datetime.utcnow()
 

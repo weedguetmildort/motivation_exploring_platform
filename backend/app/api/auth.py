@@ -65,6 +65,8 @@ def get_current_user(request: Request) -> UserPublic:
         id=str(doc["_id"]),
         email=doc["email"],
         is_admin=doc.get("is_admin", False),
+        demographics_completed=doc.get("demographics_completed", False),
+        quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
     )
 
 @router.post("/signup", response_model=AuthResponse)
@@ -107,6 +109,8 @@ def login(data: LoginRequest, request: Request, response: Response):
         id=str(doc["_id"]),
         email=doc["email"],
         is_admin=doc.get("is_admin", False),
+        demographics_completed=doc.get("demographics_completed", False),
+        quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
     )
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)

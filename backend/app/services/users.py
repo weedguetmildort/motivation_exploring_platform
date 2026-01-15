@@ -10,6 +10,8 @@ def _to_public(doc: dict) -> UserPublic:
         id=str(doc["_id"]),
         email=doc["email"],
         is_admin=doc.get("is_admin"),
+        demographics_completed=doc.get("demographics_completed", False),
+        quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
     )
 
 def get_users_collection(db) -> Collection:
@@ -24,6 +26,9 @@ def create_user(users: Collection, email: str, password: str) -> UserPublic:
         "password_hash": hash_password(password),
         "created_at": datetime.utcnow(),
         "is_admin": False,
+        "demographics_completed": False,
+        "quiz_pre_survey_completed": False,
+        "demographics": {},
     }
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id

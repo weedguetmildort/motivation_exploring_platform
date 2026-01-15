@@ -11,6 +11,8 @@ export type User = {
   id: string;
   email: string;
   is_admin: boolean;
+  demographics_completed?: boolean;
+  quiz_pre_survey_completed?: boolean;
 };
 
 export async function signup(email: string, password: string) {
