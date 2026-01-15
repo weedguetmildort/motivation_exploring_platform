@@ -11,8 +11,15 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const { user } = await getMe();
-        if (!cancelled) setUser(user);
+        const res = await getMe();
+        const u = res.user
+
+        if (!cancelled && !u.demographics_completed) {
+          router.replace("/demographics");
+          return;
+        }
+
+        if (!cancelled) setUser(u);
       } catch {
         if (!cancelled) router.replace("/login");
       } finally {
