@@ -1,21 +1,36 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
-import { saveQuizPreSurvey } from "../lib/quizSurvey";
+import {
+  getSurveyState,
+  submitSurvey,
+  type SurveyItem,
+  type SurveyAnswer,
+} from "../lib/surveys";
 
 export default function QuizPreSurveyPage() {
   const router = useRouter();
+
+  const STAGE = "pre_quiz";
+
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Likert states: 1–5
-  const [priorExperience, setPriorExperience] = useState<number | null>(null);
-  const [trustRely, setTrustRely] = useState<number | null>(null);
-  const [trustGeneral, setTrustGeneral] = useState<number | null>(null);
-  const [trustCountOn, setTrustCountOn] = useState<number | null>(null);
+  const [loadingSurvey, setLoadingSurvey] = useState(true);
+  const [items, setItems] = useState<SurveyItem[]>([]);
+  const [status, setStatus] = useState<
+    "not_started" | "in_progress" | "completed"
+  >("not_started");
 
+  // store responses by item.id (works for any DB-driven survey)
+  const [values, setValues] = useState<
+    Record<string, number | string | string[]>
+  >({});
+
+  // Auth check
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -24,11 +39,6 @@ export default function QuizPreSurveyPage() {
         if (cancel) return;
 
         const u = res.user;
-        // If already completed, send to quiz
-        if (u.quiz_pre_survey_completed) {
-          router.replace("/quiz");
-          return;
-        }
         setUser(u);
       } catch {
         if (!cancel) router.replace("/login");
@@ -41,6 +51,59 @@ export default function QuizPreSurveyPage() {
     };
   }, [router]);
 
+  // Load survey state from backend (DB-driven)
+  useEffect(() => {
+    if (!user) return;
+
+    let cancel = false;
+
+    (async () => {
+      setLoadingSurvey(true);
+      setError(null);
+
+      try {
+        const state = await getSurveyState(STAGE);
+        if (cancel) return;
+
+        setItems(state.items || []);
+        setStatus(state.status);
+
+        // hydrate existing answers (resume support)
+        const initial: Record<string, any> = {};
+        for (const a of state.answers || []) initial[a.item_id] = a.value;
+        setValues(initial);
+
+        // If already completed, go to quiz
+        if (state.status === "completed") {
+          router.replace("/quiz");
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancel) setError("Failed to load the pre-quiz survey.");
+      } finally {
+        if (!cancel) setLoadingSurvey(false);
+      }
+    })();
+
+    return () => {
+      cancel = true;
+    };
+  }, [user, router]);
+
+  // required check based on DB items
+  const requiredUnanswered = useMemo(() => {
+    return items
+      .filter((i) => i.required)
+      .filter((i) => {
+        const v = values[i.id];
+        if (v === undefined) return true;
+        if (typeof v === "string" && v.trim() === "") return true;
+        if (Array.isArray(v) && v.length === 0) return true;
+        return false;
+      });
+  }, [items, values]);
+
   if (checking) {
     return (
       <div className="grid min-h-screen place-items-center">
@@ -51,32 +114,41 @@ export default function QuizPreSurveyPage() {
 
   if (!user) return null;
 
-  function isComplete() {
-    return (
-      priorExperience !== null &&
-      trustRely !== null &&
-      trustGeneral !== null &&
-      trustCountOn !== null
-    );
+  async function onLogout() {
+    try {
+      await logout();
+    } finally {
+      router.replace("/login");
+    }
+  }
+
+  // generalized likert setter
+  function setLikert(itemId: string, n: number) {
+    setValues((prev) => ({ ...prev, [itemId]: n }));
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!isComplete()) {
-      setError("Please answer all questions before continuing.");
+    if (requiredUnanswered.length > 0) {
+      setError("Please answer all required questions before continuing.");
       return;
     }
 
     setSaving(true);
     try {
-      await saveQuizPreSurvey({
-        prior_experience: priorExperience!,
-        trust_rely: trustRely!,
-        trust_general: trustGeneral!,
-        trust_count_on: trustCountOn!,
-      });
+      const answers: SurveyAnswer[] = items
+        .map((i) => {
+          const v = values[i.id];
+          if (v === undefined) return null;
+          if (typeof v === "string" && v.trim() === "") return null;
+          if (Array.isArray(v) && v.length === 0) return null;
+          return { item_id: i.id, value: v };
+        })
+        .filter(Boolean) as SurveyAnswer[];
+
+      await submitSurvey(STAGE, answers);
       router.replace("/quiz");
     } catch (e) {
       console.error(e);
@@ -86,27 +158,40 @@ export default function QuizPreSurveyPage() {
     }
   }
 
-  function renderLikertRow(
-    id: string,
-    label: string,
-    value: number | null,
-    onChange: (v: number) => void
-  ) {
+  function renderLikertRow(item: SurveyItem) {
+    const value = (values[item.id] as number | undefined) ?? null;
+
+    const min = item.scale_min ?? 1;
+    const max = item.scale_max ?? 5;
+
+    const left = item.scale_left_label ?? "Strongly disagree";
+    const right = item.scale_right_label ?? "Strongly agree";
+
     return (
       <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-4">
         {/* Question text */}
-        <p className="text-sm font-medium text-gray-900">{label}</p>
+        <p className="text-sm font-medium text-gray-900">
+          {/* {item.category ? `${item.category} — ` : ""} */}
+          {item.prompt}
+          {item.required && <span className="text-red-500"> *</span>}
+        </p>
 
         {/* Scale description */}
         <div className="flex items-center justify-between text-xs text-gray-500">
-          <span>1 = Strongly disagree</span>
-          <span>5 = Strongly agree</span>
+          <span>
+            {min} = {left}
+          </span>
+          <span>
+            {max} = {right}
+          </span>
         </div>
 
         {/* Likert scale row */}
         <div className="mt-2 flex justify-between gap-2">
-          {[1, 2, 3, 4, 5].map((n) => {
+          {Array.from({ length: max - min + 1 }).map((_, idx) => {
+            const n = min + idx;
             const checked = value === n;
+
             return (
               <label
                 key={n}
@@ -118,12 +203,12 @@ export default function QuizPreSurveyPage() {
                 ].join(" ")}
               >
                 <input
-                  id={`${id}-${n}`}
+                  id={`${item.id}-${n}`}
                   type="radio"
-                  name={id}
+                  name={item.id}
                   value={n}
                   checked={checked}
-                  onChange={() => onChange(n)}
+                  onChange={() => setLikert(item.id, n)}
                   className="sr-only"
                 />
                 <span className="text-sm font-semibold">{n}</span>
@@ -135,14 +220,6 @@ export default function QuizPreSurveyPage() {
     );
   }
 
-  async function onLogout() {
-    try {
-      await logout();
-    } finally {
-      router.replace("/login");
-    }
-  }
-
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b px-6 py-4">
@@ -152,17 +229,16 @@ export default function QuizPreSurveyPage() {
               Pre-Quiz Survey
             </h1>
             <p className="text-sm text-gray-600">
-              Before you start the quiz, please answer a few quick questions
-              about your prior AI experience and trust. This will only be asked
-              once.
+              Before you start the quiz, please answer a few quick questions.
+              This will only be asked once.
             </p>
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={() => router.push("/profile")}
+              onClick={() => router.push("/dashboard")}
               className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
             >
-              Profile
+              Back to Dashboard
             </button>
             <button
               onClick={onLogout}
@@ -185,45 +261,52 @@ export default function QuizPreSurveyPage() {
             </div>
           )}
 
-          {/* Q1 – prior experience */}
-          {renderLikertRow(
-            "prior_experience",
-            "I have experience using AI chatbots (e.g., ChatGPT).",
-            priorExperience,
-            setPriorExperience
+          {loadingSurvey ? (
+            <div className="text-sm text-gray-500">Loading survey…</div>
+          ) : items.length === 0 ? ( // [NEW]
+            <div className="text-sm text-gray-500">
+              No survey items found for stage{" "}
+              <span className="font-medium">{STAGE}</span>. Add items in the
+              Surveys Panel.
+            </div>
+          ) : (
+            <>
+              {/* Render DB-driven items (currently likert supported) */}{" "}
+              {items.map((item) => {
+                if (item.type === "likert")
+                  return <div key={item.id}>{renderLikertRow(item)}</div>;
+
+                // Future types can go here
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-lg border border-gray-200 bg-white p-4"
+                  >
+                    <p className="text-sm font-medium text-gray-900">
+                      {/* {item.category ? `${item.category} — ` : ""} */}
+                      {item.prompt}
+                      {item.required && (
+                        <span className="text-red-500"> *</span>
+                      )}
+                    </p>
+                    <p className="mt-2 text-xs text-gray-500">
+                      Unsupported question type:{" "}
+                      <span className="font-medium">{item.type}</span>
+                    </p>
+                  </div>
+                );
+              })}
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
+                >
+                  {saving ? "Saving…" : "Begin Quiz"}
+                </button>
+              </div>
+            </>
           )}
-
-          {/* Q2 – trust items */}
-          <div className="space-y-4 pt-4 border-t border-gray-200">
-            {renderLikertRow(
-              "trust_rely",
-              "I could rely on an AI chatbot for assistance while problem-solving.",
-              trustRely,
-              setTrustRely
-            )}
-            {renderLikertRow(
-              "trust_general",
-              "I could trust an AI chatbot for assistance.",
-              trustGeneral,
-              setTrustGeneral
-            )}
-            {renderLikertRow(
-              "trust_count_on",
-              "In general, I could count on an AI chatbot for assistance while problem-solving.",
-              trustCountOn,
-              setTrustCountOn
-            )}
-          </div>
-
-          <div className="flex justify-end pt-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
-            >
-              {saving ? "Saving…" : "Begin Quiz"}
-            </button>
-          </div>
         </form>
       </main>
     </div>

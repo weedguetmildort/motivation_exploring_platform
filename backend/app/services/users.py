@@ -9,7 +9,7 @@ def _to_public(doc: dict) -> UserPublic:
     return UserPublic(
         id=str(doc["_id"]),
         email=doc["email"],
-        is_admin=doc.get("is_admin"),
+        is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
         quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
     )
