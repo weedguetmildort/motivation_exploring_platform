@@ -34,8 +34,8 @@ const nextConfig = {
         destination: `${backend}/demographics/:path*`,
       },
       {
-        source: "/api/quiz-survey/:path*",
-        destination: `${backend}/quiz-survey/:path*`,
+        source: "/api/surveys/:path*",
+        destination: `${backend}/surveys/:path*`,
       },
     ];
   },

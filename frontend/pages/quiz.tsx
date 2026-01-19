@@ -6,6 +6,7 @@ import AnswerBox, { Choice } from "../components/AnswerBox";
 import { getMe, logout, type User } from "../lib/auth";
 import { getQuizState, submitQuizAnswer, type QuizStateResponse } from "../lib/quiz";
 import ChatBox from "../components/ChatBox";
+import { getSurveyState } from "../lib/surveys";
 
 export default function QuizPage() {
   const router = useRouter();
@@ -33,7 +34,10 @@ export default function QuizPage() {
 
         const u = res.user;
 
-        if (!u.quiz_pre_survey_completed) {
+        const survey = await getSurveyState("pre_quiz");
+        if (cancel) return;
+
+        if (survey.status !== "completed") {
           router.replace("/quiz-survey");
           return;
         }
