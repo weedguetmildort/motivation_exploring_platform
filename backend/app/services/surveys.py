@@ -13,6 +13,7 @@ from ..schemas.survey import (
     SurveyStateResponse,
     SurveyAttemptPublic,
     SurveyAnswerPublic,
+    SurveyScale,
 )
 
 def get_survey_items_collection(db) -> Collection:
@@ -35,10 +36,44 @@ def _item_to_public(doc: dict) -> SurveyItemPublic:
     d["id"] = str(d.pop("_id"))
     return SurveyItemPublic(**d)
 
+def _normalize_item_doc(doc: dict) -> dict:
+    """
+    Enforce invariants based on item.type.
+    - likert => must have scale, options=None
+    - single_select => must have >=2 options, scale=None
+    """
+    t = doc.get("type", "likert")
+
+    if t == "likert":
+        if not doc.get("scale"):
+            doc["scale"] = SurveyScale(min=1, max=5, anchors=["Strongly disagree", "Strongly agree"]).model_dump()  # [ADD]
+        doc["options"] = None  # [ADD]
+
+    elif t == "single_select":
+        opts = doc.get("options") or []
+        # remove empty labels defensively
+        normalized = []
+        for o in opts:
+            label = (o.get("label") or "").strip()
+            if not label:
+                continue
+            normalized.append({"id": o.get("id"), "label": label})
+
+        if len(normalized) < 2:
+            raise HTTPException(status_code=400, detail="single_select requires at least 2 options")  # [ADD]
+
+        doc["options"] = normalized  # [ADD]
+        doc["scale"] = None          # [ADD]
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown survey item type: {t}")  # [ADD]
+
+    return doc  # [ADD]
+
 def create_survey_item(db, data: SurveyItemCreate) -> SurveyItemPublic:
     ensure_survey_indexes(db)
     col = get_survey_items_collection(db)
-    doc = data.model_dump()
+    doc = _normalize_item_doc(data.model_dump())
     now = datetime.utcnow()
     doc["created_at"] = now
     doc["updated_at"] = now
@@ -61,15 +96,30 @@ def list_survey_items(db, stage: Optional[str] = None, active_only: bool = False
 def update_survey_item(db, item_id: str, patch: SurveyItemUpdate) -> SurveyItemPublic:
     col = get_survey_items_collection(db)
     now = datetime.utcnow()
-    update = {k: v for k, v in patch.model_dump().items() if v is not None}
-    update["updated_at"] = now
 
-    res = col.update_one({"_id": ObjectId(item_id)}, {"$set": update})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Survey item not found")
+    existing = col.find_one({"_id": ObjectId(item_id)})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Survey item not found")  # [UPDATE]
+
+    patch_data = {k: v for k, v in patch.model_dump().items() if v is not None}  # [UPDATE]
+
+    # Merge patch into existing doc
+    merged = dict(existing)  # [ADD]
+    merged.update(patch_data)  # [ADD]
+    merged["updated_at"] = now  # [UPDATE]
+
+    # Normalize & validate based on final type
+    merged = _normalize_item_doc(merged)  # [ADD]
+
+    # Write back only the fields we store (avoid overwriting _id)
+    merged_to_set = dict(merged)  # [ADD]
+    merged_to_set.pop("_id", None)  # [ADD]
+
+    col.update_one({"_id": ObjectId(item_id)}, {"$set": merged_to_set})  # [UPDATE]
 
     doc = col.find_one({"_id": ObjectId(item_id)})
     return _item_to_public(doc)
+
 
 def delete_survey_item(db, item_id: str) -> None:
     col = get_survey_items_collection(db)
