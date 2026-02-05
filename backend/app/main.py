@@ -1,5 +1,4 @@
 import os
-
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import ServerSelectionTimeoutError
 from fastapi import FastAPI
@@ -7,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.chat import router as chat_router
 from .api.auth import router as auth_router
 from .api import questions as questions_router
+from .api import quiz as quiz_router
+from .api import demographics as demographics_router
+from .api import surveys as surveys_router
 
 
 from .core.config import get_settings
@@ -48,6 +50,9 @@ def _startup():
         from .services.users import get_users_collection, ensure_indexes
         ensure_indexes(get_users_collection(db))
 
+        from .services.surveys import ensure_survey_indexes
+        ensure_survey_indexes(db)
+
         app.state.mongo_client = client
         app.state.db = db
         app.state.messages = messages
@@ -75,3 +80,6 @@ def health():
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(questions_router.router)
+app.include_router(quiz_router.router)
+app.include_router(demographics_router.router)
+app.include_router(surveys_router.router)

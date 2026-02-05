@@ -14,7 +14,9 @@ class UserCreate(BaseModel):
 class UserPublic(BaseModel):
     id: str
     email: EmailStr
-    is_admin: bool
+    is_admin: bool = False
+    demographics_completed: bool = False
+    quiz_pre_survey_completed: bool = False
 
 class UserDBDoc(BaseModel):
     """Shape as stored in Mongo."""
@@ -22,3 +24,5 @@ class UserDBDoc(BaseModel):
     email: EmailStr
     password_hash: str
     is_admin: bool = False
+    demographics_completed: bool = False
+    quiz_pre_survey_completed: bool = False

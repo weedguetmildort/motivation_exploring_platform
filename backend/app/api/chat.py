@@ -4,6 +4,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from openai import OpenAI
 from datetime import datetime
+from fastapi import APIRouter, Request, HTTPException, Depends
+from ..schemas.user import UserPublic
+from .auth import get_current_user
 
 router = APIRouter()
 
@@ -21,7 +24,11 @@ _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
 _client = OpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL)
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest, request: Request):
+async def chat(
+    req: ChatRequest,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
     if not _UF_API_KEY:
         # surface a clear backend misconfiguration error
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
@@ -31,12 +38,14 @@ def chat(req: ChatRequest, request: Request):
     
     # Insert user message
     try:
-        request.app.state.messages.insert_one({         # [UPDATE]
+        request.app.state.messages.insert_one({
             "conversation_id": conv_id,
             "role": "user",
+            "user_id": user.id,
+            "user_email": user.email,
             "content": req.message,
             "created_at": datetime.utcnow(),
-            "source": "web",                            # optional tag
+            "source": "web",
         })
     except Exception:
         # don't fail the chat if logging fails
@@ -67,9 +76,11 @@ def chat(req: ChatRequest, request: Request):
 
     # Insert assistant message
     try:
-        request.app.state.messages.insert_one({         # [UPDATE]
+        request.app.state.messages.insert_one({
             "conversation_id": conv_id,
             "role": "assistant",
+            "user_id": user.id,
+            "user_email": user.email,
             "content": reply,
             "created_at": datetime.utcnow(),
             "source": "ai",
