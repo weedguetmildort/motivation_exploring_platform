@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { sendChat } from "../lib/chat";
 import FollowUpQuestionBox from "./FollowUpQuestionBox";
+import MarkdownMessage from "./MarkdownMessage";
 
 type Msg = {
   id: string;
@@ -111,7 +112,11 @@ export default function ChatBox({
                   : "bg-gray-100 text-gray-900"
               }`}
             >
-              {m.content}
+              {m.role === "assistant" ? (
+                <MarkdownMessage content={m.content} />
+              ) : (
+                <div className="whitespace-pre-wrap">{m.content}</div>
+              )}
             </div>
           </div>
         ))}
@@ -125,7 +130,7 @@ export default function ChatBox({
             {error}
           </div>
         )}
-        
+
         {enableFollowups && (
           <FollowUpQuestionBox
             lastAiMessage={lastAiMessage}
@@ -156,3 +161,15 @@ export default function ChatBox({
     </div>
   );
 }
+
+// For more consistent formatting, instruct the AI to:
+
+// Use $...$ for inline math
+
+// Use $$...$$ for displayed equations
+
+// Use Markdown for structure (headers/lists)
+
+// Example guidance to include in backend prompt:
+
+// “Format your response in Markdown. Use LaTeX math with $...$ (inline) and $$...$$ (display).”

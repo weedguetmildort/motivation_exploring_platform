@@ -133,25 +133,62 @@ This creates:
 Hot reload works on both frontend and backend.
 
 ## 🌍 Production Deployment (Heroku)
-
+Frontend
+- Deployed as a Node container:
+- Uses NEXT_PUBLIC_API_URL handled by GitHub Secrets
+- Built via GitHub Actions CI
+Backend
+- Deployed as its own Heroku container
+- Uses production MongoDB connection string
+- Secure cookies enforced in production
+GitHub Secrets Required
+Frontend:
+```
+BACKEND_URL=https://<your-backend>.herokuapp.com
+```
+Backend:
+```
+MONGO_URL=<mongodb atlas uri>
+COOKIE_DOMAIN=.herokuapp.com
+JWT_SECRET=<your secret>
+COOKIE_SECURE=true
+```
 
 ## ⚙️ Environment Variables
 
-(See full README in previous message.)
+Backend (.env)
+```
+MONGO_URL=mongodb://localhost:27017/motivation
+JWT_SECRET=your-secret-key
+JWT_EXPIRES_MIN=60
+COOKIE_NAME=session
+COOKIE_SECURE=false (true in production)
+COOKIE_DOMAIN=localhost
+SAMESITE=lax
+```
+Frontend (.env.local)
+```
+BACKEND_URL=http://localhost:8000
+```
 
 ## 🧭 Running Locally
 
-**Docker:**
+**With Docker (recommended):**
 ```
 docker-compose up --build
 ```
-
+Frontend → http://localhost:3000
+Backend → http://localhost:8000
+Mongo Express (optional) → http://localhost:8081
 **Without Docker:**
 ```
 # backend
+cd backend
 uvicorn app.main:app --reload
 
 # frontend
+cd frontend
+npm install
 npm run dev
 ```
 
@@ -161,9 +198,11 @@ npm run dev
 
 ## 🛡️ Security
 
-- HTTP-only cookies
-- Argon2 hashing
-- Server-side auth checks
+- HTTP-only cookies prevent client-side JS access
+- Argon2id hashing for password safety
+- Server-side session validation on every request
+- No sensitive data exposed to frontend
+- Admin-only pages are server-enforced
 
 ## 📄 License
-MIT
+MIT — free to use, modify, and distribute.

@@ -13,17 +13,30 @@ const nextConfig = {
       return [];
     }
     return [
-      { source: "/api/chat", destination: `${process.env.BACKEND_URL}/chat` },
       {
-        // Frontend calls: fetch('/chat', ...)
-        source: 
-        // "/chat",
-        // Next.js server proxies to your backend:
-        // destination: `${backend}/chat`,
-        '/auth/:path*', 
-        destination: `${process.env.BACKEND_URL}/auth/:path*`
+        source: "/api/chat",
+        destination: `${backend}/chat`
       },
-      { source: "/api/questions/:path*", destination: `${backend}/questions/:path*` },
+      {
+        source: "/auth/:path*", 
+        destination: `${backend}/auth/:path*`
+      },
+      { 
+        source: "/api/questions/:path*",
+        destination: `${backend}/questions/:path*` 
+      },
+      {
+        source: "/api/quiz/:path*",
+        destination: `${backend}/quiz/:path*`,
+      },
+      {
+        source: "/api/demographics/:path*",
+        destination: `${backend}/demographics/:path*`,
+      },
+      {
+        source: "/api/surveys/:path*",
+        destination: `${backend}/surveys/:path*`,
+      },
     ];
   },
 };
