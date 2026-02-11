@@ -25,10 +25,12 @@ class QuizQuestionPayload(BaseModel):
     subtitle: Optional[str] = None
     choices: List[dict]  # { id: str, label: str }
 
+
 class QuizStateResponse(BaseModel):
     attempt: QuizAttemptPublic
     current_question: Optional[QuizQuestionPayload] = None
 
+#What frontend must send to FastAPI when user submits an answer
 class SubmitAnswerRequest(BaseModel):
     question_id: str
     choice_id: str

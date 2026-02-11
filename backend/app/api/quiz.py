@@ -10,12 +10,15 @@ from ..services.quiz import (
     record_answer,
 )
 
-router = APIRouter(prefix="/quiz", tags=["quiz"])
+#TODO: ensure quiz_id is valid - either in this file before querying responses or in services/quiz.py functions
+# Doing in this file is a bit more organized but doing it from services avoids doing an additional mongoDB request
+router = APIRouter(prefix="/quiz/{quiz_id}", tags=["quiz"])
 
 @router.get("/state", response_model=QuizStateResponse)
 def get_quiz_state(request: Request, user: UserPublic = Depends(get_current_user)):
     db = request.app.state.db
-    attempt_doc = _load_or_create_attempt(db, user.id, user.email)
+    quiz_id = request.path_params["quiz_id"]
+    attempt_doc = _load_or_create_attempt(db, user.id, user.email, quiz_id)
 
     # If quiz is completed, just return state
     if attempt_doc["status"] == "completed":
@@ -39,10 +42,12 @@ def submit_quiz_answer(
     user: UserPublic = Depends(get_current_user),
 ):
     db = request.app.state.db
+    quiz_id = request.path_params["quiz_id"]
 
     updated_doc = record_answer(
         db,
         user_id=user.id,
+        quiz_id=quiz_id,
         question_id=data.question_id,
         choice_id=data.choice_id,
     )

@@ -1,19 +1,20 @@
 // frontend/pages/quiz.tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import QuestionBox from "../components/QuestionBox";
-import AnswerBox, { Choice } from "../components/AnswerBox";
-import { getMe, logout, type User } from "../lib/auth";
+import QuestionBox from "../../components/QuestionBox";
+import AnswerBox, { Choice } from "../../components/AnswerBox";
+import { getMe, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
   submitQuizAnswer,
   type QuizStateResponse,
-} from "../lib/quiz";
-import ChatBox from "../components/ChatBox";
-import { getSurveyState } from "../lib/surveys";
+} from "../../lib/quiz";
+import ChatBox from "../../components/ChatBox";
+import { getSurveyState } from "../../lib/surveys";
 
 export default function QuizPage() {
   const router = useRouter();
+  const { quiz_id } = router.query as { quiz_id: string };
 
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
@@ -37,7 +38,7 @@ export default function QuizPage() {
         if (cancel) return;
 
         const u = res.user;
-
+        //TODO: may want to prompt pre_quiz before every quiz
         const survey = await getSurveyState("pre_quiz");
         if (cancel) return;
 
@@ -78,7 +79,7 @@ export default function QuizPage() {
 
     (async () => {
       try {
-        const state = await getQuizState();
+        const state = await getQuizState(quiz_id);
         if (!cancel) {
           setQuizState(state);
           setSelectedChoice(null);
@@ -143,7 +144,7 @@ export default function QuizPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const state = await submitQuizAnswer(current.id, selectedChoice);
+      const state = await submitQuizAnswer(quiz_id, current.id, selectedChoice);
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
