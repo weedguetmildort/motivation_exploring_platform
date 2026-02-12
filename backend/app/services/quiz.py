@@ -1,4 +1,5 @@
 # backend/app/services/quiz.py
+import uuid
 from datetime import datetime
 from typing import Optional, List, Tuple
 from bson.objectid import ObjectId
@@ -47,6 +48,7 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
         "user_id": user_id,
         "user_email": user_email,
         "quiz_id": quiz_id,
+        "conversation_id": str(uuid.uuid4()),
         "status": "in_progress",
         "question_order": ids,
         "answers": [],
@@ -76,14 +78,16 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         answered_count=answered,
     )
 
+    conv_id = doc.get("conversation_id", "")
+
     if doc["status"] == "completed":
         # don't send a current question
-        return QuizStateResponse(attempt=attempt_pub, current_question=None)
+        return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=None)
 
     next_qid = _find_next_unanswered(doc)
     if not next_qid:
         # nothing left but status not marked complete -> fix it
-        return QuizStateResponse(attempt=attempt_pub, current_question=None)
+        return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=None)
 
     qdoc = qcol.find_one({"_id": ObjectId(next_qid)})
     if not qdoc:
@@ -96,7 +100,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         choices=qdoc["choices"],
     )
 
-    return QuizStateResponse(attempt=attempt_pub, current_question=question_payload)
+    return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=question_payload)
 
 def record_question_shown(db, doc: dict, question_id: str) -> dict:
     col = get_quiz_attempts_collection(db)

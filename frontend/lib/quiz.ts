@@ -16,6 +16,7 @@ export type QuizAttemptPublic = {
 };
 
 export type QuizStateResponse = {
+  conversation_id: string;
   attempt: QuizAttemptPublic;
   current_question: QuizQuestionPayload | null;
 };

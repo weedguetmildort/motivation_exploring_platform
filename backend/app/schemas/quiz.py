@@ -27,6 +27,7 @@ class QuizQuestionPayload(BaseModel):
 
 
 class QuizStateResponse(BaseModel):
+    conversation_id: str
     attempt: QuizAttemptPublic
     current_question: Optional[QuizQuestionPayload] = None
 

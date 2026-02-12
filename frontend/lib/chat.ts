@@ -1,10 +1,10 @@
-let conversationId: string | null = null; // simple in-memory thread id
+//let conversationId: string | null = null; // simple in-memory thread id
 
 // Centralized API helper for chat
 const BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") || "http://localhost:8000";
 
-export async function sendChat(message: string): Promise<string> {
+export async function sendChat(conversationId: string | null, message: string): Promise<string> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

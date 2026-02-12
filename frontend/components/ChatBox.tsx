@@ -14,12 +14,14 @@ type ChatBoxProps = {
   onAssistantMessage?: (message: string) => void;
   externalQuestion?: string | null;
   enableFollowups?: boolean;
+  conversationId?: string | null; //TODO: make required and not null?
 };
 
 export default function ChatBox({
   onAssistantMessage,
   externalQuestion,
   enableFollowups = true,
+  conversationId = null,
 }: ChatBoxProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -46,7 +48,7 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      const reply = await sendChat(trimmed);
+      const reply = await sendChat(conversationId, trimmed);
       const botMsg: Msg = {
         id: crypto.randomUUID(),
         role: "assistant",
