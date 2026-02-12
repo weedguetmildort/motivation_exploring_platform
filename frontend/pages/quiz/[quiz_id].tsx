@@ -161,7 +161,7 @@ export default function QuizPage() {
       <header className="bg-white border-b px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Quiz</h1>
+            <h1 className="text-2xl font-semibold text-gray-900">Quiz {quiz_id}</h1>
             <p className="text-sm text-gray-600">
               Answer each question once. Your progress is saved automatically.
             </p>
