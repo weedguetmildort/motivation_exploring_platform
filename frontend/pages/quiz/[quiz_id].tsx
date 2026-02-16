@@ -55,7 +55,7 @@ export default function QuizPage() {
 
         if (!isCompleted) {
           console.log("[quiz] pre_quiz survey NOT completed. survey=", survey); // DEBUG
-          router.replace("/quiz-survey");
+          router.replace(`/quiz-survey?quiz_id=${quiz_id}`);
           return;
         }
 
