@@ -308,6 +308,7 @@ export default function QuizPage() {
 
             {/* Right column (Chat) */}
             <ChatBox
+              quizId={quiz_id}
               // onAssistantMessage={setLastAiMessage}
               // externalQuestion={followupToSend}
               externalQuestion={externalQuestion}

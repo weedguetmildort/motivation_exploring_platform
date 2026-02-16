@@ -11,6 +11,7 @@ type Msg = {
 };
 
 type ChatBoxProps = {
+  quizId: string;
   onAssistantMessage?: (message: string) => void;
   externalQuestion?: string | null;
   enableFollowups?: boolean;
@@ -18,6 +19,7 @@ type ChatBoxProps = {
 };
 
 export default function ChatBox({
+  quizId,
   onAssistantMessage,
   externalQuestion,
   enableFollowups = true,
@@ -48,16 +50,16 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      const reply = await sendChat(conversationId, trimmed);
-      const botMsg: Msg = {
+      const replies = await sendChat(quizId, conversationId, trimmed);
+      const botMsgs: Msg[] = replies.map((r) => ({
         id: crypto.randomUUID(),
-        role: "assistant",
-        content: reply,
+        role: "assistant" as const,
+        content: r,
         ts: Date.now(),
-      };
-      setMessages((m) => [...m, botMsg]);
+      }));
+      setMessages((m) => [...m, ...botMsgs]);
       if (onAssistantMessage) {
-        onAssistantMessage(reply);
+        onAssistantMessage(replies[replies.length - 1]);
       }
     } catch (e) {
       setError("Failed to contact the server.");
