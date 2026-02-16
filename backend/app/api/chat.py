@@ -1,6 +1,5 @@
 import os
 import uuid
-from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from openai import OpenAI
 from datetime import datetime
