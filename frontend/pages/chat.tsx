@@ -76,7 +76,7 @@ export default function ChatPage() {
       </header>
 
       <div className="max-w-6xl mx-auto p-6">
-        <ChatBox />
+        <ChatBox quizId="default" />
       </div>
     </div>
   );

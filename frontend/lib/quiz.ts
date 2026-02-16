@@ -16,16 +16,17 @@ export type QuizAttemptPublic = {
 };
 
 export type QuizStateResponse = {
+  conversation_id: string;
   attempt: QuizAttemptPublic;
   current_question: QuizQuestionPayload | null;
 };
 
-export async function getQuizState() {
-  return apiFetch<QuizStateResponse>("/api/quiz/state");
+export async function getQuizState(quizID: string) {
+  return apiFetch<QuizStateResponse>("/api/quiz/{quiz_id}/state".replace("{quiz_id}", quizID));
 }
 
-export async function submitQuizAnswer(questionId: string, choiceId: string) {
-  return apiFetch<QuizStateResponse>("/api/quiz/answer", {
+export async function submitQuizAnswer(quizID: string, questionId: string, choiceId: string) {
+  return apiFetch<QuizStateResponse>("/api/quiz/{quiz_id}/answer".replace("{quiz_id}", quizID), {
     method: "POST",
     body: JSON.stringify({ question_id: questionId, choice_id: choiceId }),
   });

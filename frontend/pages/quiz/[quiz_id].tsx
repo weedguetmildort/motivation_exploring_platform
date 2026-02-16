@@ -1,19 +1,20 @@
 // frontend/pages/quiz.tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import QuestionBox from "../components/QuestionBox";
-import AnswerBox, { Choice } from "../components/AnswerBox";
-import { getMe, logout, type User } from "../lib/auth";
+import QuestionBox from "../../components/QuestionBox";
+import AnswerBox, { Choice } from "../../components/AnswerBox";
+import { getMe, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
   submitQuizAnswer,
   type QuizStateResponse,
-} from "../lib/quiz";
-import ChatBox from "../components/ChatBox";
-import { getSurveyState } from "../lib/surveys";
+} from "../../lib/quiz";
+import ChatBox from "../../components/ChatBox";
+import { getSurveyState } from "../../lib/surveys";
 
 export default function QuizPage() {
   const router = useRouter();
+  const { quiz_id } = router.query as { quiz_id: string };
 
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
@@ -37,7 +38,7 @@ export default function QuizPage() {
         if (cancel) return;
 
         const u = res.user;
-
+        //TODO: may want to prompt pre_quiz before every quiz
         const survey = await getSurveyState("pre_quiz");
         if (cancel) return;
 
@@ -54,7 +55,7 @@ export default function QuizPage() {
 
         if (!isCompleted) {
           console.log("[quiz] pre_quiz survey NOT completed. survey=", survey); // DEBUG
-          router.replace("/quiz-survey");
+          router.replace(`/quiz-survey?quiz_id=${quiz_id}`);
           return;
         }
 
@@ -78,7 +79,7 @@ export default function QuizPage() {
 
     (async () => {
       try {
-        const state = await getQuizState();
+        const state = await getQuizState(quiz_id);
         if (!cancel) {
           setQuizState(state);
           setSelectedChoice(null);
@@ -143,7 +144,7 @@ export default function QuizPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const state = await submitQuizAnswer(current.id, selectedChoice);
+      const state = await submitQuizAnswer(quiz_id, current.id, selectedChoice);
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
@@ -160,7 +161,7 @@ export default function QuizPage() {
       <header className="bg-white border-b px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Quiz</h1>
+            <h1 className="text-2xl font-semibold text-gray-900">Quiz {quiz_id}</h1>
             <p className="text-sm text-gray-600">
               Answer each question once. Your progress is saved automatically.
             </p>
@@ -307,6 +308,7 @@ export default function QuizPage() {
 
             {/* Right column (Chat) */}
             <ChatBox
+              quizId={quiz_id}
               // onAssistantMessage={setLastAiMessage}
               // externalQuestion={followupToSend}
               externalQuestion={externalQuestion}

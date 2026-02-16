@@ -101,12 +101,20 @@ export default function DashboardPage() {
               <p className="text-sm text-gray-600">Manage questions and content</p>
             </a>
           )}
-
+          {/*Default quiz */}
           <a
-            href="/quiz"
+            href="/quiz/1"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
             <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
+            <p className="text-sm text-gray-600">Begin the Quiz</p>
+          </a>
+          {/*Additional Quiz*/}
+          <a
+            href="/quiz/2"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg font-semibold">Test New Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
         </div>

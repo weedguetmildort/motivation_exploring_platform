@@ -1,4 +1,5 @@
 # backend/app/services/quiz.py
+import uuid
 from datetime import datetime
 from typing import Optional, List, Tuple
 from bson.objectid import ObjectId
@@ -8,7 +9,7 @@ from fastapi import HTTPException
 from .questions import get_questions_collection  # assuming you have this
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload
 
-QUIZ_ID = "main"  # single quiz for now
+#QUIZ_ID = "main"  # single quiz for now
 MAX_QUIZ_QUESTIONS = 10
 
 def get_quiz_attempts_collection(db) -> Collection:
@@ -21,11 +22,11 @@ def _ensure_unique_index(col: Collection) -> None:
         unique=True,
     )
 
-def _load_or_create_attempt(db, user_id: str, user_email: str) -> dict:
+def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> dict:
     col = get_quiz_attempts_collection(db)
     _ensure_unique_index(col)
 
-    doc = col.find_one({"user_id": user_id, "quiz_id": QUIZ_ID})
+    doc = col.find_one({"user_id": user_id, "quiz_id": quiz_id})
     if doc:
         return doc
 
@@ -46,7 +47,8 @@ def _load_or_create_attempt(db, user_id: str, user_email: str) -> dict:
     doc = {
         "user_id": user_id,
         "user_email": user_email,
-        "quiz_id": QUIZ_ID,
+        "quiz_id": quiz_id,
+        "conversation_id": str(uuid.uuid4()),
         "status": "in_progress",
         "question_order": ids,
         "answers": [],
@@ -76,14 +78,16 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         answered_count=answered,
     )
 
+    conv_id = doc.get("conversation_id", "")
+
     if doc["status"] == "completed":
         # don't send a current question
-        return QuizStateResponse(attempt=attempt_pub, current_question=None)
+        return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=None)
 
     next_qid = _find_next_unanswered(doc)
     if not next_qid:
         # nothing left but status not marked complete -> fix it
-        return QuizStateResponse(attempt=attempt_pub, current_question=None)
+        return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=None)
 
     qdoc = qcol.find_one({"_id": ObjectId(next_qid)})
     if not qdoc:
@@ -96,7 +100,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         choices=qdoc["choices"],
     )
 
-    return QuizStateResponse(attempt=attempt_pub, current_question=question_payload)
+    return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=question_payload)
 
 def record_question_shown(db, doc: dict, question_id: str) -> dict:
     col = get_quiz_attempts_collection(db)
@@ -123,10 +127,10 @@ def record_question_shown(db, doc: dict, question_id: str) -> dict:
         doc = col.find_one({"_id": doc["_id"]})
     return doc
 
-def record_answer(db, user_id: str, question_id: str, choice_id: str) -> dict:
+def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: str) -> dict:
     col = get_quiz_attempts_collection(db)
 
-    doc = col.find_one({"user_id": user_id, "quiz_id": QUIZ_ID})
+    doc = col.find_one({"user_id": user_id, "quiz_id": quiz_id})
     if not doc:
         raise HTTPException(status_code=400, detail="No quiz attempt found")
 

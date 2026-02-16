@@ -14,7 +14,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
 
 class ChatResponse(BaseModel):
-    reply: str
+    reply: list[str]
     conversation_id: str
 
 # Initialize OpenAI client with UF proxy settings (from env)
@@ -22,8 +22,10 @@ _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
 _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
 _client = OpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL)
 
-@router.post("/chat", response_model=ChatResponse)
-async def chat(
+#Draft for new chatbot feature — registered before the catch-all {quiz_id} route
+@router.post("/chat/double", response_model=ChatResponse)
+async def double_chat(
+    #quiz_id: str,
     req: ChatRequest,
     request: Request,
     user: UserPublic = Depends(get_current_user),
@@ -72,6 +74,97 @@ async def chat(
         # Don’t leak internals to the client
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
     
+    #Call second chatbot:
+    try:
+        system_instruction = (
+                "You are a helpful assistant who generates clear and concise answers "
+                "to help students answer some quiz questions."
+                "Double check that the answer you provided is correct and if not, provide the correct answer."
+            )
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": req.message},
+            {"role": "assistant", "content": reply},
+        ]
+
+        # Send the user’s message to the proxy; keep it simple (non-streaming)
+        resp = _client.chat.completions.create(
+            model=os.getenv("UF_OPENAI_API_MODEL"),
+            messages=messages,
+        )
+        second_reply = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        # Don’t leak internals to the client
+        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    
+    # Insert both messages into MongoDB
+    try:
+        request.app.state.messages.insert_one({
+            "conversation_id": conv_id,
+            "role": "assistant",
+            "user_id": user.id,
+            "user_email": user.email,
+            "content": [reply, second_reply],
+            "created_at": datetime.utcnow(),
+            "source": "ai",
+        })
+    except Exception:
+        pass
+
+    return ChatResponse(reply=[reply, second_reply], conversation_id=conv_id)
+
+#TODO: look through entire chat history in MongoDB
+@router.post("/chat/{quiz_id}", response_model=ChatResponse)
+async def chat(
+    quiz_id: str,
+    req: ChatRequest,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    if not _UF_API_KEY:
+        # surface a clear backend misconfiguration error
+        raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
+
+    # pick or create a conversation id
+    conv_id = req.conversation_id or str(uuid.uuid4())
+
+    # Insert user message
+    try:
+        request.app.state.messages.insert_one({
+            "conversation_id": conv_id,
+            "role": "user",
+            "user_id": user.id,
+            "user_email": user.email,
+            "content": req.message,
+            "created_at": datetime.utcnow(),
+            "source": "web",
+        })
+    except Exception:
+        # don't fail the chat if logging fails
+        pass
+
+    # Get assistant reply from UF proxy
+    try:
+        system_instruction = (
+            "You are a helpful assistant who generates clear and concise answers "
+            "to help students answer some quiz questions."
+        )
+
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": req.message},
+        ]
+
+        # Send the user's message to the proxy; keep it simple (non-streaming)
+        resp = _client.chat.completions.create(
+            model=os.getenv("UF_OPENAI_API_MODEL"),
+            messages=messages,
+        )
+        reply = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        # Don't leak internals to the client
+        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+
 
     # Insert assistant message
     try:
@@ -80,12 +173,11 @@ async def chat(
             "role": "assistant",
             "user_id": user.id,
             "user_email": user.email,
-            "content": reply,
+            "content": [reply],
             "created_at": datetime.utcnow(),
             "source": "ai",
         })
     except Exception:
         pass
 
-
-    return ChatResponse(reply=reply, conversation_id=conv_id)
+    return ChatResponse(reply=[reply], conversation_id=conv_id)
