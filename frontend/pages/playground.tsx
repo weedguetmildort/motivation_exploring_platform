@@ -187,15 +187,32 @@ export default function Playground() {
                 >
                   Follow-up Question Case
                 </button>
+                <button
+                  onClick={() => setActive("double")}
+                  aria-pressed={active === "double"}
+                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                    active === "double"
+                      ? "bg-blue-600 text-white shadow-lg scale-105"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  Double Agent Case
+                </button>
               </div>
               <div className="p-6 bg-white rounded-xl shadow-inner">
-                {active === "base" ? (
+                {active === "base" && (
                   <p className="text-lg text-gray-800">
                     This should be the <strong>Base Case</strong> content. Chat works, but no follow-up suggestions are shown.
                   </p>
-                ) : (
+                )}
+                {active === "followup" && (
                   <p className="text-lg text-gray-800">
                     This is <strong>Follow-up Question Case</strong> content. Chat works and FollowUpQuestionBox renders under the last answer.
+                  </p>
+                )}
+                {active === "double" && (
+                  <p className="text-lg text-gray-800">
+                    This is <strong>Double Agent Case</strong> content. Two bots independently respond to the user’s question below. Each bot uses the same model but acts as a separate entity.
                   </p>
                 )}
               </div>
@@ -262,11 +279,12 @@ export default function Playground() {
           </div>
 
           {/* Right column (Chat) */}
-            <ChatBox 
-              onAssistantMessage={setLastAiMessage}
-              externalQuestion={followupToSend}
-              enableFollowups={active === "followup"}
-            />
+          <ChatBox
+            onAssistantMessage={setLastAiMessage}
+            externalQuestion={followupToSend}
+            enableFollowups={active === "followup"}
+            doubleAgent={active === "double"}
+          />
         </div>
 
         <div className="flex justify-between max-w-md mx-auto">
