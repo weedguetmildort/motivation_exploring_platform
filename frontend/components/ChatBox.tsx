@@ -3,23 +3,27 @@ import { sendChat } from "../lib/chat";
 import FollowUpQuestionBox from "./FollowUpQuestionBox";
 import MarkdownMessage from "./MarkdownMessage";
 
+type Bot = "A" | "B";
 type Msg = {
   id: string;
   role: "user" | "assistant";
   content: string;
   ts: number;
+  bot?: Bot; // Only for assistant
 };
 
-type ChatBoxProps = {
+interface ChatBoxProps {
   onAssistantMessage?: (message: string) => void;
   externalQuestion?: string | null;
   enableFollowups?: boolean;
-};
+  doubleAgent?: boolean;
+}
 
 export default function ChatBox({
   onAssistantMessage,
   externalQuestion,
   enableFollowups = true,
+  doubleAgent = false,
 }: ChatBoxProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -46,16 +50,62 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      const reply = await sendChat(trimmed);
-      const botMsg: Msg = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: reply,
-        ts: Date.now(),
-      };
-      setMessages((m) => [...m, botMsg]);
-      if (onAssistantMessage) {
-        onAssistantMessage(reply);
+      if (!doubleAgent) {
+        const reply = await sendChat(trimmed);
+        const botMsg: Msg = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: reply,
+          ts: Date.now(),
+        };
+        setMessages((m) => [...m, botMsg]);
+        if (onAssistantMessage) {
+          onAssistantMessage(reply);
+        }
+      } else {
+        // Double agent: get two replies, each with context of last user and both agent messages
+        // Find last agent A and B messages and last user message
+        const lastAgentA = [...messages].reverse().find((m) => m.bot === "A" && m.role === "assistant");
+        const lastAgentB = [...messages].reverse().find((m) => m.bot === "B" && m.role === "assistant");
+        const lastUser = [...messages].reverse().find((m) => m.role === "user");
+
+        // Context for each agent
+        const contextA = [
+          lastAgentA ? `Agent A: ${lastAgentA.content}` : null,
+          lastAgentB ? `Agent B: ${lastAgentB.content}` : null,
+          lastUser ? `User: ${lastUser.content}` : null,
+          `User: ${trimmed}`
+        ].filter(Boolean).join("\n");
+        const contextB = [
+          lastAgentB ? `Agent B: ${lastAgentB.content}` : null,
+          lastAgentA ? `Agent A: ${lastAgentA.content}` : null,
+          lastUser ? `User: ${lastUser.content}` : null,
+          `User: ${trimmed}`
+        ].filter(Boolean).join("\n");
+
+        // Send both requests in parallel
+        const [replyA, replyB] = await Promise.all([
+          sendChat(contextA),
+          sendChat(contextB),
+        ]);
+        const botMsgA: Msg = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Agent A: ${replyA}`,
+          ts: Date.now(),
+          bot: "A",
+        };
+        const botMsgB: Msg = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Agent B: ${replyB}`,
+          ts: Date.now(),
+          bot: "B",
+        };
+        setMessages((m) => [...m, botMsgA, botMsgB]);
+        if (onAssistantMessage) {
+          onAssistantMessage(`${replyA}\n${replyB}`);
+        }
       }
     } catch (e) {
       setError("Failed to contact the server.");
