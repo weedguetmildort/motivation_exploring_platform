@@ -149,28 +149,35 @@ export default function ChatBox({
 
       <div ref={scrollerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((m) => (
-          <div
+          <div 
             key={m.id}
-            className={`flex ${
-              m.role === "user" ? "justify-end" : "justify-start"
-            }`}
           >
-            <div
-              className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                m.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : m.bot === "A"
-                  ? "bg-blue-100 text-blue-900 border border-blue-300"
-                  : m.bot === "B"
-                  ? "bg-green-100 text-green-900 border border-green-300"
-                  : "bg-gray-100 text-gray-900"
+            <div 
+              className={`text-xs text-gray-600 px-1 mb-1 ${
+                m.role === "user" ? "text-right" : "text-left"
               }`}
             >
-              {m.role === "assistant" ? (
-                <MarkdownMessage content={m.content} />
-              ) : (
-                <div className="whitespace-pre-wrap">{m.content}</div>
-              )}
+              {m.role === "user" ? "You" : "Assistant"}
+            </div>
+            
+            <div
+              className={`flex ${
+                m.role === "user" ? "justify-end" : "justify-start"
+              }`}
+            >
+              <div
+                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                  m.role === "user"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100 text-gray-900"
+                }`}
+              >
+                {m.role === "assistant" ? (
+                  <MarkdownMessage content={m.content} />
+                ) : (
+                  <div className="whitespace-pre-wrap">{m.content}</div>
+                )}
+              </div>
             </div>
           </div>
         ))}
