@@ -111,10 +111,10 @@ export default function DashboardPage() {
           </a>
           {/*Additional Quiz*/}
           <a
-            href="/quiz/2"
+            href="/quiz/double"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold">Test New Quiz</h2>
+            <h2 className="mb-1 text-lg font-semibold">Dual Agent Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
         </div>
