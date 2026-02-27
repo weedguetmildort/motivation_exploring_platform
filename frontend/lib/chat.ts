@@ -27,3 +27,20 @@ export async function sendChat(
   return { replies, conversationId: data.conversation_id ?? conversationId ?? "" };
 }
 
+export async function sendFollowupChat(
+  lastAiMessage: string
+): Promise<string[]> {
+  const res = await fetch(`/api/chat/followup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ last_ai_message: lastAiMessage }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} when calling /chat/followup`);
+  }
+
+  const data = (await res.json()) as { questions?: string[] };
+  return data.questions ?? [];
+}
+

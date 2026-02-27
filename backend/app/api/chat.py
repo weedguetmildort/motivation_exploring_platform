@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from pydantic import BaseModel
 from openai import OpenAI
@@ -108,6 +109,62 @@ async def double_chat(
         pass
 
     return ChatResponse(reply=[reply, second_reply], conversation_id=conv_id)
+
+
+class FollowupRequest(BaseModel):
+    last_ai_message: str
+
+class FollowupResponse(BaseModel):
+    questions: list[str]
+
+@router.post("/chat/followup", response_model=FollowupResponse)
+async def followup_chat(
+    req: FollowupRequest,
+    user: UserPublic = Depends(get_current_user),
+):
+    if not _UF_API_KEY:
+        raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
+
+    system_prompt = (
+        "You are a helpful assistant who generates short follow-up questions "
+        "related ONLY to the explanation you just gave the student. "
+        "Your follow-up questions MUST be: directly related to the explanation, "
+        "concise (1 sentence, max 12 words), simple and beginner-friendly, "
+        "NOT about homework, exams, studying, or general help. "
+        "Return ONLY the 3 questions as a numbered list (1., 2., 3.)."
+    )
+    user_prompt = (
+        f"Here is the last thing you told the student:\n\n{req.last_ai_message}"
+        "\n\nGenerate exactly 3 possible follow-up questions the student might ask next."
+    )
+
+    try:
+        resp = _client.chat.completions.create(
+            model=os.getenv("UF_OPENAI_API_MODEL"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+
+    questions: list[str] = []
+    for line in raw.split("\n"):
+        trimmed = line.strip()
+        if not trimmed:
+            continue
+        m = re.match(r"^[0-9]+[.)\-:\s]+(.*)", trimmed)
+        if m:
+            text = m.group(1).strip()
+            if text:
+                questions.append(text)
+    if not questions:
+        questions = [raw]
+    questions = questions[:3]
+
+    return FollowupResponse(questions=questions)
 
 
 @router.post("/chat/{quiz_id}", response_model=ChatResponse)
