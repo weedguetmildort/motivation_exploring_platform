@@ -97,6 +97,7 @@ export default function QuizPage() {
 
   const current = quizState?.current_question ?? null;
   const attempt = quizState?.attempt;
+  const conversationId = quizState?.conversation_id ?? null;
   const quizCompleted = attempt?.status === "completed";
 
   useEffect(() => {
@@ -183,7 +184,7 @@ export default function QuizPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="max-w-6xl mx-auto p-6 min-h-0">
         {/* Progress + errors */}
         {attempt && (
           <div className="mb-4 text-sm text-gray-600">
@@ -214,7 +215,7 @@ export default function QuizPage() {
 
         {/* Main grid layout: Question + Options (left), Chat (right) */}
         {!quizCompleted && (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-2 px-0 pb-6">
+          <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-2 px-0 pb-6 min-h-0">
             {/* Left column */}
             <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full">
               {/* Question section */}
@@ -309,8 +310,7 @@ export default function QuizPage() {
             {/* Right column (Chat) */}
             <ChatBox
               quizId={quiz_id}
-              // onAssistantMessage={setLastAiMessage}
-              // externalQuestion={followupToSend}
+              conversationId={conversationId}
               externalQuestion={externalQuestion}
               enableFollowups={false}
             />
