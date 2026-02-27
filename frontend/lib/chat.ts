@@ -4,7 +4,7 @@ export async function sendChat(
   quizId: string,
   conversationId: string | null,
   message: string
-): Promise<string[]> {
+): Promise<{ replies: string[]; conversationId: string }> {
   const res = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -19,13 +19,10 @@ export async function sendChat(
   }
 
   const data = (await res.json()) as { reply?: string[]; message?: string; conversation_id?: string };
-  if (!conversationId && data.conversation_id) conversationId = data.conversation_id;
 
-  // reply is now an array of LLM responses
-  if (Array.isArray(data.reply)) {
-    return data.reply;
-  }
-  // Fallback: wrap single string in array for backwards compatibility
-  const single = (data.reply ?? data.message ?? "").toString();
-  return [single];
+  const replies = Array.isArray(data.reply)
+    ? data.reply
+    : [(data.reply ?? data.message ?? "").toString()];
+
+  return { replies, conversationId: data.conversation_id ?? conversationId ?? "" };
 }

@@ -23,6 +23,7 @@ _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
 _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
 _client = OpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL)
 
+
 # Draft for new chatbot feature — registered before the catch-all {quiz_id} route
 @router.post("/chat/double", response_model=ChatResponse)
 async def double_chat(
@@ -34,6 +35,9 @@ async def double_chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
+
+    # Fetch history BEFORE inserting the new user message
+    history = get_last_exchange(request.app.state.messages, conv_id)
 
     # Insert user message
     try:
@@ -49,17 +53,7 @@ async def double_chat(
     except Exception:
         pass
 
-    # Retrieve the last exchange for conversation history
-    last_user_c, last_asst_list = get_last_exchange(request.app.state.messages, conv_id)
-
-    # Agent A: uses its own prior reply as context
-    history_a = []
-    if last_user_c and last_asst_list:
-        history_a = [
-            {"role": "user", "content": last_user_c},
-            {"role": "assistant", "content": last_asst_list[0]},
-        ]
-
+    # Agent A: sees full prior conversation
     try:
         system_instruction = (
             "You are a helpful assistant who generates clear and concise answers "
@@ -67,7 +61,7 @@ async def double_chat(
         )
         messages_a = [
             {"role": "system", "content": system_instruction},
-            *history_a,
+            *history,
             {"role": "user", "content": req.message},
         ]
         resp = _client.chat.completions.create(
@@ -78,26 +72,18 @@ async def double_chat(
     except Exception:
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
-    # Agent B: uses its own prior reply as context, then sees Agent A's current response
-    prior_b = last_asst_list[1] if len(last_asst_list) > 1 else (last_asst_list[0] if last_asst_list else None)
-    history_b = []
-    if last_user_c and prior_b:
-        history_b = [
-            {"role": "user", "content": last_user_c},
-            {"role": "assistant", "content": prior_b},
-        ]
-
+    # Agent B: sees full prior conversation plus Agent A's new response
     try:
         system_instruction_b = (
             "You are a helpful assistant who generates clear and concise answers "
             "to help students answer some quiz questions. "
-            "Double check that the answer you provided is correct and if not, provide the correct answer."
+            "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
         )
         messages_b = [
             {"role": "system", "content": system_instruction_b},
-            *history_b,
+            *history,
             {"role": "user", "content": req.message},
-            {"role": "assistant", "content": reply},
+            {"role": "assistant", "content": f"[AGENT A] {reply}"},
         ]
         resp = _client.chat.completions.create(
             model=os.getenv("UF_OPENAI_API_MODEL"),
@@ -136,6 +122,9 @@ async def chat(
 
     conv_id = req.conversation_id or str(uuid.uuid4())
 
+    # Fetch history BEFORE inserting the new user message
+    history = get_last_exchange(request.app.state.messages, conv_id)
+
     # Insert user message
     try:
         request.app.state.messages.insert_one({
@@ -149,15 +138,6 @@ async def chat(
         })
     except Exception:
         pass
-
-    # Retrieve the last exchange for conversation history
-    last_user_c, last_asst_list = get_last_exchange(request.app.state.messages, conv_id)
-    history = []
-    if last_user_c and last_asst_list:
-        history = [
-            {"role": "user", "content": last_user_c},
-            {"role": "assistant", "content": last_asst_list[0]},
-        ]
 
     try:
         system_instruction = (

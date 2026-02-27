@@ -38,7 +38,13 @@ export default function ChatBox({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeConvId, setActiveConvId] = useState<string | null>(conversationId);
   const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // Sync activeConvId when the prop becomes available (e.g. after quizState loads)
+  useEffect(() => {
+    if (conversationId) setActiveConvId(conversationId);
+  }, [conversationId]);
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
@@ -59,7 +65,8 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      const replies = await sendChat(quizId, conversationId, trimmed);
+      const { replies, conversationId: returnedConvId } = await sendChat(quizId, activeConvId, trimmed);
+      if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
       const botMsgs: Msg[] = replies.map((r, i) => ({
         id: crypto.randomUUID(),
         role: "assistant" as const,
