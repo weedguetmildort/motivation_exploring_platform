@@ -25,6 +25,32 @@ _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
 _client = OpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL)
 
 
+def send_prompt(messages: list[dict]) -> str:
+    try:
+        resp = _client.chat.completions.create(
+            model=os.getenv("UF_OPENAI_API_MODEL"),
+            messages=messages,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+
+
+def _save_message(col, role: str, user: UserPublic, conv_id: str, content) -> None:
+    try:
+        col.insert_one({
+            "conversation_id": conv_id,
+            "role": role,
+            "user_id": user.id,
+            "user_email": user.email,
+            "content": content,
+            "created_at": datetime.utcnow(),
+            "source": "web" if role == "user" else "ai",
+        })
+    except Exception:
+        pass
+
+
 # Draft for new chatbot feature — registered before the catch-all {quiz_id} route
 @router.post("/chat/double", response_model=ChatResponse)
 async def double_chat(
@@ -40,73 +66,34 @@ async def double_chat(
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    # Insert user message
-    try:
-        request.app.state.messages.insert_one({
-            "conversation_id": conv_id,
-            "role": "user",
-            "user_id": user.id,
-            "user_email": user.email,
-            "content": req.message,
-            "created_at": datetime.utcnow(),
-            "source": "web",
-        })
-    except Exception:
-        pass
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
 
     # Agent A: sees full prior conversation
-    try:
-        system_instruction = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions."
-        )
-        messages_a = [
-            {"role": "system", "content": system_instruction},
-            *history,
-            {"role": "user", "content": req.message},
-        ]
-        resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages_a,
-        )
-        reply = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    system_instruction = (
+        "You are a helpful assistant who generates clear and concise answers "
+        "to help students answer some quiz questions."
+    )
+    reply = send_prompt([
+        {"role": "system", "content": system_instruction},
+        *history,
+        {"role": "user", "content": req.message},
+    ])
 
     # Agent B: sees full prior conversation plus Agent A's new response
-    try:
-        system_instruction_b = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions. "
-            "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
-        )
-        messages_b = [
-            {"role": "system", "content": system_instruction_b},
-            *history,
-            {"role": "user", "content": req.message},
-            {"role": "assistant", "content": f"[AGENT A] {reply}"},
-        ]
-        resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages_b,
-        )
-        second_reply = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    system_instruction_b = (
+        "You are a helpful assistant who generates clear and concise answers "
+        "to help students answer some quiz questions. "
+        "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
+    )
+    second_reply = send_prompt([
+        {"role": "system", "content": system_instruction_b},
+        *history,
+        {"role": "user", "content": req.message},
+        {"role": "assistant", "content": f"[AGENT A] {reply}"},
+    ])
 
     # Insert both agent replies as a single assistant document
-    try:
-        request.app.state.messages.insert_one({
-            "conversation_id": conv_id,
-            "role": "assistant",
-            "user_id": user.id,
-            "user_email": user.email,
-            "content": [reply, second_reply],
-            "created_at": datetime.utcnow(),
-            "source": "ai",
-        })
-    except Exception:
-        pass
+    _save_message(request.app.state.messages, "assistant", user, conv_id, [reply, second_reply])
 
     return ChatResponse(reply=[reply, second_reply], conversation_id=conv_id)
 
@@ -138,17 +125,10 @@ async def followup_chat(
         "\n\nGenerate exactly 3 possible follow-up questions the student might ask next."
     )
 
-    try:
-        resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        raw = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    raw = send_prompt([
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ])
 
     questions: list[str] = []
     for line in raw.split("\n"):
@@ -166,7 +146,7 @@ async def followup_chat(
 
     return FollowupResponse(questions=questions)
 
-
+#Default Behavior
 @router.post("/chat/{quiz_id}", response_model=ChatResponse)
 async def chat(
     quiz_id: str,
@@ -182,50 +162,18 @@ async def chat(
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    # Insert user message
-    try:
-        request.app.state.messages.insert_one({
-            "conversation_id": conv_id,
-            "role": "user",
-            "user_id": user.id,
-            "user_email": user.email,
-            "content": req.message,
-            "created_at": datetime.utcnow(),
-            "source": "web",
-        })
-    except Exception:
-        pass
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
 
-    try:
-        system_instruction = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions."
-        )
-        messages = [
-            {"role": "system", "content": system_instruction},
-            *history,
-            {"role": "user", "content": req.message},
-        ]
-        resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages,
-        )
-        reply = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    system_instruction = (
+        "You are a helpful assistant who generates clear and concise answers "
+        "to help students answer some quiz questions."
+    )
+    reply = send_prompt([
+        {"role": "system", "content": system_instruction},
+        *history,
+        {"role": "user", "content": req.message},
+    ])
 
-    # Insert assistant message
-    try:
-        request.app.state.messages.insert_one({
-            "conversation_id": conv_id,
-            "role": "assistant",
-            "user_id": user.id,
-            "user_email": user.email,
-            "content": [reply],
-            "created_at": datetime.utcnow(),
-            "source": "ai",
-        })
-    except Exception:
-        pass
+    _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
 
     return ChatResponse(reply=[reply], conversation_id=conv_id)
