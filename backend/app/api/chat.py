@@ -1,7 +1,7 @@
 import os
 import re
 import uuid
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from pydantic import BaseModel
 from openai import OpenAI
 from datetime import datetime
