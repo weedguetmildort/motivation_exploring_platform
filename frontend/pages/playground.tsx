@@ -280,10 +280,10 @@ export default function Playground() {
 
           {/* Right column (Chat) */}
           <ChatBox
+            quizId={active === "double" ? "double" : "playground"}
             onAssistantMessage={setLastAiMessage}
             externalQuestion={followupToSend}
             enableFollowups={active === "followup"}
-            doubleAgent={active === "double"}
           />
         </div>
 

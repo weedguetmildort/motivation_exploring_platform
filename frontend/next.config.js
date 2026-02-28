@@ -14,8 +14,8 @@ const nextConfig = {
     }
     return [
       {
-        source: "/api/chat",
-        destination: `${backend}/chat`
+        source: "/api/chat/:path*",
+        destination: `${backend}/chat/:path*`
       },
       {
         source: "/auth/:path*", 
