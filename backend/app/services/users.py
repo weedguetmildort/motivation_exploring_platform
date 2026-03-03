@@ -2,8 +2,21 @@ from typing import Optional
 from datetime import datetime
 from bson.objectid import ObjectId
 from pymongo.collection import Collection
-from ..schemas.user import UserPublic
+from ..schemas.user import UserPublic, SurveyStage
 from ..core.security import hash_password, verify_password
+
+def _normalize_stage(raw) -> str:
+    """
+    Ensures survey_stage is always a valid value.
+    Protects against legacy bad data.
+    """
+    valid_values = {stage.value for stage in SurveyStage}
+
+    if isinstance(raw, str) and raw in valid_values:
+        return raw
+
+    # fallback safely
+    return SurveyStage.pre_base.value
 
 def _to_public(doc: dict) -> UserPublic:
     return UserPublic(
@@ -11,7 +24,13 @@ def _to_public(doc: dict) -> UserPublic:
         email=doc["email"],
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
-        quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
+        survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
+        quiz_base_completed=doc.get("quiz_base_completed", False),
+        survey_post_base_completed=doc.get("survey_post_base_completed", False),
+        quiz_variant_completed=doc.get("quiz_variant_completed", False),
+        survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
+        survey_stage=_normalize_stage(doc.get("survey_stage")),
+        # survey_stage=doc.get("survey_stage", SurveyStage.pre_base),
     )
 
 def get_users_collection(db) -> Collection:
@@ -27,7 +46,12 @@ def create_user(users: Collection, email: str, password: str) -> UserPublic:
         "created_at": datetime.utcnow(),
         "is_admin": False,
         "demographics_completed": False,
-        "quiz_pre_survey_completed": False,
+        "survey_pre_base_completed": False,
+        "quiz_base_completed": False,
+        "survey_post_base_completed": False,
+        "quiz_variant_completed": False,
+        "survey_post_variant_completed": False,
+        "survey_stage": SurveyStage.pre_base.value,
         "demographics": {},
     }
     res = users.insert_one(doc)

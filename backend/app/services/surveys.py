@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 from bson.objectid import ObjectId
+from pymongo import ReturnDocument
 from pymongo.collection import Collection
 from fastapi import HTTPException
 
@@ -16,6 +17,8 @@ from ..schemas.survey import (
     SurveyScale,
 )
 
+from ..schemas.user import SurveyStage
+
 def get_survey_items_collection(db) -> Collection:
     return db["survey_items"]
 
@@ -28,6 +31,22 @@ def ensure_survey_indexes(db) -> None:
 
     items.create_index([("stage", 1), ("active", 1), ("order", 1)])
     responses.create_index([("user_id", 1), ("stage", 1)], unique=True)
+
+# --------------- helper functions ---------------
+
+def _next_stage(stage: SurveyStage) -> SurveyStage | None:
+    return {
+        SurveyStage.pre_base: SurveyStage.post_base,
+        SurveyStage.post_base: SurveyStage.post_variant,
+        SurveyStage.post_variant: None,
+    }[stage]
+
+def _completion_flag_field(stage: SurveyStage) -> str:
+    return {
+        SurveyStage.pre_base: "survey_pre_base_completed",
+        SurveyStage.post_base: "survey_post_base_completed",
+        SurveyStage.post_variant: "survey_post_variant_completed",
+    }[stage]
 
 # ---------- survey items (admin CRUD) ----------
 
