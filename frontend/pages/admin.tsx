@@ -85,7 +85,7 @@ useEffect(() => {
   
           {user?.is_admin && (
             <Link
-              href="/questions-panel"
+              href="/questions_panel"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
               <h2 className="mb-1 text-lg font-semibold">Quiz Questions Panel</h2>
@@ -95,7 +95,7 @@ useEffect(() => {
 
           {user?.is_admin && (
             <Link
-              href="/surveys-panel"
+              href="/surveys_panel"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
               <h2 className="mb-1 text-lg font-semibold">Survey Questions Panel</h2>
