@@ -285,10 +285,10 @@ export default function Playground() {
           {/* Right column (Chat) */}
           <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
             <ChatBox
+              quizId={active === "double" ? "double" : "playground"}
               onAssistantMessage={setLastAiMessage}
               externalQuestion={followupToSend}
               enableFollowups={active === "followup"}
-              doubleAgent={active === "double"}
             />
           </div>
         </div>
