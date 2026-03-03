@@ -3,33 +3,48 @@ import { sendChat } from "../lib/chat";
 import FollowUpQuestionBox from "./FollowUpQuestionBox";
 import MarkdownMessage from "./MarkdownMessage";
 
-type Bot = "A" | "B";
+type Bot = "A" | "B" | "C" | "D";
 type Msg = {
   id: string;
   role: "user" | "assistant";
   content: string;
   ts: number;
-  bot?: Bot; // Only for assistant
+  bot?: Bot; // Only for assistant, set when there are multiple replies
 };
 
-interface ChatBoxProps {
+const BOT_COLORS: Record<Bot, string> = {
+  A: "bg-gray-100 text-gray-900",
+  B: "bg-purple-100 text-purple-900",
+  C: "bg-green-100 text-green-900",
+  D: "bg-orange-100 text-orange-900",
+};
+
+type ChatBoxProps = {
+  quizId: string;
   onAssistantMessage?: (message: string) => void;
   externalQuestion?: string | null;
   enableFollowups?: boolean;
-  doubleAgent?: boolean;
-}
+  conversationId?: string | null;
+};
 
 export default function ChatBox({
+  quizId,
   onAssistantMessage,
   externalQuestion,
   enableFollowups = true,
-  doubleAgent = false,
+  conversationId = null,
 }: ChatBoxProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeConvId, setActiveConvId] = useState<string | null>(conversationId);
   const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // Sync activeConvId when the prop becomes available (e.g. after quizState loads)
+  useEffect(() => {
+    if (conversationId) setActiveConvId(conversationId);
+  }, [conversationId]);
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
@@ -50,64 +65,20 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      if (!doubleAgent) {
-        const reply = await sendChat(trimmed);
-        const botMsg: Msg = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: reply,
-          ts: Date.now(),
-        };
-        setMessages((m) => [...m, botMsg]);
-        if (onAssistantMessage) {
-          onAssistantMessage(reply);
-        }
-      } else {
-        // Double agent: get two replies, each with context of last user and both agent messages
-        // Find last agent A and B messages and last user message
-        const lastAgentA = [...messages].reverse().find((m) => m.bot === "A" && m.role === "assistant");
-        const lastAgentB = [...messages].reverse().find((m) => m.bot === "B" && m.role === "assistant");
-        const lastUser = [...messages].reverse().find((m) => m.role === "user");
-
-        // Context for each agent
-        const contextA = [
-          lastAgentA ? `Agent A: ${lastAgentA.content}` : null,
-          lastAgentB ? `Agent B: ${lastAgentB.content}` : null,
-          lastUser ? `User: ${lastUser.content}` : null,
-          `User: ${trimmed}`
-        ].filter(Boolean).join("\n");
-        const contextB = [
-          lastAgentB ? `Agent B: ${lastAgentB.content}` : null,
-          lastAgentA ? `Agent A: ${lastAgentA.content}` : null,
-          lastUser ? `User: ${lastUser.content}` : null,
-          `User: ${trimmed}`
-        ].filter(Boolean).join("\n");
-
-        // Send both requests in parallel
-        const [replyA, replyB] = await Promise.all([
-          sendChat(contextA),
-          sendChat(contextB),
-        ]);
-        const botMsgA: Msg = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Agent A: ${replyA}`,
-          ts: Date.now(),
-          bot: "A",
-        };
-        const botMsgB: Msg = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Agent B: ${replyB}`,
-          ts: Date.now(),
-          bot: "B",
-        };
-        setMessages((m) => [...m, botMsgA, botMsgB]);
-        if (onAssistantMessage) {
-          onAssistantMessage(`${replyA}\n${replyB}`);
-        }
+      const { replies, conversationId: returnedConvId } = await sendChat(quizId, activeConvId, trimmed);
+      if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
+      const botMsgs: Msg[] = replies.map((r, i) => ({
+        id: crypto.randomUUID(),
+        role: "assistant" as const,
+        content: r,
+        ts: Date.now(),
+        bot: replies.length > 1 ? ((["A", "B", "C", "D"][i] as Bot) ?? "A") : undefined,
+      }));
+      setMessages((m) => [...m, ...botMsgs]);
+      if (onAssistantMessage) {
+        onAssistantMessage(replies[replies.length - 1]);
       }
-    } catch (e) {
+    } catch {
       setError("Failed to contact the server.");
     } finally {
       setPending(false);
@@ -148,39 +119,42 @@ export default function ChatBox({
       </div>
 
       <div ref={scrollerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-        {messages.map((m) => (
-          <div 
-            key={m.id}
-          >
-            <div 
-              className={`text-xs text-gray-600 px-1 mb-1 ${
-                m.role === "user" ? "text-right" : "text-left"
-              }`}
-            >
-              {m.role === "user" ? "You" : "Assistant"}
-            </div>
-            
-            <div
-              className={`flex ${
-                m.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
+        {messages.map((m) => {
+          const label =
+            m.role === "user" ? "You" : m.bot ? `Agent ${m.bot}` : "Assistant";
+          const bubbleClass =
+            m.role === "user"
+              ? "bg-blue-600 text-white"
+              : m.bot
+              ? BOT_COLORS[m.bot]
+              : "bg-gray-100 text-gray-900";
+
+          return (
+            <div key={m.id}>
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                  m.role === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-900"
+                className={`text-xs text-gray-600 px-1 mb-1 ${
+                  m.role === "user" ? "text-right" : "text-left"
                 }`}
               >
-                {m.role === "assistant" ? (
-                  <MarkdownMessage content={m.content} />
-                ) : (
-                  <div className="whitespace-pre-wrap">{m.content}</div>
-                )}
+                {label}
+              </div>
+
+              <div
+                className={`flex ${
+                  m.role === "user" ? "justify-end" : "justify-start"
+                }`}
+              >
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+                  {m.role === "assistant" ? (
+                    <MarkdownMessage content={m.content} />
+                  ) : (
+                    <div className="whitespace-pre-wrap">{m.content}</div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {pending && (
           <div className="text-sm text-gray-500">Assistant is typing…</div>
@@ -222,15 +196,3 @@ export default function ChatBox({
     </div>
   );
 }
-
-// For more consistent formatting, instruct the AI to:
-
-// Use $...$ for inline math
-
-// Use $$...$$ for displayed equations
-
-// Use Markdown for structure (headers/lists)
-
-// Example guidance to include in backend prompt:
-
-// “Format your response in Markdown. Use LaTeX math with $...$ (inline) and $$...$$ (display).”

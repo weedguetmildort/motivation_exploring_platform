@@ -12,6 +12,7 @@ export default function QuizPreSurveyPage() {
   const router = useRouter();
 
   const STAGE = "pre_quiz";
+  const { quiz_id } = router.query as { quiz_id?: string };
 
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
@@ -75,7 +76,7 @@ export default function QuizPreSurveyPage() {
 
         // If already completed, go to quiz
         if (state.status === "completed") {
-          router.replace("/quiz");
+          router.replace(quiz_id ? `/quiz/${quiz_id}` : "/dashboard");
           return;
         }
       } catch (e) {
@@ -149,7 +150,7 @@ export default function QuizPreSurveyPage() {
         .filter(Boolean) as SurveyAnswer[];
 
       await submitSurvey(STAGE, answers);
-      router.replace("/quiz");
+      router.replace(quiz_id ? `/quiz/${quiz_id}` : "/dashboard");
     } catch (e) {
       console.error(e);
       setError("Failed to save your responses.");
