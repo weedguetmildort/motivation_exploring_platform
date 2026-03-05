@@ -14,6 +14,7 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
+    agents: list[str] = []
 
 class ChatResponse(BaseModel):
     reply: list[str]
@@ -36,6 +37,15 @@ async def double_chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
+    
+    # Determine which agents to run
+    requested_agents = {a.lower() for a in req.agents}
+    valid_agents = {"agenta", "agentb"}
+    selected_agents = requested_agents.intersection(valid_agents)
+    if not selected_agents:
+        selected_agents = valid_agents
+    run_agent_a = "agenta" in selected_agents
+    run_agent_b = "agentb" in selected_agents
 
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
@@ -55,60 +65,83 @@ async def double_chat(
         pass
 
     # Agent A: sees full prior conversation
-    try:
-        system_instruction = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions."
-        )
-        messages_a = [
-            {"role": "system", "content": system_instruction},
-            *history,
-            {"role": "user", "content": req.message},
-        ]
-        resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages_a,
-        )
-        reply = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    reply_a = ""
+    reply_b = ""
+
+    if run_agent_a:
+        try:
+            system_instruction = (
+                "You are a helpful assistant who generates clear and concise answers "
+                "to help students answer some quiz questions."
+            )
+            messages_a = [
+                {"role": "system", "content": system_instruction},
+                *history,
+                {"role": "user", "content": req.message},
+            ]
+            resp = _client.chat.completions.create(
+                model=os.getenv("UF_OPENAI_API_MODEL"),
+                messages=messages_a,
+            )
+            reply_a = (resp.choices[0].message.content or "").strip()
+        except Exception:
+            raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
     # Agent B: sees full prior conversation plus Agent A's new response
-    try:
-        system_instruction_b = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions. "
-            "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
-        )
-        messages_b = [
-            {"role": "system", "content": system_instruction_b},
-            *history,
-            {"role": "user", "content": req.message},
-            {"role": "assistant", "content": f"[AGENT A] {reply}"},
-        ]
-        resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages_b,
-        )
-        second_reply = (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
+    if run_agent_b:
+        try:
+            if run_agent_a:
+                system_instruction_b = (
+                    "You are a helpful assistant who generates clear and concise answers "
+                    "to help students answer some quiz questions. "
+                    "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
+                )
+                messages_b = [
+                    {"role": "system", "content": system_instruction_b},
+                    *history,
+                    {"role": "user", "content": req.message},
+                    {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
+                ]
+            else:
+                system_instruction_b = (
+                    "You are a helpful assistant who generates clear and concise answers "
+                    "to help students answer some quiz questions."
+                )
+                messages_b = [
+                    {"role": "system", "content": system_instruction_b},
+                    *history,
+                    {"role": "user", "content": req.message},
+                ]
 
-    # Insert both agent replies as a single assistant document
+            resp = _client.chat.completions.create(
+                model=os.getenv("UF_OPENAI_API_MODEL"),
+                messages=messages_b,
+            )
+            reply_b = (resp.choices[0].message.content or "").strip()
+        except Exception:
+            raise HTTPException(status_code=502, detail="Upstream AI request failed")
+
+    replies: list[str] = []
+    if run_agent_a:
+        replies.append(reply_a)
+    if run_agent_b:
+        replies.append(reply_b)
+
+    # Insert selected agent replies as a single assistant document
     try:
         request.app.state.messages.insert_one({
             "conversation_id": conv_id,
             "role": "assistant",
             "user_id": user.id,
             "user_email": user.email,
-            "content": [reply, second_reply],
+            "content": replies,
             "created_at": datetime.utcnow(),
             "source": "ai",
         })
     except Exception:
         pass
 
-    return ChatResponse(reply=[reply, second_reply], conversation_id=conv_id)
+    return ChatResponse(reply=replies, conversation_id=conv_id)
 
 
 class FollowupRequest(BaseModel):
