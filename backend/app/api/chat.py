@@ -147,64 +147,49 @@ async def double_chat(
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-
     # Agent A: sees full prior conversation
     reply_a = ""
     reply_b = ""
 
     if run_agent_a:
-        try:
-            system_instruction = (
-                "You are a helpful assistant who generates clear and concise answers "
-                "to help students answer some quiz questions."
-            )
-            messages_a = [
-                {"role": "system", "content": system_instruction},
-                *history,
-                {"role": "user", "content": req.message},
-            ]
-            resp = _client.chat.completions.create(
-                model=os.getenv("UF_OPENAI_API_MODEL"),
-                messages=messages_a,
-            )
-            reply_a = (resp.choices[0].message.content or "").strip()
-        except Exception:
-            raise HTTPException(status_code=502, detail="Upstream AI request failed")
+        system_instruction = (
+            "You are a helpful assistant who generates clear and concise answers "
+            "to help students answer some quiz questions."
+        )
+        messages_a = [
+            {"role": "system", "content": system_instruction},
+            *history,
+            {"role": "user", "content": req.message},
+        ]
+        reply_a = get_chat_response(messages_a)
 
     # Agent B: sees full prior conversation plus Agent A's new response
     if run_agent_b:
-        try:
-            if run_agent_a:
-                system_instruction_b = (
-                    "You are a helpful assistant who generates clear and concise answers "
-                    "to help students answer some quiz questions. "
-                    "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
-                )
-                messages_b = [
-                    {"role": "system", "content": system_instruction_b},
-                    *history,
-                    {"role": "user", "content": req.message},
-                    {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
-                ]
-            else:
-                system_instruction_b = (
-                    "You are a helpful assistant who generates clear and concise answers "
-                    "to help students answer some quiz questions."
-                )
-                messages_b = [
-                    {"role": "system", "content": system_instruction_b},
-                    *history,
-                    {"role": "user", "content": req.message},
-                ]
-
-            resp = _client.chat.completions.create(
-                model=os.getenv("UF_OPENAI_API_MODEL"),
-                messages=messages_b,
+        if run_agent_a:
+            system_instruction_b = (
+                "You are a helpful assistant who generates clear and concise answers "
+                "to help students answer some quiz questions. "
+                "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
             )
-            reply_b = (resp.choices[0].message.content or "").strip()
-        except Exception:
-            raise HTTPException(status_code=502, detail="Upstream AI request failed")
+            messages_b = [
+                {"role": "system", "content": system_instruction_b},
+                *history,
+                {"role": "user", "content": req.message},
+                {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
+            ]
+        else:
+            system_instruction_b = (
+                "You are a helpful assistant who generates clear and concise answers "
+                "to help students answer some quiz questions."
+            )
+            messages_b = [
+                {"role": "system", "content": system_instruction_b},
+                *history,
+                {"role": "user", "content": req.message},
+            ]
+
+        reply_b = get_chat_response(messages_b)
+
 
     replies: list[str] = []
     if run_agent_a:
@@ -212,6 +197,9 @@ async def double_chat(
     if run_agent_b:
         replies.append(reply_b)
 
+    #Insert the user message. Wait to see if any of the chatbots gave an error to not save partial conversation info
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
+    
     # Insert selected agent replies as a single assistant document
     _save_message(request.app.state.messages, "assistant", user, conv_id, replies)
 
