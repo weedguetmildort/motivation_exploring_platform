@@ -19,10 +19,8 @@ export function removeMentions(text: string): string {
   return text.replace(/@[a-zA-Z0-9_-]+/g, "").trim();
 }
 
-export function getValidAgents(mode: "followup" | "double" | "base"): string[] {
+export function getValidAgents(mode: "double" | "base"): string[] {
   switch (mode) {
-    case "followup":
-      return ["agent"];
     case "double":
       return ["agenta", "agentb"];
     case "base":
@@ -60,7 +58,7 @@ export function getPartialMention(text: string): string {
 }
 
 export function getFilteredAgents(
-  mode: "followup" | "double" | "base",
+  mode: "double" | "base",
   partial: string
 ): string[] {
   const valid = getValidAgents(mode);

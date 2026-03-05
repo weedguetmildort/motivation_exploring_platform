@@ -289,7 +289,6 @@ export default function Playground() {
               onAssistantMessage={setLastAiMessage}
               externalQuestion={followupToSend}
               enableFollowups={active === "followup"}
-              mode={active as "base" | "followup" | "double"}
             />
           </div>
         </div>
