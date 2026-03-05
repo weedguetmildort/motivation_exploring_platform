@@ -4,7 +4,7 @@ from typing import Optional
 from enum import Enum
 
 class SurveyStage(str, Enum):
-    pre_base = "pre_base"
+    pre_base = "pre_quiz"
     post_base = "post_base"
     post_variant = "post_variant"
 

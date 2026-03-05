@@ -12,7 +12,11 @@ export type User = {
   email: string;
   is_admin: boolean;
   demographics_completed?: boolean;
-  quiz_pre_survey_completed?: boolean;
+  survey_pre_base_completed?: boolean;
+  quiz_base_completed?: boolean;
+  survey_post_base_completed?: boolean;
+  quiz_variant_completed?: boolean;
+  survey_post_variant_completed?: boolean;
 };
 
 export async function signup(email: string, password: string) {
