@@ -59,10 +59,10 @@ export function getPartialMention(text: string): string {
 }
 
 export function getFilteredAgents(
-  mode: "double" | "base",
+  filter: "double" | "base",
   partial: string
 ): string[] {
-  const valid = getValidAgents(mode);
+  const valid = getValidAgents(filter);
   if (!partial) return valid;
   return valid.filter((agent) => agent.startsWith(partial.toLowerCase()));
 }
