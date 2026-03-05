@@ -34,6 +34,9 @@ def ensure_survey_indexes(db) -> None:
 
 # --------------- helper functions ---------------
 
+def get_users_collection(db) -> Collection:
+    return db["users"]
+
 def _next_stage(stage: SurveyStage) -> SurveyStage | None:
     return {
         SurveyStage.pre_base: SurveyStage.post_base,
@@ -250,10 +253,55 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     required_ids = set(str(d["_id"]) for d in items_col.find({"stage": stage, "active": True, "required": True}, {"_id": 1}))
     answered_ids = set(x.get("item_id") for x in updated.get("answers", []) if x.get("answered_at"))
 
+    # if required_ids.issubset(answered_ids):
+    #     col.update_one(
+    #         {"_id": updated["_id"]},
+    #         {"$set": {"status": "completed", "completed_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+    #     )
+
     if required_ids.issubset(answered_ids):
+        completed_at = datetime.utcnow()
+
+        # 1) mark the survey response completed
         col.update_one(
             {"_id": updated["_id"]},
-            {"$set": {"status": "completed", "completed_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+            {"$set": {"status": "completed", "completed_at": completed_at, "updated_at": completed_at}},
         )
+
+        # 2) update the USER document (user-level), similar to your /me demographics route
+        users = get_users_collection(db)
+
+        # build a demographics-like payload from the answers (optional)
+        # if you just want a completion flag, you can skip this mapping
+        answers_map: Dict[str, Any] = {a.item_id: a.value for a in req.answers}
+
+        # Choose your user-level fields. Examples:
+        # - store the raw map under something like "pre_survey"
+        # - set a "completed" boolean
+        # - set updated_at
+        set_doc = {
+            "updated_at": completed_at,
+        }
+
+        if stage == "pre_quiz":
+            set_doc.update(
+                {
+                    "pre_quiz_survey": answers_map,
+                    "survey_pre_base_completed": True,
+                    "pre_quiz_survey_completed_at": completed_at
+                }
+            )
+        else:
+            # if you want stage-based generic flags:
+            # set_doc[_completion_flag_field(SurveyStage(stage))] = True
+            pass
+
+        user_result = users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": set_doc},
+        )
+
+        if user_result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="User not found")
 
     return build_survey_state(db, user_id, user_email, stage)

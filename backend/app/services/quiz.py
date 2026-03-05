@@ -12,6 +12,9 @@ from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPay
 #QUIZ_ID = "main"  # single quiz for now
 MAX_QUIZ_QUESTIONS = 10
 
+def get_users_collection(db) -> Collection:
+    return db["users"]
+
 def get_quiz_attempts_collection(db) -> Collection:
     return db["quiz_attempts"]
 
@@ -178,10 +181,22 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
     updated = col.find_one({"_id": doc["_id"]})
     next_qid = _find_next_unanswered(updated)
     if not next_qid:
+        completed_at = datetime.utcnow()
+
         col.update_one(
             {"_id": updated["_id"]},
             {"$set": {"status": "completed", "updated_at": datetime.utcnow()}},
         )
+
+        # update user-level flag
+        users = get_users_collection(db)
+        result = users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"quiz_base_completed": True, "updated_at": completed_at}},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+
         updated = col.find_one({"_id": updated["_id"]})
 
     return updated
