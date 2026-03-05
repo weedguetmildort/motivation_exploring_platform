@@ -30,7 +30,7 @@ export async function sendChat(
 export async function sendFollowupChat(
   lastAiMessage: string
 ): Promise<string[]> {
-  const data = await apiFetch<{ questions?: string[] }>(`/api/chat/followup`, {
+  const data = await apiFetch<{ questions?: string[] }>(`/api/chat/addon/followup`, {
     method: "POST",
     body: JSON.stringify({ last_ai_message: lastAiMessage }),
   });

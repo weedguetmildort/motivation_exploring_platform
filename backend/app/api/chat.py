@@ -123,7 +123,7 @@ def _save_message(col, role: str, user: UserPublic, conv_id: str, content) -> No
         pass
 
 
-# Draft for new chatbot feature — registered before the catch-all {quiz_id} route
+# Gets responses from Agents A and B. Each agent can be called seperately. Agent B review's Agent A's answers by default
 @router.post("/chat/double", response_model=ChatResponse)
 async def double_chat(
     req: ChatRequest,
@@ -212,7 +212,8 @@ class FollowupRequest(BaseModel):
 class FollowupResponse(BaseModel):
     questions: list[str]
 
-@router.post("/chat/followup", response_model=FollowupResponse)
+#
+@router.post("/chat/addon/followup", response_model=FollowupResponse)
 async def followup_chat(
     req: FollowupRequest,
     user: UserPublic = Depends(get_current_user),
