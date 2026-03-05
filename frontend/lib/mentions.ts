@@ -19,11 +19,12 @@ export function removeMentions(text: string): string {
   return text.replace(/@[a-zA-Z0-9_-]+/g, "").trim();
 }
 
-export function getValidAgents(mode: "double" | "base"): string[] {
-  switch (mode) {
+export function getValidAgents(filter: string): string[] {
+  switch (filter) {
     case "double":
       return ["agenta", "agentb"];
     case "base":
+      return [];
     default:
       return [];
   }

@@ -14,7 +14,7 @@ import {
 } from "../lib/mentions";
 
 type Bot = "A" | "B" | "C" | "D";
-type ChatMode = "double" | "base";
+type AgentFilter = "double" | "base";
 type Msg = {
   id: string;
   role: "user" | "assistant";
@@ -45,7 +45,7 @@ export default function ChatBox({
   enableFollowups = true,
   conversationId = null,
 }: ChatBoxProps) {
-  const mode: ChatMode = quizId === "double" ? "double" : "base";
+  const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
@@ -72,8 +72,8 @@ export default function ChatBox({
     let agents: string[] = [];
     let messageForBackend = trimmed;
 
-    if (mode === "double") {
-      const validAgents = getValidAgents(mode);
+    if (agentFilter === "double") {
+      const validAgents = getValidAgents(agentFilter);
       const { mentions } = parseMentions(trimmed);
       agents = getValidMentionTargets(mentions, validAgents);
       messageForBackend = removeMentions(trimmed) || trimmed;
@@ -106,7 +106,7 @@ export default function ChatBox({
       };
 
       const botOrder: Bot[] =
-        mode === "double"
+        agentFilter === "double"
           ? agents.length > 0
             ? (agents
                 .map(mapAgentToBot)
@@ -120,7 +120,7 @@ export default function ChatBox({
         content: r,
         ts: Date.now(),
         bot:
-          mode === "double"
+          agentFilter === "double"
             ? botOrder[i] ?? (i % 2 === 0 ? "A" : "B")
             : replies.length > 1
             ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
@@ -152,7 +152,7 @@ export default function ChatBox({
 
     if (hasIncompleteMention(newValue)) {
       const partial = getPartialMention(newValue);
-      const agents = getFilteredAgents(mode, partial);
+      const agents = getFilteredAgents(agentFilter, partial);
       if (agents.length > 1) {
         setFilteredAgents(agents);
         setShowMentions(true);
