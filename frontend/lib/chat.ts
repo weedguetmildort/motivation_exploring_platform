@@ -3,7 +3,8 @@
 export async function sendChat(
   quizId: string,
   conversationId: string | null,
-  message: string
+  message: string,
+  agents: string[] = []
 ): Promise<{ replies: string[]; conversationId: string }> {
   const res = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
@@ -11,6 +12,7 @@ export async function sendChat(
     body: JSON.stringify({
       message,
       conversation_id: conversationId,
+      agents,
     }),
   });
 

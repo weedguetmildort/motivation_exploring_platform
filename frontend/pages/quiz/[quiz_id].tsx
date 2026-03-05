@@ -1,4 +1,5 @@
-// frontend/pages/quiz.tsx
+// AFTER
+// frontend/pages/quiz/[quiz_id].tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import QuestionBox from "../../components/QuestionBox";
@@ -14,7 +15,12 @@ import { getSurveyState } from "../../lib/surveys";
 
 export default function QuizPage() {
   const router = useRouter();
-  const { quiz_id } = router.query as { quiz_id: string };
+  const quizId =
+    typeof router.query.quiz_id === "string"
+      ? router.query.quiz_id
+      : Array.isArray(router.query.quiz_id)
+        ? router.query.quiz_id[0]
+        : null;
 
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
@@ -28,6 +34,9 @@ export default function QuizPage() {
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!router.isReady) return;
+    if (!quizId) return;
+
     let cancel = false;
 
     (async () => {
@@ -55,7 +64,7 @@ export default function QuizPage() {
 
         if (!isCompleted) {
           console.log("[quiz] pre_quiz survey NOT completed. survey=", survey); // DEBUG
-          router.replace(`/quiz-survey?quiz_id=${quiz_id}`);
+          router.replace(`/quiz_survey?quiz_id=${quizId}`);
           return;
         }
 
@@ -70,16 +79,18 @@ export default function QuizPage() {
     return () => {
       cancel = true;
     };
-  }, [router]);
+  }, [router, router.isReady, quizId]);
 
   useEffect(() => {
     if (!user) return;
+    if (!router.isReady) return;
+    if (!quizId) return;
 
     let cancel = false;
 
     (async () => {
       try {
-        const state = await getQuizState(quiz_id);
+        const state = await getQuizState(quizId);
         if (!cancel) {
           setQuizState(state);
           setSelectedChoice(null);
@@ -93,7 +104,7 @@ export default function QuizPage() {
     return () => {
       cancel = true;
     };
-  }, [user]);
+  }, [user, router.isReady, quizId]);
 
   const current = quizState?.current_question ?? null;
   const attempt = quizState?.attempt;
@@ -109,6 +120,22 @@ export default function QuizPage() {
     setHasAskedChat(false);
     setExternalQuestion(null);
   }, [current?.id]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    if (!quizCompleted) return;
+    if (!quizId) return;
+    if (!user) return;
+
+    // if user has not completed the post survey, send them there
+    if (!user.survey_post_base_completed) {
+      router.replace(`/quiz_post_survey?quiz_id=${quizId}`);
+      return;
+    }
+
+    // otherwise go to dashboard (or results page)
+    router.replace("/dashboard");
+  }, [router.isReady, quizCompleted, quizId, user, router]);
 
   if (checking) {
     return (
@@ -141,11 +168,11 @@ export default function QuizPage() {
   }
 
   async function onSubmit() {
-    if (!current || !selectedChoice || submitting) return;
+    if (!quizId || !current || !selectedChoice || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      const state = await submitQuizAnswer(quiz_id, current.id, selectedChoice);
+      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
@@ -162,7 +189,9 @@ export default function QuizPage() {
       <header className="bg-white border-b px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Quiz {quiz_id}</h1>
+            <h1 className="text-2xl font-semibold text-gray-900">
+              Quiz {quizId}
+            </h1>
             <p className="text-sm text-gray-600">
               Answer each question once. Your progress is saved automatically.
             </p>
@@ -308,12 +337,16 @@ export default function QuizPage() {
             </div>
 
             {/* Right column (Chat) */}
-            <ChatBox
-              quizId={quiz_id}
-              conversationId={conversationId}
-              externalQuestion={externalQuestion}
-              enableFollowups={false}
-            />
+            <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
+              {quizId && (
+                <ChatBox
+                  quizId={quizId ?? undefined}
+                  conversationId={conversationId}
+                  externalQuestion={externalQuestion}
+                  enableFollowups={false}
+                />
+              )}
+            </div>
           </div>
         )}
       </div>
