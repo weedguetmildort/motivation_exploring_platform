@@ -70,8 +70,19 @@ def get_chat_response_with_search(
     # Append citation instruction to system message
     system = next((m for m in messages if m["role"] == "system"), None)
     citation_instruction = (
-        " When citing sources, embed them as inline markdown links: "
-        "[source title](url). Cite directly in the sentence, not at the end."
+        "\n\nCITATION RULES \u2014 follow exactly:\n"
+        "Prefer option 1, fall back to option 2 when no keyword fits naturally.\n\n"
+        "Option 1 — Keyword link (preferred): Make a meaningful word or phrase in the sentence "
+        "itself the hyperlink. Choose the most relevant noun, term, or concept. "
+        "Example: \'[Photosynthesis](url) converts sunlight into energy.\' "
+        "or \'The [James Webb Space Telescope](url) captured the image.\'\n\n"
+        "Option 2 — Parenthetical link (fallback): If no single keyword naturally carries the link, "
+        "append a short parenthetical at the end of the sentence. "
+        "Example: \'The process requires ATP and NADPH ([source title](url)).\'\n\n"
+        "Hard rules:\n"
+        "- Every factual claim must be cited where it appears in the text.\n"
+        "- DO NOT add a Sources, References, or Citations section at the end.\n"
+        "- DO NOT list URLs separately after your answer."
     )
     if system:
         patched_messages = [

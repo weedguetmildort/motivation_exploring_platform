@@ -202,6 +202,17 @@ export default function Playground() {
               >
                 Double Agent Case
               </button>
+              <button
+                onClick={() => setActive("links")}
+                aria-pressed={active === "links"}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                  active === "links"
+                    ? "bg-blue-600 text-white shadow-lg scale-105"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Embedded Links Case
+              </button>
             </div>
             <div className="p-6 bg-white rounded-xl shadow-inner">
               {active === "base" && (
@@ -221,6 +232,13 @@ export default function Playground() {
                   This is <strong>Double Agent Case</strong> content. Two bots
                   independently respond to the user’s question below. Each bot
                   uses the same model but acts as a separate entity.
+                </p>
+              )}
+              {active === "links" && (
+                <p className="text-lg text-gray-800">
+                  This is the <strong>Embedded Links Case</strong>. The assistant
+                  searches the web and responds with inline citation links embedded
+                  directly in the text.
                 </p>
               )}
             </div>
@@ -285,7 +303,7 @@ export default function Playground() {
           {/* Right column (Chat) */}
           <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
             <ChatBox
-              quizId={active === "double" ? "double" : "playground"}
+              quizId={active === "double" ? "double" : active === "links" ? "links" : "playground"}
               onAssistantMessage={setLastAiMessage}
               externalQuestion={followupToSend}
               enableFollowups={active === "followup"}
