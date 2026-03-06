@@ -197,11 +197,18 @@ async def double_chat(
     if run_agent_b:
         replies.append(reply_b)
 
+    # Build labeled version for storage so history preserves agent identity
+    replies_to_store: list[str] = []
+    if run_agent_a:
+        replies_to_store.append(f"[AGENT A] {reply_a}")
+    if run_agent_b:
+        replies_to_store.append(f"[AGENT B] {reply_b}")
+
     #Insert the user message. Wait to see if any of the chatbots gave an error to not save partial conversation info
     _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-    
+
     # Insert selected agent replies as a single assistant document
-    _save_message(request.app.state.messages, "assistant", user, conv_id, replies)
+    _save_message(request.app.state.messages, "assistant", user, conv_id, replies_to_store)
 
     return ChatResponse(reply=replies, conversation_id=conv_id)
 
@@ -212,7 +219,8 @@ class FollowupRequest(BaseModel):
 class FollowupResponse(BaseModel):
     questions: list[str]
 
-#
+# Special routing to generate follow up questions. 
+# Does not correspond to agent responses to user
 @router.post("/chat/addon/followup", response_model=FollowupResponse)
 async def followup_chat(
     req: FollowupRequest,
@@ -255,6 +263,9 @@ async def followup_chat(
 
     return FollowupResponse(questions=questions)
 
+# Returns chat with links for where it got sources
+# Prioritizes online lookup
+#TODO: how to make links embedded in text rather than appear seperately?
 @router.post("/chat/links", response_model=ChatResponse)
 async def chat_with_embedded_links(
     req: ChatRequest,

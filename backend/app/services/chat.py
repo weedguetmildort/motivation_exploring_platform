@@ -1,19 +1,13 @@
 # backend/app/services/chat.py
 from pymongo.collection import Collection
 
-_LABELS = ["A", "B", "C", "D"]
-
 
 def _format_assistant(content) -> str:
-    """Combine one or more agent replies into a single assistant message string."""
+    """Combine agent replies into a single assistant message string.
+    Labels are pre-baked into each item at save time (e.g. '[AGENT A] ...').
+    """
     if isinstance(content, list):
-        if len(content) > 1:
-            parts = [
-                f"[AGENT {_LABELS[i] if i < len(_LABELS) else str(i + 1)}] {reply}"
-                for i, reply in enumerate(content)
-            ]
-            return "\n\n".join(parts)
-        return content[0] if content else ""
+        return "\n\n".join(content) if content else ""
     return content
 
 
@@ -63,21 +57,13 @@ def get_conversation_history(messages_col: Collection, conv_id: str) -> list[dic
     ))
 
     history = []
-    labels = ["A", "B", "C", "D"]
     for doc in docs:
         role = doc["role"]
         content = doc["content"]
         if role == "user":
             history.append({"role": "user", "content": content})
         elif role == "assistant":
-            if isinstance(content, list):
-                parts = [
-                    f"[AGENT {labels[i] if i < len(labels) else str(i + 1)}] {reply}"
-                    for i, reply in enumerate(content)
-                ]
-                combined = "\n\n".join(parts)
-            else:
-                combined = content
+            combined = "\n\n".join(content) if isinstance(content, list) else content
             history.append({"role": "assistant", "content": combined})
 
     return history
