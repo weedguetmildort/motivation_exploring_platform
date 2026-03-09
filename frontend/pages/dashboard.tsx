@@ -103,7 +103,7 @@ export default function DashboardPage() {
           )}
           {/*Default quiz */}
           <a
-            href="/quiz/1"
+            href="/quiz/base"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
             <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
