@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 from bson.objectid import ObjectId
+from pymongo import ReturnDocument
 from pymongo.collection import Collection
 from fastapi import HTTPException
 
@@ -16,6 +17,8 @@ from ..schemas.survey import (
     SurveyScale,
 )
 
+from ..schemas.user import SurveyStage
+
 def get_survey_items_collection(db) -> Collection:
     return db["survey_items"]
 
@@ -28,6 +31,26 @@ def ensure_survey_indexes(db) -> None:
 
     items.create_index([("stage", 1), ("active", 1), ("order", 1)])
     responses.create_index([("user_id", 1), ("stage", 1)], unique=True)
+
+# --------------- helper functions ---------------
+
+def get_users_collection(db) -> Collection:
+    return db["users"]
+
+def _next_stage(stage: SurveyStage) -> SurveyStage | None:
+    return {
+        SurveyStage.pre_base: SurveyStage.post_base,
+        SurveyStage.post_base: SurveyStage.post_variant,
+        SurveyStage.post_variant: SurveyStage.complete,
+        SurveyStage.complete: None,
+    }[stage]
+
+def _completion_flag_field(stage: SurveyStage) -> str:
+    return {
+        SurveyStage.pre_base: "survey_pre_base_completed",
+        SurveyStage.post_base: "survey_post_base_completed",
+        SurveyStage.post_variant: "survey_post_variant_completed",
+    }[stage]
 
 # ---------- survey items (admin CRUD) ----------
 
@@ -231,10 +254,70 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     required_ids = set(str(d["_id"]) for d in items_col.find({"stage": stage, "active": True, "required": True}, {"_id": 1}))
     answered_ids = set(x.get("item_id") for x in updated.get("answers", []) if x.get("answered_at"))
 
+    # if required_ids.issubset(answered_ids):
+    #     col.update_one(
+    #         {"_id": updated["_id"]},
+    #         {"$set": {"status": "completed", "completed_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+    #     )
+
     if required_ids.issubset(answered_ids):
+        completed_at = datetime.utcnow()
+
+        try:
+            current_stage = SurveyStage(stage)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
+
         col.update_one(
             {"_id": updated["_id"]},
-            {"$set": {"status": "completed", "completed_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
+            {
+                "$set": {
+                    "status": "completed",
+                    "completed_at": completed_at,
+                    "updated_at": completed_at,
+                }
+            },
         )
+
+        users = get_users_collection(db)
+        answers_map: Dict[str, Any] = {a.item_id: a.value for a in req.answers}
+
+        set_doc: Dict[str, Any] = {
+            "updated_at": completed_at,
+            _completion_flag_field(current_stage): True,
+        }
+
+        if current_stage == SurveyStage.pre_base:
+            set_doc.update(
+                {
+                    "pre_quiz_survey": answers_map,
+                    "pre_quiz_survey_completed_at": completed_at,
+                }
+            )
+
+        elif current_stage == SurveyStage.post_base:
+            set_doc.update(
+                {
+                    "post_base_survey": answers_map,
+                    "post_base_survey_completed_at": completed_at,
+                }
+            )
+
+        elif current_stage == SurveyStage.post_variant:
+            set_doc.update(
+                {
+                    "post_variant_survey": answers_map,
+                    "post_variant_survey_completed_at": completed_at,
+                    "survey_stage": SurveyStage.complete.value,
+                }
+            )
+
+        user_result = users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": set_doc},
+        )
+
+        if user_result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="User not found")
 
     return build_survey_state(db, user_id, user_email, stage)

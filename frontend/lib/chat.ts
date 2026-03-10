@@ -1,26 +1,48 @@
-let conversationId: string | null = null; // simple in-memory thread id
-
 // Centralized API helper for chat
-const BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") || "http://localhost:8000";
 
-export async function sendChat(message: string): Promise<string> {
-  const res = await fetch("/api/chat", {
+export async function sendChat(
+  quizId: string,
+  conversationId: string | null,
+  message: string,
+  agents: string[] = []
+): Promise<{ replies: string[]; conversationId: string }> {
+  const res = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
+    body: JSON.stringify({
       message,
       conversation_id: conversationId,
+      agents,
     }),
   });
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status} when calling /chat`);
+    throw new Error(`HTTP ${res.status} when calling /chat/${quizId}`);
   }
 
-  const data = (await res.json()) as { reply?: string; message?: string; conversation_id?: string };
-  if (!conversationId && data.conversation_id) conversationId = data.conversation_id;
+  const data = (await res.json()) as { reply?: string[]; message?: string; conversation_id?: string };
 
-  // Accept either {reply} or {message} to be tolerant
-  return (data.reply ?? data.message ?? "").toString();
+  const replies = Array.isArray(data.reply)
+    ? data.reply
+    : [(data.reply ?? data.message ?? "").toString()];
+
+  return { replies, conversationId: data.conversation_id ?? conversationId ?? "" };
 }
+
+export async function sendFollowupChat(
+  lastAiMessage: string
+): Promise<string[]> {
+  const res = await fetch(`/api/chat/followup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ last_ai_message: lastAiMessage }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} when calling /chat/followup`);
+  }
+
+  const data = (await res.json()) as { questions?: string[] };
+  return data.questions ?? [];
+}
+

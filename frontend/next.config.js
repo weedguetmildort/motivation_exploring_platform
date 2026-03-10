@@ -14,8 +14,8 @@ const nextConfig = {
     }
     return [
       {
-        source: "/api/chat",
-        destination: `${backend}/chat`
+        source: "/api/chat/:path*",
+        destination: `${backend}/chat/:path*`
       },
       {
         source: "/auth/:path*", 
@@ -36,6 +36,10 @@ const nextConfig = {
       {
         source: "/api/surveys/:path*",
         destination: `${backend}/surveys/:path*`,
+      },
+        {
+        source: "/api/:path*",
+        destination: `${backend}/api/:path*`,
       },
     ];
   },

@@ -1,5 +1,14 @@
+# backend/app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
+
+from enum import Enum
+
+class SurveyStage(str, Enum):
+    pre_base = "pre_quiz"
+    post_base = "post_base"
+    post_variant = "post_variant"
+    complete = "complete"
 
 class UserInDB(BaseModel):
     id: str
@@ -16,7 +25,12 @@ class UserPublic(BaseModel):
     email: EmailStr
     is_admin: bool = False
     demographics_completed: bool = False
-    quiz_pre_survey_completed: bool = False
+    survey_pre_base_completed: bool = False
+    quiz_base_completed: bool = False
+    survey_post_base_completed: bool = False
+    quiz_variant_completed: bool = False
+    survey_post_variant_completed: bool = False
+    survey_stage: SurveyStage = SurveyStage.pre_base
 
 class UserDBDoc(BaseModel):
     """Shape as stored in Mongo."""
@@ -25,4 +39,9 @@ class UserDBDoc(BaseModel):
     password_hash: str
     is_admin: bool = False
     demographics_completed: bool = False
-    quiz_pre_survey_completed: bool = False
+    survey_pre_base_completed: bool = False
+    quiz_base_completed: bool = False
+    survey_post_base_completed: bool = False
+    quiz_variant_completed: bool = False
+    survey_post_variant_completed: bool = False
+    survey_stage: SurveyStage = SurveyStage.pre_base

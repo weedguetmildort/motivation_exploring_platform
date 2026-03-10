@@ -101,14 +101,24 @@ export default function DashboardPage() {
               <p className="text-sm text-gray-600">Manage questions and content</p>
             </a>
           )}
-
+          {/*Default quiz */}
           <a
-            href="/quiz"
+            href="/quiz/base"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
             <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
+          {/*Additional Quiz*/}
+          {user?.is_admin && (
+          <a
+            href="/quiz/double"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg font-semibold">Dual Agent Quiz</h2>
+            <p className="text-sm text-gray-600">Begin the Quiz</p>
+          </a>
+          )}
         </div>
       </div>
     </div>

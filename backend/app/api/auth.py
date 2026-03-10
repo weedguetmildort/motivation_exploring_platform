@@ -1,5 +1,7 @@
+# backend/app/api/auth.py
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
 from pymongo.errors import DuplicateKeyError
+
 from ..core.security import hash_password
 from ..schemas.auth import (
     SignupRequest,
@@ -7,7 +9,7 @@ from ..schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
 )
-from ..schemas.user import UserPublic
+from ..schemas.user import UserPublic, SurveyStage
 from ..services.users import (
     get_users_collection,
     ensure_indexes,
@@ -19,6 +21,7 @@ from ..core.security import create_access_token, decode_token
 from ..core.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
 
 def set_session_cookie(resp: Response, token: str):
     s = get_settings()
@@ -33,6 +36,7 @@ def set_session_cookie(resp: Response, token: str):
         path="/",
     )
 
+
 def clear_session_cookie(resp: Response):
     s = get_settings()
     resp.delete_cookie(
@@ -40,6 +44,29 @@ def clear_session_cookie(resp: Response):
         domain=s.COOKIE_DOMAIN,
         path="/",
     )
+
+
+def build_user_public(doc: dict) -> UserPublic:
+    raw_stage = doc.get("survey_stage", SurveyStage.pre_base)
+
+    try:
+        survey_stage = raw_stage if isinstance(raw_stage, SurveyStage) else SurveyStage(raw_stage)
+    except Exception:
+        survey_stage = SurveyStage.pre_base
+
+    return UserPublic(
+        id=str(doc["_id"]),
+        email=doc["email"],
+        is_admin=bool(doc.get("is_admin", False)),
+        demographics_completed=doc.get("demographics_completed", False),
+        survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
+        quiz_base_completed=doc.get("quiz_base_completed", False),
+        survey_post_base_completed=doc.get("survey_post_base_completed", False),
+        quiz_variant_completed=doc.get("quiz_variant_completed", False),
+        survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
+        survey_stage=survey_stage,
+    )
+
 
 def get_current_user(request: Request) -> UserPublic:
     s = get_settings()
@@ -61,22 +88,11 @@ def get_current_user(request: Request) -> UserPublic:
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
 
-    return UserPublic(
-        id=str(doc["_id"]),
-        email=doc["email"],
-        is_admin=bool(doc.get("is_admin", False)),
-        demographics_completed=doc.get("demographics_completed", False),
-        quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
-    )
+    return build_user_public(doc)
+
 
 @router.post("/signup", response_model=AuthResponse)
 def signup(data: SignupRequest, request: Request, response: Response):
-    # DEBUG: inspect what we actually got
-    try:
-        pw_bytes_len = len(data.password.encode("utf-8"))
-    except Exception as e:
-        print(f"[auth.signup] password debug failed: {e}")
-
     users = get_users_collection(request.app.state.db)
     ensure_indexes(users)
 
@@ -84,46 +100,36 @@ def signup(data: SignupRequest, request: Request, response: Response):
         user_pub = create_user(users, data.email, data.password)
     except DuplicateKeyError:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
 
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
 
+
 @router.post("/login", response_model=AuthResponse)
 def login(data: LoginRequest, request: Request, response: Response):
-    # DEBUG: inspect what we actually got
-    try:
-        pw_bytes_len = len(data.password.encode("utf-8"))
-        print(f"[auth.signup] pw bytes len={pw_bytes_len} value preview={repr(data.password[:64])}")
-    except Exception as e:
-        print(f"[auth.signup] password debug failed: {e}")
-
-    
     users = get_users_collection(request.app.state.db)
     doc = find_user_by_email(users, data.email)
     if not doc or not check_user_password(doc, data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    user_pub = UserPublic(
-        id=str(doc["_id"]),
-        email=doc["email"],
-        is_admin=bool(doc.get("is_admin", False)),
-        demographics_completed=doc.get("demographics_completed", False),
-        quiz_pre_survey_completed=doc.get("quiz_pre_survey_completed", False),
-    )
+
+    user_pub = build_user_public(doc)
+
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
+
 
 @router.get("/me", response_model=AuthResponse)
 def me(user: UserPublic = Depends(get_current_user)):
     return AuthResponse(user=user)
 
+
 @router.post("/logout")
 def logout(response: Response):
     clear_session_cookie(response)
     return {"ok": True}
+
 
 @router.post("/change-password")
 def change_password(
@@ -131,21 +137,14 @@ def change_password(
     request: Request,
     user: UserPublic = Depends(get_current_user),
 ):
-    """
-    Allow a logged-in user to change their password by providing
-    the current password and a new password.
-    """
     users = get_users_collection(request.app.state.db)
     doc = find_user_by_email(users, user.email)
     if not doc:
-        # Should not normally happen if session is valid
         raise HTTPException(status_code=404, detail="User not found")
 
-    # verify current password
     if not check_user_password(doc, data.current_password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    # hash and store new password
     new_hash = hash_password(data.new_password)
     users.update_one(
         {"_id": doc["_id"]},
