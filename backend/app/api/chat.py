@@ -225,6 +225,7 @@ async def chat_with_embedded_links(
             ],
         )
     except Exception as e:
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Upstream AI request failed: {e}")
 
     reply = output["reply"]
@@ -233,7 +234,7 @@ async def chat_with_embedded_links(
     return ChatResponse(reply=[reply], conversation_id=conv_id)
 
 #Default Behavior
-@router.post("/chat/{quiz_id}", response_model=ChatResponse)
+@router.post("/chat/base", response_model=ChatResponse)
 async def chat(
     quiz_id: str,
     req: ChatRequest,
