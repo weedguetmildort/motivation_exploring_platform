@@ -213,6 +213,22 @@ async def chat_with_embedded_links(
         "You are a helpful assistant who generates clear and concise answers "
         "to help students answer some quiz questions. "
         "Use web searches to gather information and cite sources inline."
+        "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
+        "Prefer sources with stable, long-lived URLs."
+
+        "Preferred sources:"
+        "- Wikipedia (en.wikipedia.org)"
+        "- Encyclopaedia Britannica (britannica.com)"
+        "- Government sites (.gov such as CDC, NIH, NASA, NIST)"
+        "- University and educational sites (.edu)"
+        "- MIT OpenCourseWare (ocw.mit.edu)"
+        "- PubMed / NCBI (ncbi.nlm.nih.gov) for biomedical topics"
+        "- arXiv (arxiv.org) for physics, mathematics, and computer science preprints"
+        "- Wolfram MathWorld (mathworld.wolfram.com) for mathematics"
+        "- Stanford Encyclopedia of Philosophy (plato.stanford.edu) for philosophy"
+        "- IEEE Xplore (ieeexplore.ieee.org) for engineering and computer science"
+        "- ACM Digital Library (dl.acm.org) for computer science research"
+        "- DOI-linked journal articles (doi.org/...) which remain resolvable even if the publisher changes URLs"
     )
     try:
         output = get_chat_response_with_search(
@@ -234,7 +250,7 @@ async def chat_with_embedded_links(
     return ChatResponse(reply=[reply], conversation_id=conv_id)
 
 #Default Behavior
-@router.post("/chat/base", response_model=ChatResponse)
+@router.post("/chat/{quiz_id}", response_model=ChatResponse)
 async def chat(
     quiz_id: str,
     req: ChatRequest,

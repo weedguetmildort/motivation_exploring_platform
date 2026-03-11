@@ -12,7 +12,7 @@ from ..services.quiz import (
 
 #TODO: ensure quiz_id is valid - either in this file before querying responses or in services/quiz.py functions
 # Doing in this file is a bit more organized but doing it from services avoids doing an additional mongoDB request
-router = APIRouter(prefix="/quiz/base", tags=["quiz"])
+router = APIRouter(prefix="/quiz/{quiz_id}", tags=["quiz"])
 
 @router.get("/state", response_model=QuizStateResponse)
 def get_quiz_state(request: Request, user: UserPublic = Depends(get_current_user)):
