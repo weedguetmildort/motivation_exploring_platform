@@ -228,7 +228,8 @@ async def chat_with_embedded_links(
         "- Stanford Encyclopedia of Philosophy (plato.stanford.edu) for philosophy"
         "- IEEE Xplore (ieeexplore.ieee.org) for engineering and computer science"
         "- ACM Digital Library (dl.acm.org) for computer science research"
-        "- DOI-linked journal articles (doi.org/...) which remain resolvable even if the publisher changes URLs"
+        # Removed DOI sources because the url can be inconsistent and are not friendly to read for someone taking a quiz 
+        # "- DOI-linked journal articles (doi.org/...) which remain resolvable even if the publisher changes URLs"
     )
     try:
         output = get_chat_response_with_search(
