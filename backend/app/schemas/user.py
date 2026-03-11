@@ -1,3 +1,4 @@
+# backend/app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
@@ -7,6 +8,7 @@ class SurveyStage(str, Enum):
     pre_base = "pre_quiz"
     post_base = "post_base"
     post_variant = "post_variant"
+    complete = "complete"
 
 class UserInDB(BaseModel):
     id: str

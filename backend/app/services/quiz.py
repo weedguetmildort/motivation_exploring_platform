@@ -1,29 +1,32 @@
 # backend/app/services/quiz.py
 import uuid
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional
 from bson.objectid import ObjectId
 from pymongo.collection import Collection
 from fastapi import HTTPException
 
-from .questions import get_questions_collection  # assuming you have this
+from .questions import get_questions_collection
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload
+from ..schemas.user import SurveyStage
 
-#QUIZ_ID = "main"  # single quiz for now
 MAX_QUIZ_QUESTIONS = 10
+
 
 def get_users_collection(db) -> Collection:
     return db["users"]
 
+
 def get_quiz_attempts_collection(db) -> Collection:
     return db["quiz_attempts"]
 
+
 def _ensure_unique_index(col: Collection) -> None:
-    # one attempt doc per (user_id, quiz_id)
     col.create_index(
         [("user_id", 1), ("quiz_id", 1)],
         unique=True,
     )
+
 
 def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> dict:
     col = get_quiz_attempts_collection(db)
@@ -33,7 +36,6 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
     if doc:
         return doc
 
-    # create new attempt with randomized question order
     qcol = get_questions_collection(db)
     questions = list(qcol.find({}, {"_id": 1}))
     if not questions:
@@ -62,12 +64,38 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
     doc["_id"] = res.inserted_id
     return doc
 
+
 def _find_next_unanswered(doc: dict) -> Optional[str]:
     answered_map = {a["question_id"] for a in doc.get("answers", []) if a.get("answered_at")}
     for qid in doc.get("question_order", []):
         if qid not in answered_map:
             return qid
     return None
+
+
+def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
+    """
+    Decide which user-level completion flag and next survey_stage should be set
+    when a quiz is completed.
+
+    Adjust the quiz_id values here to match your actual routing / DB values.
+    """
+    if quiz_id == "base":
+        return {
+            "quiz_base_completed": True,
+            "survey_stage": SurveyStage.post_base.value,
+            "updated_at": completed_at,
+        }
+
+    if quiz_id == "variant":
+        return {
+            "quiz_variant_completed": True,
+            "survey_stage": SurveyStage.post_variant.value,
+            "updated_at": completed_at,
+        }
+
+    raise HTTPException(status_code=400, detail=f"Unknown quiz_id for completion flow: {quiz_id}")
+
 
 def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
     qcol = get_questions_collection(db)
@@ -84,13 +112,19 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
     conv_id = doc.get("conversation_id", "")
 
     if doc["status"] == "completed":
-        # don't send a current question
-        return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=None)
+        return QuizStateResponse(
+            conversation_id=conv_id,
+            attempt=attempt_pub,
+            current_question=None,
+        )
 
     next_qid = _find_next_unanswered(doc)
     if not next_qid:
-        # nothing left but status not marked complete -> fix it
-        return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=None)
+        return QuizStateResponse(
+            conversation_id=conv_id,
+            attempt=attempt_pub,
+            current_question=None,
+        )
 
     qdoc = qcol.find_one({"_id": ObjectId(next_qid)})
     if not qdoc:
@@ -103,12 +137,16 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         choices=qdoc["choices"],
     )
 
-    return QuizStateResponse(conversation_id=conv_id, attempt=attempt_pub, current_question=question_payload)
+    return QuizStateResponse(
+        conversation_id=conv_id,
+        attempt=attempt_pub,
+        current_question=question_payload,
+    )
+
 
 def record_question_shown(db, doc: dict, question_id: str) -> dict:
     col = get_quiz_attempts_collection(db)
 
-    # if there's already an answer record for this question, don't duplicate it
     has = any(a["question_id"] == question_id for a in doc.get("answers", []))
     now = datetime.utcnow()
 
@@ -130,6 +168,7 @@ def record_question_shown(db, doc: dict, question_id: str) -> dict:
         doc = col.find_one({"_id": doc["_id"]})
     return doc
 
+
 def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: str) -> dict:
     col = get_quiz_attempts_collection(db)
 
@@ -139,13 +178,12 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
 
     if doc["status"] == "completed":
         raise HTTPException(status_code=400, detail="Quiz already completed")
-    
+
     if question_id not in set(doc.get("question_order", [])):
         raise HTTPException(status_code=400, detail="Question not part of this quiz attempt")
 
     now = datetime.utcnow()
 
-    # update the answer entry (or create it if somehow missing)
     res = col.update_one(
         {
             "_id": doc["_id"],
@@ -161,7 +199,6 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
     )
 
     if res.matched_count == 0:
-        # There was no existing answer record; create one now
         col.update_one(
             {"_id": doc["_id"]},
             {
@@ -177,22 +214,28 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
             },
         )
 
-    # check if we finished
     updated = col.find_one({"_id": doc["_id"]})
     next_qid = _find_next_unanswered(updated)
+
     if not next_qid:
         completed_at = datetime.utcnow()
 
         col.update_one(
             {"_id": updated["_id"]},
-            {"$set": {"status": "completed", "updated_at": datetime.utcnow()}},
+            {
+                "$set": {
+                    "status": "completed",
+                    "updated_at": completed_at,
+                }
+            },
         )
 
-        # update user-level flag
         users = get_users_collection(db)
+        user_set_doc = _get_user_quiz_update_fields(quiz_id, completed_at)
+
         result = users.update_one(
             {"_id": ObjectId(user_id)},
-            {"$set": {"quiz_base_completed": True, "updated_at": completed_at}},
+            {"$set": user_set_doc},
         )
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="User not found")

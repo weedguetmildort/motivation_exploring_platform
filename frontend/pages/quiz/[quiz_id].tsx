@@ -1,4 +1,3 @@
-// AFTER
 // frontend/pages/quiz/[quiz_id].tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
@@ -11,7 +10,62 @@ import {
   type QuizStateResponse,
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
-import { getSurveyState } from "../../lib/surveys";
+
+type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
+type QuizId = "base" | "variant";
+
+type ExtendedUser = User & {
+  survey_stage?: SurveyStage | null;
+  survey_pre_base_completed?: boolean;
+  quiz_base_completed?: boolean;
+  survey_post_base_completed?: boolean;
+  quiz_variant_completed?: boolean;
+  survey_post_variant_completed?: boolean;
+};
+
+function isQuizId(value: string): value is QuizId {
+  return value === "base" || value === "variant";
+}
+
+function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
+  if (quizId === "base") {
+    return (
+      Boolean(user.survey_pre_base_completed) &&
+      !Boolean(user.quiz_base_completed)
+    );
+  }
+
+  if (quizId === "variant") {
+    return (
+      Boolean(user.survey_post_base_completed) &&
+      !Boolean(user.quiz_variant_completed)
+    );
+  }
+
+  return false;
+}
+
+function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
+  if (quizId === "base") {
+    if (!user.survey_pre_base_completed) return "/survey";
+    if (user.quiz_base_completed && !user.survey_post_base_completed)
+      return "/survey";
+    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
+      return "/quiz/variant";
+    }
+    return "/dashboard";
+  }
+
+  if (quizId === "variant") {
+    if (!user.survey_post_base_completed) return "/survey";
+    if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
+      return "/survey";
+    }
+    return "/dashboard";
+  }
+
+  return "/dashboard";
+}
 
 export default function QuizPage() {
   const router = useRouter();
@@ -22,7 +76,7 @@ export default function QuizPage() {
         ? router.query.quiz_id[0]
         : null;
 
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<ExtendedUser | null>(null);
   const [checking, setChecking] = useState(true);
 
   const [quizState, setQuizState] = useState<QuizStateResponse | null>(null);
@@ -41,30 +95,18 @@ export default function QuizPage() {
 
     (async () => {
       try {
-        // const res = await getMe();
-        // if (!cancel) setUser(res.user);
         const res = await getMe();
         if (cancel) return;
 
-        const u = res.user;
-        //TODO: may want to prompt pre_quiz before every quiz
-        const survey = await getSurveyState("pre_quiz");
-        if (cancel) return;
+        const u = res.user as ExtendedUser;
 
-        const isCompleted =
-          (survey as any)?.status === "completed" ||
-          (survey as any)?.completed === true ||
-          (survey as any)?.is_completed === true ||
-          (survey as any)?.attempt?.status === "completed";
+        if (!isQuizId(quizId)) {
+          router.replace("/dashboard");
+          return;
+        }
 
-        // if (survey.status !== "completed") {
-        //   router.replace("/quiz-survey");
-        //   return;
-        // }
-
-        if (!isCompleted) {
-          console.log("[quiz] pre_quiz survey NOT completed. survey=", survey); // DEBUG
-          router.replace(`/quiz_survey?quiz_id=${quizId}`);
+        if (!canAccessQuiz(quizId, u)) {
+          router.replace(getBlockedQuizRedirect(quizId, u));
           return;
         }
 
@@ -85,6 +127,7 @@ export default function QuizPage() {
     if (!user) return;
     if (!router.isReady) return;
     if (!quizId) return;
+    if (!isQuizId(quizId)) return;
 
     let cancel = false;
 
@@ -112,10 +155,7 @@ export default function QuizPage() {
   const quizCompleted = attempt?.status === "completed";
 
   useEffect(() => {
-    if (!current) {
-      // no question -> nothing to reset
-      return;
-    }
+    if (!current) return;
     setSelectedChoice(null);
     setHasAskedChat(false);
     setExternalQuestion(null);
@@ -127,14 +167,7 @@ export default function QuizPage() {
     if (!quizId) return;
     if (!user) return;
 
-    // if user has not completed the post survey, send them there
-    if (!user.survey_post_base_completed) {
-      router.replace(`/quiz_post_survey?quiz_id=${quizId}`);
-      return;
-    }
-
-    // otherwise go to dashboard (or results page)
-    router.replace("/dashboard");
+    router.replace("/survey");
   }, [router.isReady, quizCompleted, quizId, user, router]);
 
   if (checking) {
@@ -158,19 +191,28 @@ export default function QuizPage() {
   function onAskAssistantAboutQuestion() {
     if (!current) return;
 
-    // Build the prompt to send — question stem + subtitle if present
     const prompt = current.subtitle
       ? `${current.stem}\n\n${current.subtitle}`
       : current.stem;
 
-    setExternalQuestion(prompt); // ChatBox will send this once
-    setHasAskedChat(true); // Unlock options for this question
+    setExternalQuestion(prompt);
+    setHasAskedChat(true);
   }
 
   async function onSubmit() {
-    if (!quizId || !current || !selectedChoice || submitting) return;
+    if (
+      !quizId ||
+      !isQuizId(quizId) ||
+      !current ||
+      !selectedChoice ||
+      submitting
+    ) {
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
+
     try {
       const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
       setQuizState(state);
@@ -185,7 +227,6 @@ export default function QuizPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white border-b px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
@@ -214,7 +255,6 @@ export default function QuizPage() {
       </header>
 
       <div className="max-w-6xl mx-auto p-6 min-h-0">
-        {/* Progress + errors */}
         {attempt && (
           <div className="mb-4 text-sm text-gray-600">
             {attempt.answered_count} of {attempt.total_questions} answered
@@ -232,24 +272,20 @@ export default function QuizPage() {
           </div>
         )}
 
-        {/* Completed state */}
         {quizCompleted && (
           <div className="bg-white rounded-xl p-6 shadow-sm border">
             <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
             <p className="text-sm text-gray-600">
-              Thank you for completing the quiz. You cannot retake it.
+              Redirecting you to the next survey…
             </p>
           </div>
         )}
 
-        {/* Main grid layout: Question + Options (left), Chat (right) */}
         {!quizCompleted && (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-2 px-0 pb-6 min-h-0">
-            {/* Left column */}
-            <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full">
-              {/* Question section */}
-              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
-                <h2 className="text-lg font-medium mb-3">Question </h2>
+          <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-2 px-0 pb-6 min-h-0 lg:h-[calc(100vh-180px)]">
+            <div className="grid gap-6 lg:grid-rows-[1fr_1fr] min-h-0 h-full">
+              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto min-h-0">
+                <h2 className="text-lg font-medium mb-3">Question</h2>
 
                 {!quizState && (
                   <div className="text-sm text-gray-500">Loading quiz…</div>
@@ -272,8 +308,7 @@ export default function QuizPage() {
                 )}
               </section>
 
-              {/* Options section */}
-              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
+              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto min-h-0">
                 <h2 className="text-lg font-medium mb-3">Options</h2>
 
                 {!quizState || !current ? (
@@ -282,7 +317,6 @@ export default function QuizPage() {
                   </div>
                 ) : (
                   <div className="relative">
-                    {/* The actual options, blurred/disabled until hasAskedChat */}
                     <div
                       className={`space-y-4 transition ${
                         !hasAskedChat
@@ -313,7 +347,6 @@ export default function QuizPage() {
                       </div>
                     </div>
 
-                    {/* Overlay shown until question has been sent to chat */}
                     {!hasAskedChat && (
                       <div className="absolute inset-0 flex items-center justify-center">
                         <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
@@ -336,11 +369,11 @@ export default function QuizPage() {
               </section>
             </div>
 
-            {/* Right column (Chat) */}
             <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
+
               {quizId && (
                 <ChatBox
-                  quizId={quizId ?? undefined}
+                  quizId={quizId}
                   conversationId={conversationId}
                   externalQuestion={externalQuestion}
                   enableFollowups={false}

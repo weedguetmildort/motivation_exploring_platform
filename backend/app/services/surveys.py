@@ -41,7 +41,8 @@ def _next_stage(stage: SurveyStage) -> SurveyStage | None:
     return {
         SurveyStage.pre_base: SurveyStage.post_base,
         SurveyStage.post_base: SurveyStage.post_variant,
-        SurveyStage.post_variant: None,
+        SurveyStage.post_variant: SurveyStage.complete,
+        SurveyStage.complete: None,
     }[stage]
 
 def _completion_flag_field(stage: SurveyStage) -> str:
@@ -262,39 +263,54 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     if required_ids.issubset(answered_ids):
         completed_at = datetime.utcnow()
 
-        # 1) mark the survey response completed
+        try:
+            current_stage = SurveyStage(stage)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
+
         col.update_one(
             {"_id": updated["_id"]},
-            {"$set": {"status": "completed", "completed_at": completed_at, "updated_at": completed_at}},
+            {
+                "$set": {
+                    "status": "completed",
+                    "completed_at": completed_at,
+                    "updated_at": completed_at,
+                }
+            },
         )
 
-        # 2) update the USER document (user-level), similar to your /me demographics route
         users = get_users_collection(db)
-
-        # build a demographics-like payload from the answers (optional)
-        # if you just want a completion flag, you can skip this mapping
         answers_map: Dict[str, Any] = {a.item_id: a.value for a in req.answers}
 
-        # Choose your user-level fields. Examples:
-        # - store the raw map under something like "pre_survey"
-        # - set a "completed" boolean
-        # - set updated_at
-        set_doc = {
+        set_doc: Dict[str, Any] = {
             "updated_at": completed_at,
+            _completion_flag_field(current_stage): True,
         }
 
-        if stage == "pre_quiz":
+        if current_stage == SurveyStage.pre_base:
             set_doc.update(
                 {
                     "pre_quiz_survey": answers_map,
-                    "survey_pre_base_completed": True,
-                    "pre_quiz_survey_completed_at": completed_at
+                    "pre_quiz_survey_completed_at": completed_at,
                 }
             )
-        else:
-            # if you want stage-based generic flags:
-            # set_doc[_completion_flag_field(SurveyStage(stage))] = True
-            pass
+
+        elif current_stage == SurveyStage.post_base:
+            set_doc.update(
+                {
+                    "post_base_survey": answers_map,
+                    "post_base_survey_completed_at": completed_at,
+                }
+            )
+
+        elif current_stage == SurveyStage.post_variant:
+            set_doc.update(
+                {
+                    "post_variant_survey": answers_map,
+                    "post_variant_survey_completed_at": completed_at,
+                    "survey_stage": SurveyStage.complete.value,
+                }
+            )
 
         user_result = users.update_one(
             {"_id": ObjectId(user_id)},
