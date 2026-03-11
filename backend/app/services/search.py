@@ -17,7 +17,7 @@ def _run_search(query: str, max_results: int = 5) -> list[dict]:
 
     Returns [] on any failure so the caller can fall back to answering without search.
     """
-    max_results = min(max_results, 10)
+    #max_results = min(max_results, 10)
     try:
         resp = httpx.post(
             f"{_UF_BASE_URL}/v1/search/{_UF_SEARCH_TOOL}",
@@ -67,12 +67,11 @@ def _filter_valid_urls(results: list[dict]) -> list[dict]:
         return results
     with ThreadPoolExecutor(max_workers=len(results)) as pool:
         futures = {pool.submit(_check_url, r["url"]): r for r in results}
-        valid_urls = {
-            url
-            for f in as_completed(futures)
-            for url, ok in [f.result()]
-            if ok
-        }
+        valid_urls = set()
+        for f in as_completed(futures):
+            url, ok = f.result()
+            if ok:
+                valid_urls.add(url)
     return [r for r in results if r["url"] in valid_urls]
 
 
