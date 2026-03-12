@@ -1,11 +1,14 @@
 import os
 import re
 import uuid
+import time
 from pydantic import BaseModel
 from openai import OpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
+from typing import Optional
 from ..schemas.user import UserPublic
+from ..schemas.message import AIMessageMetadata
 from .auth import get_current_user
 from ..services.chat import get_last_exchange
 
@@ -18,6 +21,26 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: list[str]
     conversation_id: str
+    metadata: Optional[list[AIMessageMetadata]] = None  # Optional metadata for each reply
+
+
+def _extract_metadata_from_response(resp, model_version: Optional[str] = None) -> AIMessageMetadata:
+    """Extract metadata from OpenAI API response.
+    
+    Parameters:
+    - resp: OpenAI ChatCompletion response object
+    - model_version: Optional model version to include
+    
+    Returns:
+    - AIMessageMetadata with populated fields
+    """
+    return AIMessageMetadata(
+        model_version=model_version or getattr(resp, 'model', None),
+        tokens_used=getattr(resp.usage, 'total_tokens', None) if resp.usage else None,
+        input_tokens=getattr(resp.usage, 'prompt_tokens', None) if resp.usage else None,
+        output_tokens=getattr(resp.usage, 'completion_tokens', None) if resp.usage else None,
+        # Other fields can be set by additional processing or custom logic
+    )
 
 # Initialize OpenAI client with UF proxy settings (from env)
 _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
@@ -36,6 +59,7 @@ async def double_chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
+    model_version = os.getenv("UF_OPENAI_API_MODEL")
 
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
@@ -55,6 +79,7 @@ async def double_chat(
         pass
 
     # Agent A: sees full prior conversation
+    metadata_a = None
     try:
         system_instruction = (
             "You are a helpful assistant who generates clear and concise answers "
@@ -65,15 +90,22 @@ async def double_chat(
             *history,
             {"role": "user", "content": req.message},
         ]
+        start_time = time.time()
         resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
+            model=model_version,
             messages=messages_a,
         )
+        processing_time_ms = int((time.time() - start_time) * 1000)
         reply = (resp.choices[0].message.content or "").strip()
+        
+        # Extract metadata from response
+        metadata_a = _extract_metadata_from_response(resp, model_version)
+        metadata_a.processing_time_ms = processing_time_ms
     except Exception:
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
     # Agent B: sees full prior conversation plus Agent A's new response
+    metadata_b = None
     try:
         system_instruction_b = (
             "You are a helpful assistant who generates clear and concise answers "
@@ -86,15 +118,21 @@ async def double_chat(
             {"role": "user", "content": req.message},
             {"role": "assistant", "content": f"[AGENT A] {reply}"},
         ]
+        start_time = time.time()
         resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
+            model=model_version,
             messages=messages_b,
         )
+        processing_time_ms = int((time.time() - start_time) * 1000)
         second_reply = (resp.choices[0].message.content or "").strip()
+        
+        # Extract metadata from response
+        metadata_b = _extract_metadata_from_response(resp, model_version)
+        metadata_b.processing_time_ms = processing_time_ms
     except Exception:
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
-    # Insert both agent replies as a single assistant document
+    # Insert both agent replies as a single assistant document with metadata
     try:
         request.app.state.messages.insert_one({
             "conversation_id": conv_id,
@@ -104,11 +142,21 @@ async def double_chat(
             "content": [reply, second_reply],
             "created_at": datetime.utcnow(),
             "source": "ai",
+            "metadata": {
+                "agents": [
+                    metadata_a.model_dump(exclude_none=True) if metadata_a else {},
+                    metadata_b.model_dump(exclude_none=True) if metadata_b else {},
+                ],
+            }
         })
     except Exception:
         pass
 
-    return ChatResponse(reply=[reply, second_reply], conversation_id=conv_id)
+    return ChatResponse(
+        reply=[reply, second_reply],
+        conversation_id=conv_id,
+        metadata=[metadata_a, metadata_b] if (metadata_a or metadata_b) else None,
+    )
 
 
 class FollowupRequest(BaseModel):
@@ -178,6 +226,7 @@ async def chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
+    model_version = os.getenv("UF_OPENAI_API_MODEL")
 
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
@@ -196,6 +245,7 @@ async def chat(
     except Exception:
         pass
 
+    metadata = None
     try:
         system_instruction = (
             "You are a helpful assistant who generates clear and concise answers "
@@ -206,15 +256,21 @@ async def chat(
             *history,
             {"role": "user", "content": req.message},
         ]
+        start_time = time.time()
         resp = _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
+            model=model_version,
             messages=messages,
         )
+        processing_time_ms = int((time.time() - start_time) * 1000)
         reply = (resp.choices[0].message.content or "").strip()
+        
+        # Extract metadata from response
+        metadata = _extract_metadata_from_response(resp, model_version)
+        metadata.processing_time_ms = processing_time_ms
     except Exception:
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
-    # Insert assistant message
+    # Insert assistant message with metadata
     try:
         request.app.state.messages.insert_one({
             "conversation_id": conv_id,
@@ -224,8 +280,92 @@ async def chat(
             "content": [reply],
             "created_at": datetime.utcnow(),
             "source": "ai",
+            "metadata": metadata.model_dump(exclude_none=True) if metadata else None,
         })
     except Exception:
         pass
 
-    return ChatResponse(reply=[reply], conversation_id=conv_id)
+    return ChatResponse(
+        reply=[reply],
+        conversation_id=conv_id,
+        metadata=[metadata] if metadata else None,
+    )
+
+
+# New endpoint: retrieve conversation history with metadata
+class ConversationMessageData(BaseModel):
+    """A single message in the conversation with optional metadata."""
+    role: str
+    content: str | list[str]
+    created_at: datetime
+    metadata: Optional[AIMessageMetadata] = None
+    user_email: Optional[str] = None
+
+
+class ConversationHistoryResponse(BaseModel):
+    """Full conversation history with metadata."""
+    conversation_id: str
+    messages: list[ConversationMessageData]
+
+
+@router.get("/chat/history/{conversation_id}", response_model=ConversationHistoryResponse)
+async def get_conversation_history(
+    conversation_id: str,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    """Retrieve full conversation history including optional metadata.
+    
+    This endpoint returns all messages in a conversation with their metadata,
+    useful for analysis, debugging, and UI rendering of message sources/confidence.
+    """
+    try:
+        # Fetch all messages for this conversation
+        docs = list(request.app.state.messages.find(
+            {"conversation_id": conversation_id},
+            sort=[("created_at", 1)],  # chronological order
+        ))
+        
+        if not docs:
+            # Return empty history if not found
+            return ConversationHistoryResponse(
+                conversation_id=conversation_id,
+                messages=[]
+            )
+        
+        # Check that the user owns this conversation (matches user_id in message)
+        if docs and docs[0].get("user_id") != user.id:
+            raise HTTPException(status_code=403, detail="Unauthorized access to conversation")
+        
+        messages = []
+        for doc in docs:
+            # Parse metadata if present
+            metadata_dict = doc.get("metadata")
+            metadata = None
+            if metadata_dict:
+                try:
+                    # Handle nested metadata structure (e.g., for double_chat with agents)
+                    if isinstance(metadata_dict, dict) and "agents" not in metadata_dict:
+                        metadata = AIMessageMetadata(**metadata_dict)
+                except Exception:
+                    # If metadata parsing fails, skip it
+                    pass
+            
+            messages.append(ConversationMessageData(
+                role=doc.get("role", ""),
+                content=doc.get("content", ""),
+                created_at=doc.get("created_at", datetime.utcnow()),
+                metadata=metadata,
+                user_email=doc.get("user_email"),
+            ))
+        
+        return ConversationHistoryResponse(
+            conversation_id=conversation_id,
+            messages=messages
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve conversation: {str(e)}")
+
