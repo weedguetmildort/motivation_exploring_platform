@@ -28,6 +28,10 @@ function isQuizId(value: string): value is QuizId {
 }
 
 function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
+  //Bypass checks if user is an admin. Useful for testing
+  if(user.is_admin) {
+    return true;
+  }
   if (quizId === "base") {
     return (
       Boolean(user.survey_pre_base_completed) &&

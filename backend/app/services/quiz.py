@@ -93,7 +93,7 @@ def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
             "survey_stage": SurveyStage.post_variant.value,
             "updated_at": completed_at,
         }
-
+        
     raise HTTPException(status_code=400, detail=f"Unknown quiz_id for completion flow: {quiz_id}")
 
 
