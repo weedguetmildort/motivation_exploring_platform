@@ -11,6 +11,8 @@ import {
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
 
+type ActiveSurveyStage = Exclude<SurveyStage, "complete">;
+
 type ExtendedUser = User & {
   survey_stage?: SurveyStage | null;
   survey_pre_base_completed?: boolean;
@@ -19,7 +21,7 @@ type ExtendedUser = User & {
 };
 
 const STAGE_CONFIG: Record<
-  Exclude<SurveyStage, "complete">,
+  ActiveSurveyStage,
   {
     title: string;
     description: string;
@@ -74,7 +76,7 @@ function isSurveyStage(value: unknown): value is SurveyStage {
  */
 function resolveCurrentSurveyStage(
   user: ExtendedUser | null,
-): Exclude<SurveyStage, "complete"> | null {
+): ActiveSurveyStage | null {
   if (!user) return null;
 
   const stage = user.survey_stage;
@@ -92,6 +94,18 @@ function resolveCurrentSurveyStage(
   }
 
   return null;
+}
+
+/**
+ * Decide which survey definition to load for a given active survey stage.
+ * post_variant reuses the post_base questions.
+ */
+function getLoadStage(activeStage: ActiveSurveyStage): ActiveSurveyStage {
+  if (activeStage === "post_variant") {
+    return "post_base";
+  }
+
+  return activeStage;
 }
 
 /**
@@ -150,6 +164,7 @@ export default function SurveyPage() {
     : null;
 
   const activeSurveyStage = resolveCurrentSurveyStage(user);
+  const loadStage = activeSurveyStage ? getLoadStage(activeSurveyStage) : null;
   const config = activeSurveyStage ? STAGE_CONFIG[activeSurveyStage] : null;
 
   useEffect(() => {
@@ -176,7 +191,7 @@ export default function SurveyPage() {
   useEffect(() => {
     if (!user) return;
 
-    if (!activeSurveyStage || !config) {
+    if (!activeSurveyStage || !config || !loadStage) {
       setLoadingSurvey(false);
       router.replace(getNextRouteForResolvedGap(user, quiz_id));
       return;
@@ -189,19 +204,30 @@ export default function SurveyPage() {
       setError(null);
 
       try {
-        const state = await getSurveyState(activeSurveyStage);
+        // Load question definitions from the mapped load stage.
+        // For post_variant, this pulls the post_base questions.
+        const questionState = await getSurveyState(loadStage);
         if (cancel) return;
 
-        setItems(state.items || []);
-        setStatus(state.status);
+        // Load completion status / saved answers from the actual active stage.
+        // For post_variant, this reads the user's post_variant progress.
+        const responseState =
+          loadStage === activeSurveyStage
+            ? questionState
+            : await getSurveyState(activeSurveyStage);
+
+        if (cancel) return;
+
+        setItems(questionState.items || []);
+        setStatus(responseState.status);
 
         const initial: Record<string, number | string | string[]> = {};
-        for (const a of state.answers || []) {
+        for (const a of responseState.answers || []) {
           initial[a.item_id] = a.value;
         }
         setValues(initial);
 
-        if (state.status === "completed") {
+        if (responseState.status === "completed") {
           router.replace(getNextRouteForResolvedGap(user, quiz_id));
           return;
         }
@@ -216,7 +242,7 @@ export default function SurveyPage() {
     return () => {
       cancel = true;
     };
-  }, [user, activeSurveyStage, config, quiz_id, router]);
+  }, [user, activeSurveyStage, loadStage, config, quiz_id, router]);
 
   const requiredUnanswered = useMemo(() => {
     return items
@@ -266,6 +292,8 @@ export default function SurveyPage() {
         })
         .filter(Boolean) as SurveyAnswer[];
 
+      // Submit under the actual active stage.
+      // For post_variant, this saves under post_variant.
       await submitSurvey(activeSurveyStage, answers);
 
       const optimisticUser: ExtendedUser | null =
