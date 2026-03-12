@@ -230,9 +230,9 @@ export default function QuizPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+    <div className="relative h-screen bg-gray-50 overflow-hidden">
+      <header className="h-24 bg-white border-b px-6 py-4">
+        <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">
               Quiz {quizId}
@@ -241,6 +241,7 @@ export default function QuizPage() {
               Answer each question once. Your progress is saved automatically.
             </p>
           </div>
+
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.push("/dashboard")}
@@ -248,6 +249,7 @@ export default function QuizPage() {
             >
               Back to Dashboard
             </button>
+
             <button
               onClick={onLogout}
               className="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
@@ -258,134 +260,141 @@ export default function QuizPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6 min-h-0">
-        {attempt && (
-          <div className="mb-4 text-sm text-gray-600">
-            {attempt.answered_count} of {attempt.total_questions} answered
-            {quizCompleted && (
-              <span className="ml-2 font-semibold text-green-700">
-                (Quiz completed)
-              </span>
-            )}
-          </div>
-        )}
+      <div className="absolute inset-x-0 bottom-0 top-24">
+        <div className="max-w-6xl mx-auto h-full px-6 py-6">
+          <div className="grid h-full grid-rows-[auto_1fr] gap-4">
+            <div>
+              {attempt && (
+                <div className="mb-4 text-sm text-gray-600">
+                  {attempt.answered_count} of {attempt.total_questions} answered
+                  {quizCompleted && (
+                    <span className="ml-2 font-semibold text-green-700">
+                      (Quiz completed)
+                    </span>
+                  )}
+                </div>
+              )}
 
-        {error && (
-          <div className="mb-3 text-sm text-red-600" role="alert">
-            {error}
-          </div>
-        )}
-
-        {quizCompleted && (
-          <div className="bg-white rounded-xl p-6 shadow-sm border">
-            <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
-            <p className="text-sm text-gray-600">
-              Redirecting you to the next survey…
-            </p>
-          </div>
-        )}
-
-        {!quizCompleted && (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-2 px-0 pb-6 min-h-0 lg:h-[calc(100vh-180px)]">
-            <div className="grid gap-6 lg:grid-rows-[1fr_1fr] min-h-0 h-full">
-              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto min-h-0">
-                <h2 className="text-lg font-medium mb-3">Question</h2>
-
-                {!quizState && (
-                  <div className="text-sm text-gray-500">Loading quiz…</div>
-                )}
-
-                {quizState && !current && (
-                  <div className="text-sm text-gray-500">
-                    No current question available.
-                  </div>
-                )}
-
-                {quizState && current && (
-                  <div className="space-y-4">
-                    <QuestionBox
-                      question={current.stem}
-                      subtitle={current.subtitle || undefined}
-                      className="max-w-3xl mx-auto"
-                    />
-                  </div>
-                )}
-              </section>
-
-              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto min-h-0">
-                <h2 className="text-lg font-medium mb-3">Options</h2>
-
-                {!quizState || !current ? (
-                  <div className="text-sm text-gray-500">
-                    Options will appear once a question is available.
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <div
-                      className={`space-y-4 transition ${
-                        !hasAskedChat
-                          ? "pointer-events-none opacity-40 blur-[1px]"
-                          : ""
-                      }`}
-                    >
-                      <AnswerBox
-                        choices={current.choices as Choice[]}
-                        value={selectedChoice}
-                        onChange={setSelectedChoice}
-                        className="max-w-3xl mx-auto"
-                      />
-                      <div className="flex items-center justify-between text-sm text-gray-600">
-                        <div>
-                          Selected:{" "}
-                          <span className="font-medium">
-                            {selectedChoice ?? "(none)"}
-                          </span>
-                        </div>
-                        <button
-                          onClick={onSubmit}
-                          disabled={!selectedChoice || submitting}
-                          className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
-                        >
-                          {submitting ? "Submitting…" : "Submit answer"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {!hasAskedChat && (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
-                          <p className="text-sm text-gray-800 mb-3">
-                            Before choosing an answer, send this question to the
-                            assistant and read the explanation.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={onAskAssistantAboutQuestion}
-                            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
-                          >
-                            Ask the assistant about this question
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-            </div>
-
-            <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
-
-              {quizId && (
-                <ChatBox
-                  quizId={quizId}
-                  conversationId={conversationId}
-                  externalQuestion={externalQuestion}
-                  enableFollowups={false}
-                />
+              {error && (
+                <div className="mb-3 text-sm text-red-600" role="alert">
+                  {error}
+                </div>
               )}
             </div>
+
+            {quizCompleted ? (
+              <div className="rounded-xl bg-white p-6 shadow-sm border">
+                <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
+                <p className="text-sm text-gray-600">
+                  Redirecting you to the next survey…
+                </p>
+              </div>
+            ) : (
+              <div className="grid min-h-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
+                <div className="grid min-h-0 grid-rows-2 gap-6">
+                  <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm overflow-auto">
+                    <h2 className="text-lg font-medium mb-3">Question</h2>
+
+                    {!quizState && (
+                      <div className="text-sm text-gray-500">Loading quiz…</div>
+                    )}
+
+                    {quizState && !current && (
+                      <div className="text-sm text-gray-500">
+                        No current question available.
+                      </div>
+                    )}
+
+                    {quizState && current && (
+                      <div className="space-y-4">
+                        <QuestionBox
+                          question={current.stem}
+                          subtitle={current.subtitle || undefined}
+                          className="max-w-3xl mx-auto"
+                        />
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm">
+                    <h2 className="text-lg font-medium mb-3">Options</h2>
+
+                    {!quizState || !current ? (
+                      <div className="text-sm text-gray-500">
+                        Options will appear once a question is available.
+                      </div>
+                    ) : (
+                      <div className="relative h-full">
+                        <div
+                          className={`space-y-4 transition ${
+                            !hasAskedChat
+                              ? "pointer-events-none opacity-40 blur-[1px]"
+                              : ""
+                          }`}
+                        >
+                          <AnswerBox
+                            choices={current.choices as Choice[]}
+                            value={selectedChoice}
+                            onChange={setSelectedChoice}
+                            className="max-w-3xl mx-auto"
+                          />
+
+                          <div className="flex items-center justify-between text-sm text-gray-600">
+                            <div>
+                              Selected:{" "}
+                              <span className="font-medium">
+                                {selectedChoice ?? "(none)"}
+                              </span>
+                            </div>
+
+                            <button
+                              onClick={onSubmit}
+                              disabled={!selectedChoice || submitting}
+                              className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
+                            >
+                              {submitting ? "Submitting…" : "Submit answer"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {!hasAskedChat && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
+                              <p className="text-sm text-gray-800 mb-3">
+                                Before choosing an answer, send this question to
+                                the assistant and read the explanation.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={onAskAssistantAboutQuestion}
+                                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+                              >
+                                Ask the assistant about this question
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                <div className="min-h-0">
+                  {quizId && isQuizId(quizId) && (
+                    <div className="h-full min-h-0 rounded-2xl overflow-hidden">
+                      <ChatBox
+                        quizId={quizId}
+                        conversationId={conversationId}
+                        externalQuestion={externalQuestion}
+                        enableFollowups={false}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
