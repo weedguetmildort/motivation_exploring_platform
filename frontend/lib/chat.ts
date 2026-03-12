@@ -1,26 +1,24 @@
 // Centralized API helper for chat
 
+import { apiFetch } from "./fetcher";
+
 export async function sendChat(
   quizId: string,
   conversationId: string | null,
   message: string,
   agents: string[] = []
 ): Promise<{ replies: string[]; conversationId: string }> {
-  const res = await fetch(`/api/chat/${quizId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message,
-      conversation_id: conversationId,
-      agents,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} when calling /chat/${quizId}`);
-  }
-
-  const data = (await res.json()) as { reply?: string[]; message?: string; conversation_id?: string };
+  const data = await apiFetch<{ reply?: string[]; message?: string; conversation_id?: string }>(
+    `/api/chat/${quizId}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        message,
+        conversation_id: conversationId,
+        agents,
+      }),
+    }
+  );
 
   const replies = Array.isArray(data.reply)
     ? data.reply
@@ -32,17 +30,10 @@ export async function sendChat(
 export async function sendFollowupChat(
   lastAiMessage: string
 ): Promise<string[]> {
-  const res = await fetch(`/api/chat/followup`, {
+  const data = await apiFetch<{ questions?: string[] }>(`/api/chat/addon/followup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ last_ai_message: lastAiMessage }),
   });
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} when calling /chat/followup`);
-  }
-
-  const data = (await res.json()) as { questions?: string[] };
   return data.questions ?? [];
 }
 

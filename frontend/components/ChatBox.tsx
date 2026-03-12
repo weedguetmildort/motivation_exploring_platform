@@ -14,7 +14,7 @@ import {
 } from "../lib/mentions";
 
 type Bot = "A" | "B" | "C" | "D";
-type ChatMode = "followup" | "double" | "base";
+type AgentFilter = "double" | "base";
 type Msg = {
   id: string;
   role: "user" | "assistant";
@@ -36,7 +36,6 @@ type ChatBoxProps = {
   externalQuestion?: string | null;
   enableFollowups?: boolean;
   conversationId?: string | null;
-  mode?: ChatMode;
 };
 
 export default function ChatBox({
@@ -45,8 +44,8 @@ export default function ChatBox({
   externalQuestion,
   enableFollowups = true,
   conversationId = null,
-  mode = "base",
 }: ChatBoxProps) {
+  const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
@@ -73,12 +72,10 @@ export default function ChatBox({
     let agents: string[] = [];
     let messageForBackend = trimmed;
 
-    if (mode !== "base") {
-      const validAgents = getValidAgents(mode);
+    if (agentFilter === "double") {
+      const validAgents = getValidAgents(agentFilter);
       const { mentions } = parseMentions(trimmed);
-      const validTargets = getValidMentionTargets(mentions, validAgents);
-      // If specific agents are mentioned, use those. Otherwise send to all.
-      agents = validTargets.length > 0 ? validTargets : validAgents;
+      agents = getValidMentionTargets(mentions, validAgents);
       messageForBackend = removeMentions(trimmed) || trimmed;
     }
 
@@ -109,7 +106,7 @@ export default function ChatBox({
       };
 
       const botOrder: Bot[] =
-        mode === "double"
+        agentFilter === "double"
           ? agents.length > 0
             ? (agents
                 .map(mapAgentToBot)
@@ -123,7 +120,7 @@ export default function ChatBox({
         content: r,
         ts: Date.now(),
         bot:
-          mode === "double"
+          agentFilter === "double"
             ? botOrder[i] ?? (i % 2 === 0 ? "A" : "B")
             : replies.length > 1
             ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
@@ -155,8 +152,8 @@ export default function ChatBox({
 
     if (hasIncompleteMention(newValue)) {
       const partial = getPartialMention(newValue);
-      const agents = getFilteredAgents(mode, partial);
-      if (agents.length > 0) {
+      const agents = getFilteredAgents(agentFilter, partial);
+      if (agents.length > 1) {
         setFilteredAgents(agents);
         setShowMentions(true);
         setMentionIndex(0);
