@@ -1,3 +1,4 @@
+// frontend/components/AnswerBox.tsx
 import React from "react";
 
 export type Choice = {

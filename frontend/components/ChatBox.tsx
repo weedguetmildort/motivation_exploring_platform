@@ -1,3 +1,4 @@
+// frontend/components/ChatBox.tsx
 import { useEffect, useRef, useState } from "react";
 import { sendChat } from "../lib/chat";
 import FollowUpQuestionBox from "./FollowUpQuestionBox";
@@ -51,7 +52,9 @@ export default function ChatBox({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeConvId, setActiveConvId] = useState<string | null>(conversationId);
+  const [activeConvId, setActiveConvId] = useState<string | null>(
+    conversationId,
+  );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showMentions, setShowMentions] = useState(false);
@@ -97,7 +100,7 @@ export default function ChatBox({
         quizId,
         activeConvId,
         messageForBackend,
-        agents
+        agents,
       );
       if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
 
@@ -124,10 +127,10 @@ export default function ChatBox({
         ts: Date.now(),
         bot:
           mode === "double"
-            ? botOrder[i] ?? (i % 2 === 0 ? "A" : "B")
+            ? (botOrder[i] ?? (i % 2 === 0 ? "A" : "B"))
             : replies.length > 1
-            ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
-            : undefined,
+              ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
+              : undefined,
       }));
 
       setMessages((m) => [...m, ...botMsgs]);
@@ -171,7 +174,9 @@ export default function ChatBox({
   function handleSelectAgent(agent: string) {
     const atIndex = input.lastIndexOf("@");
     const textBefore = input.substring(0, atIndex);
-    const textAfter = input.substring(atIndex + getPartialMention(input).length + 1);
+    const textAfter = input.substring(
+      atIndex + getPartialMention(input).length + 1,
+    );
     setInput(`${textBefore}@${agent} ${textAfter}`);
     setShowMentions(false);
     textareaRef.current?.focus();
@@ -186,7 +191,9 @@ export default function ChatBox({
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setMentionIndex((prev) => (prev - 1 + filteredAgents.length) % filteredAgents.length);
+        setMentionIndex(
+          (prev) => (prev - 1 + filteredAgents.length) % filteredAgents.length,
+        );
         return;
       }
       if (e.key === "Escape") {
@@ -216,19 +223,23 @@ export default function ChatBox({
   }, [externalQuestion]);
 
   const lastAiMessage =
-    [...messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
+    [...messages].reverse().find((m) => m.role === "assistant")?.content ??
+    null;
 
   function handleFollowupClick(question: string) {
     void sendMessage(question);
   }
 
   return (
-    <div className="flex h-full w-full flex-col rounded-2xl border bg-white shadow-sm">
+    <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <div className="p-4 border-b sticky top-0 bg-white/80 backdrop-blur rounded-t-2xl">
         <h2 className="text-lg font-semibold">Chat</h2>
       </div>
 
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div
+        ref={scrollerRef}
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3"
+      >
         {messages.map((m) => {
           const label =
             m.role === "user" ? "You" : m.bot ? `Agent ${m.bot}` : "Assistant";
@@ -236,8 +247,8 @@ export default function ChatBox({
             m.role === "user"
               ? "bg-blue-600 text-white"
               : m.bot
-              ? BOT_COLORS[m.bot]
-              : "bg-gray-100 text-gray-900";
+                ? BOT_COLORS[m.bot]
+                : "bg-gray-100 text-gray-900";
 
           return (
             <div key={m.id}>
@@ -248,8 +259,12 @@ export default function ChatBox({
               >
                 {label}
               </div>
-              <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+              <div
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}
+                >
                   {m.role === "assistant" ? (
                     <MarkdownMessage content={m.content} />
                   ) : (

@@ -1,3 +1,4 @@
+// frontend/components/QuestionBox.tsx
 import React from 'react';
 
 type QuestionBoxProps = {

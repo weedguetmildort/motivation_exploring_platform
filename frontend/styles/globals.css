@@ -1,11 +1,15 @@
+/* frontend/styles/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* App-wide base styling (optional) */
-html, body, #__next {
+html,
+body,
+#__next {
   height: 100%;
+  margin: 0;
 }
+
 body {
-  @apply bg-white text-gray-900;
+  @apply bg-gray-50 text-gray-900;
 }
