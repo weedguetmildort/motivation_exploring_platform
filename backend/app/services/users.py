@@ -2,8 +2,9 @@
 from typing import Optional
 from datetime import datetime
 from pymongo.collection import Collection
+from pymongo import ReturnDocument
 
-from ..schemas.user import UserPublic, SurveyStage
+from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..core.security import hash_password, verify_password
 
 
@@ -28,6 +29,7 @@ def _to_public(doc: dict) -> UserPublic:
     return UserPublic(
         id=str(doc["_id"]),
         email=doc["email"],
+        assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
         survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
@@ -46,6 +48,21 @@ def get_users_collection(db) -> Collection:
 def ensure_indexes(users: Collection) -> None:
     users.create_index("email", unique=True)
 
+def _next_assigned_var(users: Collection) -> str:
+    assigned_vars = [
+        AssignedVar.followup.value,
+        AssignedVar.double.value,
+        AssignedVar.links.value,
+    ]
+    counters = users.database["counters"]
+    counter_doc = counters.find_one_and_update(
+        {"_id": "user_signup_round_robin"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    seq = int(counter_doc.get("seq", 1))
+    return assigned_vars[(seq - 1) % len(assigned_vars)]
 
 def create_user(users: Collection, email: str, password: str) -> UserPublic:
     doc = {
@@ -65,12 +82,13 @@ def create_user(users: Collection, email: str, password: str) -> UserPublic:
     }
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id
+    assigned_var = _next_assigned_var(users)
+    users.update_one({"_id": doc["_id"]}, {"$set": {"assigned_var": assigned_var}})
+    doc["assigned_var"] = assigned_var
     return _to_public(doc)
-
 
 def find_user_by_email(users: Collection, email: str) -> Optional[dict]:
     return users.find_one({"email": email.lower()})
-
 
 def check_user_password(user_doc: dict, password: str) -> bool:
     return verify_password(password, user_doc["password_hash"])
