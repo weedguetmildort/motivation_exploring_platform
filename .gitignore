@@ -27,3 +27,4 @@ Thumbs.db
 # VSCode / IDE
 .vscode/
 .idea/
+__pycache__
