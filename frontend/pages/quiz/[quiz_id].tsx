@@ -7,6 +7,7 @@ import { getMe, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
   submitQuizAnswer,
+  resetQuiz,
   type QuizStateResponse,
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
@@ -23,7 +24,8 @@ type ExtendedUser = User & {
   survey_post_variant_completed?: boolean;
 };
 
-function isQuizId(value: string): value is QuizId {
+function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
+  if (user?.is_admin) return true;
   return value === "base" || value === "variant";
 }
 
@@ -104,13 +106,13 @@ export default function QuizPage() {
 
         const u = res.user as ExtendedUser;
 
-        if (!isQuizId(quizId)) {
+        if (!isValidQuizId(quizId, u)) {
           router.replace("/dashboard");
           return;
         }
 
-        if (!canAccessQuiz(quizId, u)) {
-          router.replace(getBlockedQuizRedirect(quizId, u));
+        if (!canAccessQuiz(quizId as QuizId, u)) {
+          router.replace(getBlockedQuizRedirect(quizId as QuizId, u));
           return;
         }
 
@@ -131,7 +133,7 @@ export default function QuizPage() {
     if (!user) return;
     if (!router.isReady) return;
     if (!quizId) return;
-    if (!isQuizId(quizId)) return;
+    if (!isValidQuizId(quizId, user)) return;
 
     let cancel = false;
 
@@ -170,6 +172,7 @@ export default function QuizPage() {
     if (!quizCompleted) return;
     if (!quizId) return;
     if (!user) return;
+    if (user.is_admin) return;
 
     router.replace("/survey");
   }, [router.isReady, quizCompleted, quizId, user, router]);
@@ -206,7 +209,7 @@ export default function QuizPage() {
   async function onSubmit() {
     if (
       !quizId ||
-      !isQuizId(quizId) ||
+      !isValidQuizId(quizId, user) ||
       !current ||
       !selectedChoice ||
       submitting
@@ -283,12 +286,39 @@ export default function QuizPage() {
             </div>
 
             {quizCompleted ? (
-              <div className="rounded-xl bg-white p-6 shadow-sm border">
-                <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
-                <p className="text-sm text-gray-600">
-                  Redirecting you to the next survey…
-                </p>
-              </div>
+              user?.is_admin ? (
+                <div className="rounded-xl bg-white p-6 shadow-sm border">
+                  <h2 className="text-lg font-semibold mb-2">Quiz completed (admin view)</h2>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Reset to take it again, or go back to the dashboard.
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => router.push("/dashboard")}
+                      className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
+                    >
+                      Back to Dashboard
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await resetQuiz(quizId!);
+                        const state = await getQuizState(quizId!);
+                        setQuizState(state);
+                      }}
+                      className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
+                    >
+                      Reset &amp; Retake
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl bg-white p-6 shadow-sm border">
+                  <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
+                  <p className="text-sm text-gray-600">
+                    Redirecting you to the next survey…
+                  </p>
+                </div>
+              )
             ) : (
               <div className="grid min-h-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
                 <div className="grid min-h-0 grid-rows-2 gap-6">
@@ -380,7 +410,7 @@ export default function QuizPage() {
                 </div>
 
                 <div className="min-h-0">
-                  {quizId && isQuizId(quizId) && (
+                  {quizId && isValidQuizId(quizId, user) && (
                     <div className="h-full min-h-0 rounded-2xl overflow-hidden">
                       <ChatBox
                         quizId={quizId}

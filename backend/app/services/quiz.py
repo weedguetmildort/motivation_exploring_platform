@@ -94,7 +94,32 @@ def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
             "updated_at": completed_at,
         }
         
-    raise HTTPException(status_code=400, detail=f"Unknown quiz_id for completion flow: {quiz_id}")
+    # Unknown quiz_id (e.g. admin test runs) — don't update user flags
+    return {"updated_at": completed_at}
+
+
+def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
+    col = get_quiz_attempts_collection(db)
+    col.delete_one({"user_id": user_id, "quiz_id": quiz_id})
+
+    if quiz_id == "base":
+        revert = {
+            "quiz_base_completed": False,
+            "survey_stage": SurveyStage.pre_base.value,
+            "updated_at": datetime.utcnow(),
+        }
+    elif quiz_id == "variant":
+        revert = {
+            "quiz_variant_completed": False,
+            "survey_stage": SurveyStage.post_base.value,
+            "updated_at": datetime.utcnow(),
+        }
+    else:
+        # Unknown quiz_id (e.g. admin test runs) — just delete the attempt, no user flags to revert
+        return
+
+    users = get_users_collection(db)
+    users.update_one({"_id": ObjectId(user_id)}, {"$set": revert})
 
 
 def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
