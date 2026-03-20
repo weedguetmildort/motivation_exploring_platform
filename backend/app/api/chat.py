@@ -2,7 +2,7 @@ import os
 import re
 import uuid
 from pydantic import BaseModel
-from openai import OpenAI
+from openai import AsyncOpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
 from ..schemas.user import UserPublic
@@ -24,12 +24,12 @@ class ChatResponse(BaseModel):
 # Initialize OpenAI client with UF proxy settings (from env)
 _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
 _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
-_client = OpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL)
+_client = AsyncOpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL, timeout=60.0)
 
 
-def get_chat_response(messages: list[dict]) -> str:
+async def get_chat_response(messages: list[dict]) -> str:
     try:
-        resp = _client.chat.completions.create(
+        resp = await _client.chat.completions.create(
             model=os.getenv("UF_OPENAI_API_MODEL"),
             messages=messages,
         )
@@ -90,7 +90,7 @@ async def double_chat(
             *history,
             {"role": "user", "content": req.message},
         ]
-        reply_a = get_chat_response(messages_a)
+        reply_a = await get_chat_response(messages_a)
 
     # Agent B: sees full prior conversation plus Agent A's new response
     if run_agent_b:
@@ -117,7 +117,7 @@ async def double_chat(
                 {"role": "user", "content": req.message},
             ]
 
-        reply_b = get_chat_response(messages_b)
+        reply_b = await get_chat_response(messages_b)
 
 
     replies: list[str] = []
@@ -171,7 +171,7 @@ async def followup_chat(
         "\n\nGenerate exactly 3 possible follow-up questions the student might ask next."
     )
 
-    raw = get_chat_response([
+    raw = await get_chat_response([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ])
@@ -232,7 +232,7 @@ async def chat_with_embedded_links(
         # "- DOI-linked journal articles (doi.org/...) which remain resolvable even if the publisher changes URLs"
     )
     try:
-        output = get_chat_response_with_search(
+        output = await get_chat_response_with_search(
             client=_client,
             model=os.getenv("UF_OPENAI_API_MODEL"),
             messages=[
@@ -272,7 +272,7 @@ async def chat(
         "You are a helpful assistant who generates clear and concise answers "
         "to help students answer some quiz questions."
     )
-    reply = get_chat_response([
+    reply = await get_chat_response([
         {"role": "system", "content": system_instruction},
         *history,
         {"role": "user", "content": req.message},
