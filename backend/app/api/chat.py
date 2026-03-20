@@ -26,6 +26,12 @@ _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
 _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
 _client = AsyncOpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL, timeout=60.0)
 
+_BASE_SYSTEM_PROMPT = (
+    "You are a helpful assistant who generates clear and concise answers "
+    "to help students answer some quiz questions."
+    "Go through the explanation in depth first, and only then provide the solution at the end."
+)
+
 
 async def get_chat_response(messages: list[dict]) -> str:
     try:
@@ -81,12 +87,8 @@ async def double_chat(
     reply_b = ""
 
     if run_agent_a:
-        system_instruction = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions."
-        )
         messages_a = [
-            {"role": "system", "content": system_instruction},
+            {"role": "system", "content": _BASE_SYSTEM_PROMPT},
             *history,
             {"role": "user", "content": req.message},
         ]
@@ -96,9 +98,8 @@ async def double_chat(
     if run_agent_b:
         if run_agent_a:
             system_instruction_b = (
-                "You are a helpful assistant who generates clear and concise answers "
-                "to help students answer some quiz questions. "
-                "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
+                _BASE_SYSTEM_PROMPT + 
+                " Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
             )
             messages_b = [
                 {"role": "system", "content": system_instruction_b},
@@ -107,10 +108,7 @@ async def double_chat(
                 {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
             ]
         else:
-            system_instruction_b = (
-                "You are a helpful assistant who generates clear and concise answers "
-                "to help students answer some quiz questions."
-            )
+            system_instruction_b = _BASE_SYSTEM_PROMPT
             messages_b = [
                 {"role": "system", "content": system_instruction_b},
                 *history,
@@ -210,9 +208,8 @@ async def chat_with_embedded_links(
     _save_message(request.app.state.messages, "user", user, conv_id, req.message)
 
     system_instruction = (
-        "You are a helpful assistant who generates clear and concise answers "
-        "to help students answer some quiz questions. "
-        "Use web searches to gather information and cite sources inline."
+        _BASE_SYSTEM_PROMPT + 
+        " Use web searches to gather information and cite sources inline."
         "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
         "Prefer sources with stable, long-lived URLs."
 
@@ -268,10 +265,7 @@ async def chat(
 
     _save_message(request.app.state.messages, "user", user, conv_id, req.message)
 
-    system_instruction = (
-        "You are a helpful assistant who generates clear and concise answers "
-        "to help students answer some quiz questions."
-    )
+    system_instruction = _BASE_SYSTEM_PROMPT
     reply = await get_chat_response([
         {"role": "system", "content": system_instruction},
         *history,
