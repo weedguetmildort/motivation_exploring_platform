@@ -205,10 +205,8 @@ async def chat_with_embedded_links(
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-
     system_instruction = (
-        _BASE_SYSTEM_PROMPT + 
+        _BASE_SYSTEM_PROMPT +
         " Use web searches to gather information and cite sources inline."
         "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
         "Prefer sources with stable, long-lived URLs."
@@ -243,6 +241,7 @@ async def chat_with_embedded_links(
         raise HTTPException(status_code=502, detail=f"Upstream AI request failed: {e}")
 
     reply = output["reply"]
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
     _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
 
     return ChatResponse(reply=[reply], conversation_id=conv_id)
@@ -263,8 +262,6 @@ async def chat(
     # Fetch history BEFORE inserting the new user message
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-
     system_instruction = _BASE_SYSTEM_PROMPT
     reply = await get_chat_response([
         {"role": "system", "content": system_instruction},
@@ -272,6 +269,7 @@ async def chat(
         {"role": "user", "content": req.message},
     ])
 
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
     _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
 
     return ChatResponse(reply=[reply], conversation_id=conv_id)

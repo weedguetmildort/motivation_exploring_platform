@@ -56,13 +56,23 @@ export default function ChatBox({
   );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
 
   useEffect(() => {
-    if (conversationId) setActiveConvId(conversationId);
+    if (conversationId) {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      setPending(false);
+      setActiveConvId(conversationId);
+    }
   }, [conversationId]);
+
+  useEffect(() => {
+    return () => { abortControllerRef.current?.abort(); };
+  }, []);
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
@@ -70,7 +80,12 @@ export default function ChatBox({
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();
-    if (!trimmed || pending) return;
+    if (!trimmed) return;
+
+    // Cancel any in-flight request before starting a new one
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setPending(false);
 
     let agents: string[] = [];
     let messageForBackend = trimmed;
@@ -91,6 +106,9 @@ export default function ChatBox({
     };
     setMessages((m) => [...m, userMsg]);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setPending(true);
       const { replies, conversationId: returnedConvId } = await sendChat(
@@ -98,6 +116,7 @@ export default function ChatBox({
         activeConvId,
         messageForBackend,
         agents,
+        controller.signal,
       );
       if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
 
@@ -134,9 +153,11 @@ export default function ChatBox({
       if (onAssistantMessage) {
         onAssistantMessage(replies[replies.length - 1]);
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setError("Failed to contact the server.");
     } finally {
+      abortControllerRef.current = null;
       setPending(false);
     }
   }

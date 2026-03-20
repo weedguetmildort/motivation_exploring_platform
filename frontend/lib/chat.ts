@@ -6,12 +6,14 @@ export async function sendChat(
   quizId: string,
   conversationId: string | null,
   message: string,
-  agents: string[] = []
+  agents: string[] = [],
+  signal?: AbortSignal,
 ): Promise<{ replies: string[]; conversationId: string }> {
   const data = await apiFetch<{ reply?: string[]; message?: string; conversation_id?: string }>(
     `/api/chat/${quizId}`,
     {
       method: "POST",
+      signal,
       body: JSON.stringify({
         message,
         conversation_id: conversationId,
