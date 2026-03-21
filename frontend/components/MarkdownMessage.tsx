@@ -6,12 +6,26 @@ import rehypeKatex from "rehype-katex";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
 function wrapExpressions(text: string): string {
-  // wraps "\n[...\n]" for own line formulas
-  text = text.replace(/(?:^|\n)\[\n([\s\S]+?)\n\](?:\n|$)/g, (_, inner) => `\n$$\n${inner.trim()}\n$$\n`);
+  // Step 1: Normalize \(...\) and \[...\] → $...$ so all math uses one delimiter.
+  text = text.replace(/(?:^|\n)\[\n([\s\S]+?)\n\](?:\n|$)/g,
+    (_, inner) => `\n$$\n${inner.trim()}\n$$\n`);
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, inner) => `$${inner.trim()}$`);
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, inner) => `$${inner.trim()}$`);
 
-  // wraps inline \(...\) or \[...\]
-  text = text.replace(/\\\((.+?)\\\)/gs, (_, inner) => `$${inner.trim()}$`);
-  text = text.replace(/\\\[(.+?)\\\]/gs, (_, inner) => `$${inner.trim()}$`);
+  // Step 2: Collapse inline $...$ that spans a single newline.
+  // remark-math only parses single-line inline math. The AI sometimes wraps a
+  // formula onto the next line (e.g. newline before the closing $). This must
+  // run before step 3 so pipe-escaping sees the complete formula on one line.
+  text = text.replace(/\$(?!\$)((?:[^\n$]|\n(?!\n)){1,500})\$(?!\$)/g, (match, inner) => {
+    if (!inner.includes("\n")) return match;
+    return `$${inner.replace(/\s*\n\s*/g, " ")}$`;
+  });
+
+  // Step 3: Escape | inside $...$ so GFM table rows aren't split on math operators
+  // like P(A|B). After step 2 all formulas are on a single line, so [^$\n]+ is safe.
+  text = text.replace(/\$(?!\$)([^$\n]+)\$(?!\$)/g, (match, inner) =>
+    inner.includes("|") ? `$${inner.replace(/\|/g, "\\vert ")}$` : match
+  );
 
   return text;
 }
