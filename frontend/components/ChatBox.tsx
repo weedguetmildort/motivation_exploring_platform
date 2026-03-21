@@ -34,6 +34,7 @@ const BOT_COLORS: Record<Bot, string> = {
 type ChatBoxProps = {
   quizId: string;
   onAssistantMessage?: (message: string) => void;
+  onError?: () => void;
   externalQuestion?: string | null;
   enableFollowups?: boolean;
   conversationId?: string | null;
@@ -42,6 +43,7 @@ type ChatBoxProps = {
 export default function ChatBox({
   quizId,
   onAssistantMessage,
+  onError,
   externalQuestion,
   enableFollowups = true,
   conversationId = null,
@@ -156,6 +158,7 @@ export default function ChatBox({
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setError("Failed to contact the server.");
+      onError?.();
     } finally {
       abortControllerRef.current = null;
       setPending(false);
