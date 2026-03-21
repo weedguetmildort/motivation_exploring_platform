@@ -1,7 +1,6 @@
 // frontend/components/ChatBox.tsx
 import { useEffect, useRef, useState } from "react";
 import { sendChat } from "../lib/chat";
-import FollowUpQuestionBox from "./FollowUpQuestionBox";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
 import {
@@ -36,7 +35,6 @@ type ChatBoxProps = {
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
   externalQuestion?: string | null;
-  enableFollowups?: boolean;
   conversationId?: string | null;
 };
 
@@ -45,13 +43,13 @@ export default function ChatBox({
   onAssistantMessage,
   onError,
   externalQuestion,
-  enableFollowups = true,
   conversationId = null,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
+  const [followupQuestions, setFollowupQuestions] = useState<string[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [activeConvId, setActiveConvId] = useState<string | null>(
     conversationId,
@@ -100,6 +98,7 @@ export default function ChatBox({
     }
 
     setError(null);
+    setFollowupQuestions(undefined);
     const userMsg: Msg = {
       id: crypto.randomUUID(),
       role: "user",
@@ -113,7 +112,7 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      const { replies, conversationId: returnedConvId } = await sendChat(
+      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
         quizId,
         activeConvId,
         messageForBackend,
@@ -154,6 +153,9 @@ export default function ChatBox({
       setMessages((m) => [...m, ...botMsgs]);
       if (onAssistantMessage) {
         onAssistantMessage(replies[replies.length - 1]);
+      }
+      if (newFollowupQuestions) {
+        setFollowupQuestions(newFollowupQuestions);
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
@@ -243,10 +245,6 @@ export default function ChatBox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuestion]);
 
-  const lastAiMessage =
-    [...messages].reverse().find((m) => m.role === "assistant")?.content ??
-    null;
-
   function handleFollowupClick(question: string) {
     void sendMessage(question);
   }
@@ -297,6 +295,24 @@ export default function ChatBox({
           );
         })}
 
+        {followupQuestions && (
+          <div className="mt-3 border-t border-gray-200 pt-3">
+            <div className="mb-2 text-sm font-semibold text-gray-900">Follow-up Questions</div>
+            <div className="flex flex-wrap gap-2">
+              {followupQuestions.map((q, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="text-xs px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                  onClick={() => handleFollowupClick(q)}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {pending && (
           <div className="text-sm text-gray-500">Assistant is typing…</div>
         )}
@@ -307,12 +323,6 @@ export default function ChatBox({
           </div>
         )}
 
-        {enableFollowups && (
-          <FollowUpQuestionBox
-            lastAiMessage={lastAiMessage}
-            onOptionClick={handleFollowupClick}
-          />
-        )}
       </div>
 
       <div className="p-3 border-t rounded-b-2xl bg-white relative">

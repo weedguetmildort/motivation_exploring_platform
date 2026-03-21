@@ -8,8 +8,13 @@ export async function sendChat(
   message: string,
   agents: string[] = [],
   signal?: AbortSignal,
-): Promise<{ replies: string[]; conversationId: string }> {
-  const data = await apiFetch<{ reply?: string[]; message?: string; conversation_id?: string }>(
+): Promise<{ replies: string[]; conversationId: string; followupQuestions?: string[] }> {
+  const data = await apiFetch<{
+    reply?: string[];
+    message?: string;
+    conversation_id?: string;
+    followup_questions?: string[];
+  }>(
     `/api/chat/${quizId}`,
     {
       method: "POST",
@@ -26,16 +31,11 @@ export async function sendChat(
     ? data.reply
     : [(data.reply ?? data.message ?? "").toString()];
 
-  return { replies, conversationId: data.conversation_id ?? conversationId ?? "" };
+  return {
+    replies,
+    conversationId: data.conversation_id ?? conversationId ?? "",
+    followupQuestions: data.followup_questions,
+  };
 }
 
-export async function sendFollowupChat(
-  lastAiMessage: string
-): Promise<string[]> {
-  const data = await apiFetch<{ questions?: string[] }>(`/api/chat/addon/followup`, {
-    method: "POST",
-    body: JSON.stringify({ last_ai_message: lastAiMessage }),
-  });
-  return data.questions ?? [];
-}
 
