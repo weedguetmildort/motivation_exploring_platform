@@ -20,11 +20,12 @@ const schema = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
-    // allow KaTeX/Math HTML output
+    // allow KaTeX HTML output attributes
     span: [
       ...(defaultSchema.attributes?.span || []),
       ["className"],
       ["style"],
+      ["aria-hidden"],
     ],
     div: [
       ...(defaultSchema.attributes?.div || []),
@@ -45,6 +46,20 @@ const components = {
       {children}
     </a>
   ),
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div className="overflow-x-auto my-3">
+      <table className="w-full border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  th: ({ children }: { children?: React.ReactNode }) => (
+    <th className="border border-gray-300 bg-gray-50 px-3 py-2 text-left font-semibold whitespace-nowrap">
+      {children}
+    </th>
+  ),
+  td: ({ children }: { children?: React.ReactNode }) => (
+    <td className="border border-gray-300 px-3 py-2 align-top">{children}</td>
+  ),
+  hr: () => <hr className="!mt-3 !mb-1 border-gray-300" />,
 };
 
 const inlineComponents = {
@@ -60,7 +75,7 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[
         [rehypeSanitize, schema],
-        rehypeKatex,
+        [rehypeKatex, { output: "html" }],
       ]}
       components={inline ? inlineComponents : components}
     >
@@ -71,7 +86,7 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
   if (inline) return <span>{rendered}</span>;
 
   return (
-    <div className="prose prose-sm max-w-none">
+    <div className="prose prose-sm max-w-none [&>*+h2]:mt-5 [&>*+h3]:mt-4 [&>*+h4]:mt-3 [&>p+p]:mt-3">
       {rendered}
     </div>
   );
