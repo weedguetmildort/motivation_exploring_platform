@@ -29,7 +29,7 @@ _client = AsyncOpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL, timeout=60.0)
 _BASE_SYSTEM_PROMPT = (
     "You are a helpful assistant who generates clear and concise answers "
     "to help students answer some quiz questions."
-    "Go through the explanation in depth first, and only then provide the solution at the end."
+    "Go through the explanation first, and only then provide the solution at the end."
 )
 
 
