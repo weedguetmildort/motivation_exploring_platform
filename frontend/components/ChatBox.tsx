@@ -306,7 +306,7 @@ export default function ChatBox({
                   className="text-xs px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
                   onClick={() => handleFollowupClick(q)}
                 >
-                  {q}
+                  <MarkdownMessage content={q} inline />
                 </button>
               ))}
             </div>

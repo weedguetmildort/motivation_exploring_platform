@@ -47,21 +47,32 @@ const components = {
   ),
 };
 
-export default function MarkdownMessage({ content }: { content: string }) {
+const inlineComponents = {
+  ...components,
+  p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+};
+
+export default function MarkdownMessage({ content, inline = false }: { content: string; inline?: boolean }) {
   const wrapped_content = wrapExpressions(content);
+
+  const rendered = (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[
+        [rehypeSanitize, schema],
+        rehypeKatex,
+      ]}
+      components={inline ? inlineComponents : components}
+    >
+      {wrapped_content}
+    </ReactMarkdown>
+  );
+
+  if (inline) return <span>{rendered}</span>;
 
   return (
     <div className="prose prose-sm max-w-none">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[
-          [rehypeSanitize, schema],
-          rehypeKatex,
-        ]}
-        components={components}
-      >
-        {wrapped_content}
-      </ReactMarkdown>
+      {rendered}
     </div>
   );
 }
