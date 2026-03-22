@@ -14,6 +14,7 @@ type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
 type ActiveSurveyStage = Exclude<SurveyStage, "complete">;
 
 type ExtendedUser = User & {
+  assigned_var?: string | null;
   survey_stage?: SurveyStage | null;
   survey_pre_base_completed?: boolean;
   survey_post_base_completed?: boolean;
@@ -122,7 +123,7 @@ function getNextRouteForResolvedGap(
   }
 
   if (user.survey_stage === "post_base" && user.survey_post_base_completed) {
-    return "/quiz/variant";
+    return user.assigned_var ? `/quiz/${user.assigned_var}` : "/dashboard";
   }
 
   if (
