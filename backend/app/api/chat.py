@@ -68,13 +68,13 @@ async def get_chat_response(messages: list[dict]) -> str:
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
 
-def get_chat_response_with_metadata(
+async def get_chat_response_with_metadata(
     messages: list[dict],
     model_version: Optional[str] = None,
 ) -> tuple[str, AIMessageMetadata]:
     try:
         start_time = time.time()
-        resp = _client.chat.completions.create(
+        resp = await _client.chat.completions.create(
             model=model_version or os.getenv("UF_OPENAI_API_MODEL"),
             messages=messages,
         )
@@ -148,7 +148,7 @@ async def double_chat(
             *history,
             {"role": "user", "content": req.message},
         ]
-        reply_a, metadata_a = get_chat_response_with_metadata(messages_a, model_version)
+        reply_a, metadata_a = await get_chat_response_with_metadata(messages_a, model_version)
 
     if run_agent_b:
         if run_agent_a:
@@ -170,7 +170,7 @@ async def double_chat(
                 {"role": "user", "content": req.message},
             ]
 
-        reply_b, metadata_b = get_chat_response_with_metadata(messages_b, model_version)
+        reply_b, metadata_b = await get_chat_response_with_metadata(messages_b, model_version)
 
     replies: list[str] = []
     metadata_list: list[AIMessageMetadata] = []
@@ -315,7 +315,7 @@ async def chat(
         "You are a helpful assistant who generates clear and concise answers "
         "to help students answer some quiz questions."
     )
-    reply, metadata = get_chat_response_with_metadata([
+    reply, metadata = await get_chat_response_with_metadata([
         {"role": "system", "content": system_instruction},
         *history,
         {"role": "user", "content": req.message},
