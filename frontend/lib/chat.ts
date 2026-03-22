@@ -1,7 +1,5 @@
-// frontend/lib/chat.ts
 import { apiFetch } from "./fetcher";
 
-// Centralized API helper for chat with optional metadata support
 export interface AIMessageMetadata {
   sources?: string[];
   confidence_score?: number;
@@ -16,6 +14,15 @@ export interface AIMessageMetadata {
 export interface ChatResponse {
   replies: string[];
   conversationId: string;
+  followupQuestions?: string[];
+  metadata?: AIMessageMetadata[];
+}
+
+interface ChatApiResponse {
+  reply?: string[];
+  message?: string;
+  conversation_id?: string;
+  followup_questions?: string[];
   metadata?: AIMessageMetadata[];
 }
 
@@ -26,13 +33,7 @@ export async function sendChat(
   agents: string[] = [],
   signal?: AbortSignal,
 ): Promise<ChatResponse> {
-  const data = await apiFetch<{
-    reply?: string[];
-    message?: string;
-    conversation_id?: string;
-    followup_questions?: string[];
-    metadata?: AIMessageMetadata[];
-  }>(
+  const data = await apiFetch<ChatApiResponse>(
     `/api/chat/${quizId}`,
     {
       method: "POST",
@@ -52,29 +53,7 @@ export async function sendChat(
   return {
     replies,
     conversationId: data.conversation_id ?? conversationId ?? "",
+    followupQuestions: data.followup_questions,
     metadata: data.metadata,
   };
 }
-
-
-export interface ConversationMessage {
-  role: string;
-  content: string | string[];
-  created_at: string;
-  metadata?: AIMessageMetadata;
-  user_email?: string;
-}
-
-export interface ConversationHistory {
-  conversation_id: string;
-  messages: ConversationMessage[];
-}
-
-export async function getConversationHistory(
-  conversationId: string
-): Promise<ConversationHistory> {
-  return apiFetch<ConversationHistory>(`/api/chat/history/${conversationId}`, {
-    method: "GET",
-  });
-}
-
