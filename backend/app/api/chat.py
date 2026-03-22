@@ -1,9 +1,8 @@
 import os
-import re
 import uuid
 import time
 from pydantic import BaseModel
-from openai import OpenAI
+from openai import AsyncOpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
 from typing import Optional
@@ -12,6 +11,7 @@ from ..schemas.message import AIMessageMetadata
 from .auth import get_current_user
 from ..services.chat import get_last_exchange
 from ..services.search import get_chat_response_with_search
+from ..services.followup import generate_followup_questions
 
 router = APIRouter()
 
@@ -40,15 +40,26 @@ def _extract_metadata_from_response(
     )
 
 
+class FollowupChatResponse(BaseModel):
+    reply: list[str]
+    conversation_id: str
+    followup_questions: list[str]
+
 # Initialize OpenAI client with UF proxy settings (from env)
 _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
 _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
-_client = OpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL)
+_client = AsyncOpenAI(api_key=_UF_API_KEY, base_url=_UF_BASE_URL, timeout=60.0)
+
+_BASE_SYSTEM_PROMPT = (
+    "You are a helpful assistant who generates clear and concise answers "
+    "to help students answer some quiz questions."
+    "Go through the explanation first, and only then provide the solution at the end."
+)
 
 
-def get_chat_response(messages: list[dict]) -> str:
+async def get_chat_response(messages: list[dict]) -> str:
     try:
-        resp = _client.chat.completions.create(
+        resp = await _client.chat.completions.create(
             model=os.getenv("UF_OPENAI_API_MODEL"),
             messages=messages,
         )
@@ -132,12 +143,8 @@ async def double_chat(
     metadata_b: Optional[AIMessageMetadata] = None
 
     if run_agent_a:
-        system_instruction = (
-            "You are a helpful assistant who generates clear and concise answers "
-            "to help students answer some quiz questions."
-        )
         messages_a = [
-            {"role": "system", "content": system_instruction},
+            {"role": "system", "content": _BASE_SYSTEM_PROMPT},
             *history,
             {"role": "user", "content": req.message},
         ]
@@ -146,9 +153,8 @@ async def double_chat(
     if run_agent_b:
         if run_agent_a:
             system_instruction_b = (
-                "You are a helpful assistant who generates clear and concise answers "
-                "to help students answer some quiz questions. "
-                "Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
+                _BASE_SYSTEM_PROMPT + 
+                " Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
             )
             messages_b = [
                 {"role": "system", "content": system_instruction_b},
@@ -157,10 +163,7 @@ async def double_chat(
                 {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
             ]
         else:
-            system_instruction_b = (
-                "You are a helpful assistant who generates clear and concise answers "
-                "to help students answer some quiz questions."
-            )
+            system_instruction_b = _BASE_SYSTEM_PROMPT
             messages_b = [
                 {"role": "system", "content": system_instruction_b},
                 *history,
@@ -207,8 +210,6 @@ async def double_chat(
     )
 
 
-class FollowupRequest(BaseModel):
-    last_ai_message: str
 
 
 class FollowupResponse(BaseModel):
@@ -224,39 +225,21 @@ async def followup_chat(
     if not _UF_API_KEY:
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
-    system_prompt = (
-        "You are a helpful assistant who generates short follow-up questions "
-        "related ONLY to the explanation you just gave the student. "
-        "Your follow-up questions MUST be: directly related to the explanation, "
-        "concise (1 sentence, max 12 words), simple and beginner-friendly, "
-        "NOT about homework, exams, studying, or general help. "
-        "Return ONLY the 3 questions as a numbered list (1., 2., 3.)."
-    )
-    user_prompt = (
-        f"Here is the last thing you told the student:\n\n{req.last_ai_message}"
-        "\n\nGenerate exactly 3 possible follow-up questions the student might ask next."
-    )
+    conv_id = req.conversation_id or str(uuid.uuid4())
+    history = get_last_exchange(request.app.state.messages, conv_id)
 
-    raw = get_chat_response([
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+    reply = await get_chat_response([
+        {"role": "system", "content": _BASE_SYSTEM_PROMPT},
+        *history,
+        {"role": "user", "content": req.message},
     ])
 
-    questions: list[str] = []
-    for line in raw.split("\n"):
-        trimmed = line.strip()
-        if not trimmed:
-            continue
-        m = re.match(r"^[0-9]+[.)\-:\s]+(.*)", trimmed)
-        if m:
-            text = m.group(1).strip()
-            if text:
-                questions.append(text)
-    if not questions:
-        questions = [raw]
-    questions = questions[:3]
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
+    _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
 
-    return FollowupResponse(questions=questions)
+    followup_questions = await generate_followup_questions(reply, get_chat_response)
+
+    return FollowupChatResponse(reply=[reply], conversation_id=conv_id, followup_questions=followup_questions)
 
 
 # Returns chat with inline citation links embedded in the response text
@@ -272,12 +255,9 @@ async def chat_with_embedded_links(
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-
     system_instruction = (
-        "You are a helpful assistant who generates clear and concise answers "
-        "to help students answer some quiz questions. "
-        "Use web searches to gather information and cite sources inline."
+        _BASE_SYSTEM_PROMPT +
+        " Use web searches to gather information and cite sources inline."
         "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
         "Prefer sources with stable, long-lived URLs."
 
@@ -296,7 +276,7 @@ async def chat_with_embedded_links(
     )
 
     try:
-        output = get_chat_response_with_search(
+        output = await get_chat_response_with_search(
             client=_client,
             model=os.getenv("UF_OPENAI_API_MODEL"),
             messages=[
@@ -311,6 +291,7 @@ async def chat_with_embedded_links(
         raise HTTPException(status_code=502, detail=f"Upstream AI request failed: {e}")
 
     reply = output["reply"]
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
     _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
 
     return ChatResponse(reply=[reply], conversation_id=conv_id)

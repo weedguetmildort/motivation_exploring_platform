@@ -9,7 +9,7 @@ from ..schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
 )
-from ..schemas.user import UserPublic, SurveyStage
+from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..services.users import (
     get_users_collection,
     ensure_indexes,
@@ -57,6 +57,7 @@ def build_user_public(doc: dict) -> UserPublic:
     return UserPublic(
         id=str(doc["_id"]),
         email=doc["email"],
+        assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
         survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
@@ -66,7 +67,6 @@ def build_user_public(doc: dict) -> UserPublic:
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=survey_stage,
     )
-
 
 def get_current_user(request: Request) -> UserPublic:
     s = get_settings()
@@ -90,7 +90,6 @@ def get_current_user(request: Request) -> UserPublic:
 
     return build_user_public(doc)
 
-
 @router.post("/signup", response_model=AuthResponse)
 def signup(data: SignupRequest, request: Request, response: Response):
     users = get_users_collection(request.app.state.db)
@@ -105,7 +104,6 @@ def signup(data: SignupRequest, request: Request, response: Response):
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
 
-
 @router.post("/login", response_model=AuthResponse)
 def login(data: LoginRequest, request: Request, response: Response):
     users = get_users_collection(request.app.state.db)
@@ -119,17 +117,14 @@ def login(data: LoginRequest, request: Request, response: Response):
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
 
-
 @router.get("/me", response_model=AuthResponse)
 def me(user: UserPublic = Depends(get_current_user)):
     return AuthResponse(user=user)
-
 
 @router.post("/logout")
 def logout(response: Response):
     clear_session_cookie(response)
     return {"ok": True}
-
 
 @router.post("/change-password")
 def change_password(

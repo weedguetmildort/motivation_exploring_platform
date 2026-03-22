@@ -1,6 +1,6 @@
+// frontend/components/ChatBox.tsx
 import { useEffect, useRef, useState } from "react";
 import { sendChat } from "../lib/chat";
-import FollowUpQuestionBox from "./FollowUpQuestionBox";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
 import {
@@ -33,33 +33,46 @@ const BOT_COLORS: Record<Bot, string> = {
 type ChatBoxProps = {
   quizId: string;
   onAssistantMessage?: (message: string) => void;
+  onError?: () => void;
   externalQuestion?: string | null;
-  enableFollowups?: boolean;
   conversationId?: string | null;
 };
 
 export default function ChatBox({
   quizId,
   onAssistantMessage,
+  onError,
   externalQuestion,
-  enableFollowups = true,
   conversationId = null,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
+  const [followupQuestions, setFollowupQuestions] = useState<string[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const [activeConvId, setActiveConvId] = useState<string | null>(conversationId);
+  const [activeConvId, setActiveConvId] = useState<string | null>(
+    conversationId,
+  );
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
 
   useEffect(() => {
-    if (conversationId) setActiveConvId(conversationId);
+    if (conversationId) {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      setPending(false);
+      setActiveConvId(conversationId);
+    }
   }, [conversationId]);
+
+  useEffect(() => {
+    return () => { abortControllerRef.current?.abort(); };
+  }, []);
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
@@ -67,7 +80,12 @@ export default function ChatBox({
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();
-    if (!trimmed || pending) return;
+    if (!trimmed) return;
+
+    // Cancel any in-flight request before starting a new one
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setPending(false);
 
     let agents: string[] = [];
     let messageForBackend = trimmed;
@@ -80,6 +98,7 @@ export default function ChatBox({
     }
 
     setError(null);
+    setFollowupQuestions(undefined);
     const userMsg: Msg = {
       id: crypto.randomUUID(),
       role: "user",
@@ -88,13 +107,17 @@ export default function ChatBox({
     };
     setMessages((m) => [...m, userMsg]);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setPending(true);
-      const { replies, conversationId: returnedConvId } = await sendChat(
+      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
         quizId,
         activeConvId,
         messageForBackend,
-        agents
+        agents,
+        controller.signal,
       );
       if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
 
@@ -123,17 +146,23 @@ export default function ChatBox({
           agentFilter === "double"
             ? botOrder[i] ?? (i % 2 === 0 ? "A" : "B")
             : replies.length > 1
-            ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
-            : undefined,
+              ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
+              : undefined,
       }));
 
       setMessages((m) => [...m, ...botMsgs]);
       if (onAssistantMessage) {
         onAssistantMessage(replies[replies.length - 1]);
       }
-    } catch {
+      if (newFollowupQuestions) {
+        setFollowupQuestions(newFollowupQuestions);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setError("Failed to contact the server.");
+      onError?.();
     } finally {
+      abortControllerRef.current = null;
       setPending(false);
     }
   }
@@ -168,7 +197,9 @@ export default function ChatBox({
   function handleSelectAgent(agent: string) {
     const atIndex = input.lastIndexOf("@");
     const textBefore = input.substring(0, atIndex);
-    const textAfter = input.substring(atIndex + getPartialMention(input).length + 1);
+    const textAfter = input.substring(
+      atIndex + getPartialMention(input).length + 1,
+    );
     setInput(`${textBefore}@${agent} ${textAfter}`);
     setShowMentions(false);
     textareaRef.current?.focus();
@@ -183,7 +214,9 @@ export default function ChatBox({
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setMentionIndex((prev) => (prev - 1 + filteredAgents.length) % filteredAgents.length);
+        setMentionIndex(
+          (prev) => (prev - 1 + filteredAgents.length) % filteredAgents.length,
+        );
         return;
       }
       if (e.key === "Escape") {
@@ -212,20 +245,20 @@ export default function ChatBox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuestion]);
 
-  const lastAiMessage =
-    [...messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
-
   function handleFollowupClick(question: string) {
     void sendMessage(question);
   }
 
   return (
-    <div className="flex h-full w-full flex-col rounded-2xl border bg-white shadow-sm">
+    <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <div className="p-4 border-b sticky top-0 bg-white/80 backdrop-blur rounded-t-2xl">
         <h2 className="text-lg font-semibold">Chat</h2>
       </div>
 
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div
+        ref={scrollerRef}
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3"
+      >
         {messages.map((m) => {
           const label =
             m.role === "user" ? "You" : m.bot ? `Agent ${m.bot}` : "Assistant";
@@ -233,8 +266,8 @@ export default function ChatBox({
             m.role === "user"
               ? "bg-blue-600 text-white"
               : m.bot
-              ? BOT_COLORS[m.bot]
-              : "bg-gray-100 text-gray-900";
+                ? BOT_COLORS[m.bot]
+                : "bg-gray-100 text-gray-900";
 
           return (
             <div key={m.id}>
@@ -245,8 +278,12 @@ export default function ChatBox({
               >
                 {label}
               </div>
-              <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+              <div
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}
+                >
                   {m.role === "assistant" ? (
                     <MarkdownMessage content={m.content} />
                   ) : (
@@ -258,6 +295,24 @@ export default function ChatBox({
           );
         })}
 
+        {followupQuestions && (
+          <div className="mt-3 border-t border-gray-200 pt-3">
+            <div className="mb-2 text-sm font-semibold text-gray-900">Follow-up Questions</div>
+            <div className="flex flex-wrap gap-2">
+              {followupQuestions.map((q, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="text-xs px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                  onClick={() => handleFollowupClick(q)}
+                >
+                  <MarkdownMessage content={q} inline />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {pending && (
           <div className="text-sm text-gray-500">Assistant is typing…</div>
         )}
@@ -268,12 +323,6 @@ export default function ChatBox({
           </div>
         )}
 
-        {enableFollowups && (
-          <FollowUpQuestionBox
-            lastAiMessage={lastAiMessage}
-            onOptionClick={handleFollowupClick}
-          />
-        )}
       </div>
 
       <div className="p-3 border-t rounded-b-2xl bg-white relative">

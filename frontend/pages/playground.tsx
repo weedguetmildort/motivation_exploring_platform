@@ -4,7 +4,6 @@ import QuestionBox from "../components/QuestionBox";
 import AnswerBox, { Choice } from "../components/AnswerBox";
 import ChatBox from "../components/ChatBox";
 import { getMe, logout, type User } from "../lib/auth";
-import FollowUpQuestionBox from "../components/FollowUpQuestionBox";
 import { useRouter } from "next/router";
 import { apiFetch } from "../lib/fetcher";
 
@@ -20,22 +19,6 @@ export default function Playground() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
-  // Track chat AI message + follow-up selection
-  const [lastAiMessage, setLastAiMessage] = useState<string | null>(null);
-  const [selectedFollowup, setSelectedFollowup] = useState<string | null>(null);
-  const [followupToSend, setFollowupToSend] = useState<string | null>(null);
-
-  function handleFollowupClick(question: string) {
-    setSelectedFollowup(question);
-    setFollowupToSend(question);
-    console.log("Follow-up option clicked:", question);
-  }
-
-  useEffect(() => {
-    if (lastAiMessage) {
-      setFollowupToSend(null);
-    }
-  }, [lastAiMessage]);
 
   useEffect(() => {
     let cancel = false;
@@ -303,10 +286,7 @@ export default function Playground() {
           {/* Right column (Chat) */}
           <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
             <ChatBox
-              quizId={active === "double" ? "double" : active === "links" ? "links" : "base"}
-              onAssistantMessage={setLastAiMessage}
-              externalQuestion={followupToSend}
-              enableFollowups={active === "followup"}
+              quizId={active}
             />
           </div>
         </div>

@@ -34,6 +34,7 @@ export async function sendChat(
     `/api/chat/${quizId}`,
     {
       method: "POST",
+      signal,
       body: JSON.stringify({
         message,
         conversation_id: conversationId,
@@ -53,15 +54,6 @@ export async function sendChat(
   };
 }
 
-export async function sendFollowupChat(
-  lastAiMessage: string
-): Promise<string[]> {
-  const data = await apiFetch<{ questions?: string[] }>(`/api/chat/addon/followup`, {
-    method: "POST",
-    body: JSON.stringify({ last_ai_message: lastAiMessage }),
-  });
-  return data.questions ?? [];
-}
 
 export interface ConversationMessage {
   role: string;

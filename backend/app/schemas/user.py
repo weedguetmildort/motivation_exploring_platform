@@ -10,10 +10,16 @@ class SurveyStage(str, Enum):
     post_variant = "post_variant"
     complete = "complete"
 
+class AssignedVar(str, Enum):
+    followup = "followup"
+    double = "double"
+    links = "links"
+
 class UserInDB(BaseModel):
     id: str
     email: EmailStr
     password_hash: str
+    assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
 
 class UserCreate(BaseModel):
@@ -23,6 +29,7 @@ class UserCreate(BaseModel):
 class UserPublic(BaseModel):
     id: str
     email: EmailStr
+    assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
     demographics_completed: bool = False
     survey_pre_base_completed: bool = False
@@ -37,6 +44,7 @@ class UserDBDoc(BaseModel):
     _id: str
     email: EmailStr
     password_hash: str
+    assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
     demographics_completed: bool = False
     survey_pre_base_completed: bool = False

@@ -128,6 +128,15 @@ export default function DashboardPage() {
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
           )}
+          {user?.is_admin && (
+          <a
+            href="/quiz/followup"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg font-semibold">Follow-up Questions Quiz</h2>
+            <p className="text-sm text-gray-600">Begin the Quiz</p>
+          </a>
+          )}
         </div>
       </div>
     </div>

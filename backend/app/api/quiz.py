@@ -8,11 +8,18 @@ from ..services.quiz import (
     build_quiz_state_response,
     record_question_shown,
     record_answer,
+    reset_quiz_attempt,
 )
 
 #TODO: ensure quiz_id is valid - either in this file before querying responses or in services/quiz.py functions
 # Doing in this file is a bit more organized but doing it from services avoids doing an additional mongoDB request
 router = APIRouter(prefix="/quiz/{quiz_id}", tags=["quiz"])
+
+
+def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
 
 @router.get("/state", response_model=QuizStateResponse)
 def get_quiz_state(request: Request, user: UserPublic = Depends(get_current_user)):
@@ -53,3 +60,14 @@ def submit_quiz_answer(
     )
 
     return build_quiz_state_response(db, updated_doc)
+
+
+@router.post("/reset", status_code=200)
+def reset_quiz(
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    db = request.app.state.db
+    quiz_id = request.path_params["quiz_id"]
+    reset_quiz_attempt(db, user.id, quiz_id)
+    return {"ok": True}

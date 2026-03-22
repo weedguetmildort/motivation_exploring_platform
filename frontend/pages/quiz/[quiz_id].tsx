@@ -7,14 +7,19 @@ import { getMe, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
   submitQuizAnswer,
+  resetQuiz,
   type QuizStateResponse,
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-type QuizId = "base" | "variant";
+
+const VARIANT_QUIZ_IDS = ["followup", "links", "double"] as const;
+type VariantQuizId = (typeof VARIANT_QUIZ_IDS)[number];
+type QuizId = "base" | VariantQuizId;
 
 type ExtendedUser = User & {
+  assigned_var?: VariantQuizId | string | null;
   survey_stage?: SurveyStage | null;
   survey_pre_base_completed?: boolean;
   quiz_base_completed?: boolean;
@@ -23,15 +28,27 @@ type ExtendedUser = User & {
   survey_post_variant_completed?: boolean;
 };
 
-function isQuizId(value: string): value is QuizId {
-  return value === "base" || value === "variant";
+function isVariantQuizId(value: string): value is VariantQuizId {
+  return (VARIANT_QUIZ_IDS as readonly string[]).includes(value);
+}
+
+function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
+  if (user?.is_admin) return true;
+  return value === "base" || isVariantQuizId(value);
+}
+
+function isUsersAssignedVariant(
+  quizId: string,
+  user?: ExtendedUser | null
+): boolean {
+  return Boolean(user?.assigned_var && quizId === user.assigned_var);
 }
 
 function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
-  //Bypass checks if user is an admin. Useful for testing
-  if(user.is_admin) {
+  if (user.is_admin) {
     return true;
   }
+
   if (quizId === "base") {
     return (
       Boolean(user.survey_pre_base_completed) &&
@@ -39,33 +56,40 @@ function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
     );
   }
 
-  if (quizId === "variant") {
-    return (
-      Boolean(user.survey_post_base_completed) &&
-      !Boolean(user.quiz_variant_completed)
-    );
-  }
-
-  return false;
+  return (
+    isUsersAssignedVariant(quizId, user) &&
+    Boolean(user.survey_post_base_completed) &&
+    !Boolean(user.quiz_variant_completed)
+  );
 }
 
 function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
+  const assignedVariantPath = user.assigned_var
+    ? `/quiz/${user.assigned_var}`
+    : "/dashboard";
+
   if (quizId === "base") {
     if (!user.survey_pre_base_completed) return "/survey";
-    if (user.quiz_base_completed && !user.survey_post_base_completed)
-      return "/survey";
-    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
-      return "/quiz/variant";
-    }
-    return "/dashboard";
-  }
 
-  if (quizId === "variant") {
-    if (!user.survey_post_base_completed) return "/survey";
+    if (user.quiz_base_completed && !user.survey_post_base_completed) {
+      return "/survey";
+    }
+
+    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
+      return assignedVariantPath;
+    }
+
     if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
       return "/survey";
     }
+
     return "/dashboard";
+  }
+
+  if (!user.survey_post_base_completed) return "/survey";
+
+  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
+    return "/survey";
   }
 
   return "/dashboard";
@@ -73,7 +97,7 @@ function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
 
 export default function QuizPage() {
   const router = useRouter();
-  const quizId =
+  const rawQuizId =
     typeof router.query.quiz_id === "string"
       ? router.query.quiz_id
       : Array.isArray(router.query.quiz_id)
@@ -89,11 +113,17 @@ export default function QuizPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [hasAskedChat, setHasAskedChat] = useState(false);
+  const [chatLoaded, setChatLoaded] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
+
+  const quizId =
+    rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
+      ? (rawQuizId as QuizId)
+      : null;
 
   useEffect(() => {
     if (!router.isReady) return;
-    if (!quizId) return;
+    if (!rawQuizId) return;
 
     let cancel = false;
 
@@ -104,7 +134,19 @@ export default function QuizPage() {
 
         const u = res.user as ExtendedUser;
 
-        if (!isQuizId(quizId)) {
+        if (!isValidQuizId(rawQuizId, u)) {
+          router.replace("/dashboard");
+          return;
+        }
+
+        if (!u.is_admin) {
+          if (rawQuizId !== "base" && !isUsersAssignedVariant(rawQuizId, u)) {
+            router.replace("/dashboard");
+            return;
+          }
+        }
+
+        if (!quizId) {
           router.replace("/dashboard");
           return;
         }
@@ -125,13 +167,12 @@ export default function QuizPage() {
     return () => {
       cancel = true;
     };
-  }, [router, router.isReady, quizId]);
+  }, [router, router.isReady, rawQuizId, quizId]);
 
   useEffect(() => {
     if (!user) return;
     if (!router.isReady) return;
     if (!quizId) return;
-    if (!isQuizId(quizId)) return;
 
     let cancel = false;
 
@@ -162,6 +203,7 @@ export default function QuizPage() {
     if (!current) return;
     setSelectedChoice(null);
     setHasAskedChat(false);
+    setChatLoaded(false);
     setExternalQuestion(null);
   }, [current?.id]);
 
@@ -170,6 +212,7 @@ export default function QuizPage() {
     if (!quizCompleted) return;
     if (!quizId) return;
     if (!user) return;
+    if (user.is_admin) return;
 
     router.replace("/survey");
   }, [router.isReady, quizCompleted, quizId, user, router]);
@@ -204,13 +247,7 @@ export default function QuizPage() {
   }
 
   async function onSubmit() {
-    if (
-      !quizId ||
-      !isQuizId(quizId) ||
-      !current ||
-      !selectedChoice ||
-      submitting
-    ) {
+    if (!quizId || !current || !selectedChoice || submitting) {
       return;
     }
 
@@ -218,7 +255,11 @@ export default function QuizPage() {
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
+      const state = await submitQuizAnswer(
+        quizId,
+        current.id,
+        selectedChoice
+      );
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
@@ -230,17 +271,18 @@ export default function QuizPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+    <div className="relative h-screen bg-gray-50 overflow-hidden">
+      <header className="h-24 bg-white border-b px-6 py-4">
+        <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">
-              Quiz {quizId}
+              Quiz {quizId ?? rawQuizId}
             </h1>
             <p className="text-sm text-gray-600">
               Answer each question once. Your progress is saved automatically.
             </p>
           </div>
+
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.push("/dashboard")}
@@ -248,6 +290,7 @@ export default function QuizPage() {
             >
               Back to Dashboard
             </button>
+
             <button
               onClick={onLogout}
               className="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
@@ -258,134 +301,173 @@ export default function QuizPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6 min-h-0">
-        {attempt && (
-          <div className="mb-4 text-sm text-gray-600">
-            {attempt.answered_count} of {attempt.total_questions} answered
-            {quizCompleted && (
-              <span className="ml-2 font-semibold text-green-700">
-                (Quiz completed)
-              </span>
-            )}
-          </div>
-        )}
+      <div className="absolute inset-x-0 bottom-0 top-24">
+        <div className="max-w-6xl mx-auto h-full px-6 py-6">
+          <div className="grid h-full grid-rows-[auto_1fr] gap-4">
+            <div>
+              {attempt && (
+                <div className="mb-4 text-sm text-gray-600">
+                  {attempt.answered_count} of {attempt.total_questions} answered
+                  {quizCompleted && (
+                    <span className="ml-2 font-semibold text-green-700">
+                      (Quiz completed)
+                    </span>
+                  )}
+                </div>
+              )}
 
-        {error && (
-          <div className="mb-3 text-sm text-red-600" role="alert">
-            {error}
-          </div>
-        )}
-
-        {quizCompleted && (
-          <div className="bg-white rounded-xl p-6 shadow-sm border">
-            <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
-            <p className="text-sm text-gray-600">
-              Redirecting you to the next survey…
-            </p>
-          </div>
-        )}
-
-        {!quizCompleted && (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-2 px-0 pb-6 min-h-0 lg:h-[calc(100vh-180px)]">
-            <div className="grid gap-6 lg:grid-rows-[1fr_1fr] min-h-0 h-full">
-              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto min-h-0">
-                <h2 className="text-lg font-medium mb-3">Question</h2>
-
-                {!quizState && (
-                  <div className="text-sm text-gray-500">Loading quiz…</div>
-                )}
-
-                {quizState && !current && (
-                  <div className="text-sm text-gray-500">
-                    No current question available.
-                  </div>
-                )}
-
-                {quizState && current && (
-                  <div className="space-y-4">
-                    <QuestionBox
-                      question={current.stem}
-                      subtitle={current.subtitle || undefined}
-                      className="max-w-3xl mx-auto"
-                    />
-                  </div>
-                )}
-              </section>
-
-              <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto min-h-0">
-                <h2 className="text-lg font-medium mb-3">Options</h2>
-
-                {!quizState || !current ? (
-                  <div className="text-sm text-gray-500">
-                    Options will appear once a question is available.
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <div
-                      className={`space-y-4 transition ${
-                        !hasAskedChat
-                          ? "pointer-events-none opacity-40 blur-[1px]"
-                          : ""
-                      }`}
-                    >
-                      <AnswerBox
-                        choices={current.choices as Choice[]}
-                        value={selectedChoice}
-                        onChange={setSelectedChoice}
-                        className="max-w-3xl mx-auto"
-                      />
-                      <div className="flex items-center justify-between text-sm text-gray-600">
-                        <div>
-                          Selected:{" "}
-                          <span className="font-medium">
-                            {selectedChoice ?? "(none)"}
-                          </span>
-                        </div>
-                        <button
-                          onClick={onSubmit}
-                          disabled={!selectedChoice || submitting}
-                          className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
-                        >
-                          {submitting ? "Submitting…" : "Submit answer"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {!hasAskedChat && (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
-                          <p className="text-sm text-gray-800 mb-3">
-                            Before choosing an answer, send this question to the
-                            assistant and read the explanation.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={onAskAssistantAboutQuestion}
-                            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
-                          >
-                            Ask the assistant about this question
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-            </div>
-
-            <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
-
-              {quizId && (
-                <ChatBox
-                  quizId={quizId}
-                  conversationId={conversationId}
-                  externalQuestion={externalQuestion}
-                  enableFollowups={false}
-                />
+              {error && (
+                <div className="mb-3 text-sm text-red-600" role="alert">
+                  {error}
+                </div>
               )}
             </div>
+
+            {quizCompleted ? (
+              user.is_admin ? (
+                <div className="rounded-xl bg-white p-6 shadow-sm border">
+                  <h2 className="text-lg font-semibold mb-2">
+                    Quiz completed (admin view)
+                  </h2>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Reset to take it again, or go back to the dashboard.
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => router.push("/dashboard")}
+                      className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
+                    >
+                      Back to Dashboard
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!quizId) return;
+                        await resetQuiz(quizId);
+                        const state = await getQuizState(quizId);
+                        setQuizState(state);
+                        setSelectedChoice(null);
+                      }}
+                      className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
+                    >
+                      Reset &amp; Retake
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl bg-white p-6 shadow-sm border">
+                  <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
+                  <p className="text-sm text-gray-600">
+                    Redirecting you to the next survey…
+                  </p>
+                </div>
+              )
+            ) : (
+              <div className="grid min-h-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
+                <div className="grid min-h-0 grid-rows-2 gap-6">
+                  <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm overflow-auto">
+                    <h2 className="text-lg font-medium mb-3">Question</h2>
+
+                    {!quizState && (
+                      <div className="text-sm text-gray-500">Loading quiz…</div>
+                    )}
+
+                    {quizState && !current && (
+                      <div className="text-sm text-gray-500">
+                        No current question available.
+                      </div>
+                    )}
+
+                    {quizState && current && (
+                      <div className="space-y-4">
+                        <QuestionBox
+                          question={current.stem}
+                          subtitle={current.subtitle || undefined}
+                          className="max-w-3xl mx-auto"
+                        />
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm">
+                    <h2 className="text-lg font-medium mb-3">Options</h2>
+
+                    {!quizState || !current ? (
+                      <div className="text-sm text-gray-500">
+                        Options will appear once a question is available.
+                      </div>
+                    ) : (
+                      <div className="relative h-full">
+                        <div
+                          className={`space-y-4 transition ${
+                            !hasAskedChat
+                              ? "pointer-events-none opacity-40 blur-[1px]"
+                              : ""
+                          }`}
+                        >
+                          <AnswerBox
+                            choices={current.choices as Choice[]}
+                            value={selectedChoice}
+                            onChange={setSelectedChoice}
+                            className="max-w-3xl mx-auto"
+                          />
+
+                          <div className="flex items-center justify-between text-sm text-gray-600">
+                            <div>
+                              Selected:{" "}
+                              <span className="font-medium">
+                                {selectedChoice ?? "(none)"}
+                              </span>
+                            </div>
+
+                            <button
+                              onClick={onSubmit}
+                              disabled={!selectedChoice || submitting || !chatLoaded}
+                              className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
+                            >
+                              {submitting ? "Submitting…" : "Submit answer"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {!hasAskedChat && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
+                              <p className="text-sm text-gray-800 mb-3">
+                                Before choosing an answer, send this question to
+                                the assistant and read the explanation.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={onAskAssistantAboutQuestion}
+                                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+                              >
+                                Ask the assistant about this question
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                <div className="min-h-0">
+                  {quizId && (
+                    <div className="h-full min-h-0 rounded-2xl overflow-hidden">
+                      <ChatBox
+                        quizId={quizId}
+                        conversationId={conversationId}
+                        externalQuestion={externalQuestion}
+                        onAssistantMessage={() => setChatLoaded(true)}
+                        onError={() => setChatLoaded(true)}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

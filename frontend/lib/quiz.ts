@@ -31,3 +31,7 @@ export async function submitQuizAnswer(quizID: string, questionId: string, choic
     body: JSON.stringify({ question_id: questionId, choice_id: choiceId }),
   });
 }
+
+export async function resetQuiz(quizID: string) {
+  return apiFetch<{ ok: boolean }>(`/api/quiz/${quizID}/reset`, { method: "POST" });
+}

@@ -52,6 +52,14 @@ def _completion_flag_field(stage: SurveyStage) -> str:
         SurveyStage.post_variant: "survey_post_variant_completed",
     }[stage]
 
+def _question_stage_for_stage(stage: SurveyStage) -> SurveyStage:
+    return {
+        SurveyStage.pre_base: SurveyStage.pre_base,
+        SurveyStage.post_base: SurveyStage.post_base,
+        SurveyStage.post_variant: SurveyStage.post_base,
+        SurveyStage.complete: SurveyStage.complete,
+    }[stage]
+
 # ---------- survey items (admin CRUD) ----------
 
 def _item_to_public(doc: dict) -> SurveyItemPublic:
@@ -176,10 +184,17 @@ def _load_or_create_response_doc(db, user_id: str, user_email: str, stage: str) 
     return doc
 
 def build_survey_state(db, user_id: str, user_email: str, stage: str) -> SurveyStateResponse:
-    # load items
-    items = list_survey_items(db, stage=stage, active_only=True)
+    try:
+        current_stage = SurveyStage(stage)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
 
-    # load or create attempt doc
+    question_stage = _question_stage_for_stage(current_stage).value
+
+    # load items from question source stage
+    items = list_survey_items(db, stage=question_stage, active_only=True)
+
+    # load or create attempt doc from actual response stage
     doc = _load_or_create_response_doc(db, user_id, user_email, stage)
 
     answered_count = sum(1 for a in doc.get("answers", []) if a.get("answered_at"))
@@ -225,16 +240,24 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     if doc.get("status") == "completed":
         raise HTTPException(status_code=400, detail="Survey already completed")
 
-    # Validate item IDs belong to this stage and are active
-    valid_ids = set(str(d["_id"]) for d in items_col.find({"stage": stage, "active": True}, {"_id": 1}))
+    try:
+        current_stage = SurveyStage(stage)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
+
+    question_stage = _question_stage_for_stage(current_stage).value
+
+    # Validate item IDs against the question stage, not necessarily the response stage
+    valid_ids = set(
+        str(d["_id"])
+        for d in items_col.find({"stage": question_stage, "active": True}, {"_id": 1})
+    )
     for a in req.answers:
         if a.item_id not in valid_ids:
             raise HTTPException(status_code=400, detail=f"Invalid survey item_id: {a.item_id}")
 
     now = datetime.utcnow()
 
-    # Write each answer (upsert into answers array)
-    # Approach: try positional update first; if not present, push a new entry
     for a in req.answers:
         res = col.update_one(
             {"_id": doc["_id"], "answers.item_id": a.item_id},
@@ -243,30 +266,35 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
         if res.matched_count == 0:
             col.update_one(
                 {"_id": doc["_id"]},
-                {"$push": {"answers": {"item_id": a.item_id, "shown_at": None, "answered_at": now, "value": a.value}},
-                 "$set": {"updated_at": now}},
+                {
+                    "$push": {
+                        "answers": {
+                            "item_id": a.item_id,
+                            "shown_at": None,
+                            "answered_at": now,
+                            "value": a.value,
+                        }
+                    },
+                    "$set": {"updated_at": now},
+                },
             )
 
-    # mark completed if all required items answered
     updated = col.find_one({"_id": doc["_id"]})
 
-    # compute completion (required only)
-    required_ids = set(str(d["_id"]) for d in items_col.find({"stage": stage, "active": True, "required": True}, {"_id": 1}))
-    answered_ids = set(x.get("item_id") for x in updated.get("answers", []) if x.get("answered_at"))
-
-    # if required_ids.issubset(answered_ids):
-    #     col.update_one(
-    #         {"_id": updated["_id"]},
-    #         {"$set": {"status": "completed", "completed_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
-    #     )
+    # Compute completion using the question stage's required items
+    required_ids = set(
+        str(d["_id"])
+        for d in items_col.find(
+            {"stage": question_stage, "active": True, "required": True},
+            {"_id": 1},
+        )
+    )
+    answered_ids = set(
+        x.get("item_id") for x in updated.get("answers", []) if x.get("answered_at")
+    )
 
     if required_ids.issubset(answered_ids):
         completed_at = datetime.utcnow()
-
-        try:
-            current_stage = SurveyStage(stage)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
 
         col.update_one(
             {"_id": updated["_id"]},
