@@ -2,6 +2,7 @@ import React from "react";
 import { useEffect, useState } from "react";
 import ChatBox from "../components/ChatBox";
 import Link from "next/link";
+import Disclaimer from "../components/Disclaimer";
 
 export default function Landing() {
   return (
@@ -11,7 +12,7 @@ export default function Landing() {
           Motivation Exploring Platform
         </h1>
         <p className="mb-4 text-sm text-gray-600">
-          Sign up or log in to start chatting.
+          Sign up or log in to start.
         </p>
         <div className="flex gap-3">
           <a
@@ -20,14 +21,20 @@ export default function Landing() {
           >
             Sign up
           </a>
-          <a
-            href="/login"
-            className="rounded-xl border px-4 py-2"
-          >
+          <a href="/login" className="rounded-xl border px-4 py-2">
             Log in
           </a>
         </div>
+        
       </div>
+      <div className="mx-auto mt-16 max-w-sm rounded-2xl border bg-white p-6 shadow-sm">
+          <Disclaimer
+            groupName="Emerging Technologies in Education Group"
+            institution="University of Florida"
+            contactEmail="email@ufl.edu"
+            supervisor="Dr. Neha Rani. IRB Protocol #."
+          />
+        </div>
     </div>
   );
 }

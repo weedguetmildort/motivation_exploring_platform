@@ -420,7 +420,6 @@ export default function QuizPage() {
                         externalQuestion={externalQuestion}
                         onAssistantMessage={() => setChatLoaded(true)}
                         onError={() => setChatLoaded(true)}
-                        enableFollowups={false}
                       />
                     </div>
                   )}
