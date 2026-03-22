@@ -1,5 +1,7 @@
-// Centralized API helper for chat with optional metadata support
+// frontend/lib/chat.ts
+import { apiFetch } from "./fetcher";
 
+// Centralized API helper for chat with optional metadata support
 export interface AIMessageMetadata {
   sources?: string[];
   confidence_score?: number;
@@ -17,18 +19,18 @@ export interface ChatResponse {
   metadata?: AIMessageMetadata[];
 }
 
-import { apiFetch } from "./fetcher";
-
 export async function sendChat(
   quizId: string,
   conversationId: string | null,
   message: string,
-  agents: string[] = []
+  agents: string[] = [],
+  signal?: AbortSignal,
 ): Promise<ChatResponse> {
   const data = await apiFetch<{
     reply?: string[];
     message?: string;
     conversation_id?: string;
+    followup_questions?: string[];
     metadata?: AIMessageMetadata[];
   }>(
     `/api/chat/${quizId}`,
