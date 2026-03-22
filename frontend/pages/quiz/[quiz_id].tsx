@@ -13,9 +13,13 @@ import {
 import ChatBox from "../../components/ChatBox";
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-type QuizId = "base" | "variant";
+
+const VARIANT_QUIZ_IDS = ["followup", "links", "double"] as const;
+type VariantQuizId = (typeof VARIANT_QUIZ_IDS)[number];
+type QuizId = "base" | VariantQuizId;
 
 type ExtendedUser = User & {
+  assigned_var?: VariantQuizId | string | null;
   survey_stage?: SurveyStage | null;
   survey_pre_base_completed?: boolean;
   quiz_base_completed?: boolean;
@@ -24,16 +28,27 @@ type ExtendedUser = User & {
   survey_post_variant_completed?: boolean;
 };
 
+function isVariantQuizId(value: string): value is VariantQuizId {
+  return (VARIANT_QUIZ_IDS as readonly string[]).includes(value);
+}
+
 function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
   if (user?.is_admin) return true;
-  return value === "base" || value === "variant";
+  return value === "base" || isVariantQuizId(value);
+}
+
+function isUsersAssignedVariant(
+  quizId: string,
+  user?: ExtendedUser | null
+): boolean {
+  return Boolean(user?.assigned_var && quizId === user.assigned_var);
 }
 
 function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
-  //Bypass checks if user is an admin. Useful for testing
-  if(user.is_admin) {
+  if (user.is_admin) {
     return true;
   }
+
   if (quizId === "base") {
     return (
       Boolean(user.survey_pre_base_completed) &&
@@ -41,33 +56,40 @@ function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
     );
   }
 
-  if (quizId === "variant") {
-    return (
-      Boolean(user.survey_post_base_completed) &&
-      !Boolean(user.quiz_variant_completed)
-    );
-  }
-
-  return false;
+  return (
+    isUsersAssignedVariant(quizId, user) &&
+    Boolean(user.survey_post_base_completed) &&
+    !Boolean(user.quiz_variant_completed)
+  );
 }
 
 function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
+  const assignedVariantPath = user.assigned_var
+    ? `/quiz/${user.assigned_var}`
+    : "/dashboard";
+
   if (quizId === "base") {
     if (!user.survey_pre_base_completed) return "/survey";
-    if (user.quiz_base_completed && !user.survey_post_base_completed)
-      return "/survey";
-    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
-      return "/quiz/variant";
-    }
-    return "/dashboard";
-  }
 
-  if (quizId === "variant") {
-    if (!user.survey_post_base_completed) return "/survey";
+    if (user.quiz_base_completed && !user.survey_post_base_completed) {
+      return "/survey";
+    }
+
+    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
+      return assignedVariantPath;
+    }
+
     if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
       return "/survey";
     }
+
     return "/dashboard";
+  }
+
+  if (!user.survey_post_base_completed) return "/survey";
+
+  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
+    return "/survey";
   }
 
   return "/dashboard";
@@ -75,7 +97,7 @@ function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
 
 export default function QuizPage() {
   const router = useRouter();
-  const quizId =
+  const rawQuizId =
     typeof router.query.quiz_id === "string"
       ? router.query.quiz_id
       : Array.isArray(router.query.quiz_id)
@@ -94,9 +116,14 @@ export default function QuizPage() {
   const [chatLoaded, setChatLoaded] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
 
+  const quizId =
+    rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
+      ? (rawQuizId as QuizId)
+      : null;
+
   useEffect(() => {
     if (!router.isReady) return;
-    if (!quizId) return;
+    if (!rawQuizId) return;
 
     let cancel = false;
 
@@ -107,13 +134,25 @@ export default function QuizPage() {
 
         const u = res.user as ExtendedUser;
 
-        if (!isValidQuizId(quizId, u)) {
+        if (!isValidQuizId(rawQuizId, u)) {
           router.replace("/dashboard");
           return;
         }
 
-        if (!canAccessQuiz(quizId as QuizId, u)) {
-          router.replace(getBlockedQuizRedirect(quizId as QuizId, u));
+        if (!u.is_admin) {
+          if (rawQuizId !== "base" && !isUsersAssignedVariant(rawQuizId, u)) {
+            router.replace("/dashboard");
+            return;
+          }
+        }
+
+        if (!quizId) {
+          router.replace("/dashboard");
+          return;
+        }
+
+        if (!canAccessQuiz(quizId, u)) {
+          router.replace(getBlockedQuizRedirect(quizId, u));
           return;
         }
 
@@ -128,13 +167,12 @@ export default function QuizPage() {
     return () => {
       cancel = true;
     };
-  }, [router, router.isReady, quizId]);
+  }, [router, router.isReady, rawQuizId, quizId]);
 
   useEffect(() => {
     if (!user) return;
     if (!router.isReady) return;
     if (!quizId) return;
-    if (!isValidQuizId(quizId, user)) return;
 
     let cancel = false;
 
@@ -209,13 +247,7 @@ export default function QuizPage() {
   }
 
   async function onSubmit() {
-    if (
-      !quizId ||
-      !isValidQuizId(quizId, user) ||
-      !current ||
-      !selectedChoice ||
-      submitting
-    ) {
+    if (!quizId || !current || !selectedChoice || submitting) {
       return;
     }
 
@@ -223,7 +255,11 @@ export default function QuizPage() {
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
+      const state = await submitQuizAnswer(
+        quizId,
+        current.id,
+        selectedChoice
+      );
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
@@ -240,7 +276,7 @@ export default function QuizPage() {
         <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">
-              Quiz {quizId}
+              Quiz {quizId ?? rawQuizId}
             </h1>
             <p className="text-sm text-gray-600">
               Answer each question once. Your progress is saved automatically.
@@ -288,9 +324,11 @@ export default function QuizPage() {
             </div>
 
             {quizCompleted ? (
-              user?.is_admin ? (
+              user.is_admin ? (
                 <div className="rounded-xl bg-white p-6 shadow-sm border">
-                  <h2 className="text-lg font-semibold mb-2">Quiz completed (admin view)</h2>
+                  <h2 className="text-lg font-semibold mb-2">
+                    Quiz completed (admin view)
+                  </h2>
                   <p className="text-sm text-gray-600 mb-4">
                     Reset to take it again, or go back to the dashboard.
                   </p>
@@ -303,9 +341,11 @@ export default function QuizPage() {
                     </button>
                     <button
                       onClick={async () => {
-                        await resetQuiz(quizId!);
-                        const state = await getQuizState(quizId!);
+                        if (!quizId) return;
+                        await resetQuiz(quizId);
+                        const state = await getQuizState(quizId);
                         setQuizState(state);
+                        setSelectedChoice(null);
                       }}
                       className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
                     >
@@ -412,7 +452,7 @@ export default function QuizPage() {
                 </div>
 
                 <div className="min-h-0">
-                  {quizId && isValidQuizId(quizId, user) && (
+                  {quizId && (
                     <div className="h-full min-h-0 rounded-2xl overflow-hidden">
                       <ChatBox
                         quizId={quizId}
