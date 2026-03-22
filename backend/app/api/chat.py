@@ -9,7 +9,7 @@ from typing import Optional
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
 from .auth import get_current_user
-from ..services.chat import get_last_exchange
+from ..services.chat import get_last_exchange, get_conversation_history
 from ..services.search import get_chat_response_with_search
 from ..services.followup import generate_followup_questions
 
@@ -357,10 +357,7 @@ async def get_conversation_history(
     user: UserPublic = Depends(get_current_user),
 ):
     try:
-        docs = list(request.app.state.messages.find(
-            {"conversation_id": conversation_id},
-            sort=[("created_at", 1)],
-        ))
+        docs = get_conversation_history(request.app.state.messages, conversation_id)
 
         if not docs:
             return ConversationHistoryResponse(conversation_id=conversation_id, messages=[])
