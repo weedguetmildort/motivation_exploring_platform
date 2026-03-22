@@ -209,17 +209,14 @@ async def double_chat(
         metadata=metadata_list or None,
     )
 
-
-
-
 class FollowupResponse(BaseModel):
     questions: list[str]
 
 
-# Special routing to generate follow up questions.
-@router.post("/chat/addon/followup", response_model=FollowupResponse)
-async def followup_chat(
-    req: FollowupRequest,
+@router.post("/chat/followup", response_model=FollowupChatResponse)
+async def followup_quiz_chat(
+    req: ChatRequest,
+    request: Request,
     user: UserPublic = Depends(get_current_user),
 ):
     if not _UF_API_KEY:
