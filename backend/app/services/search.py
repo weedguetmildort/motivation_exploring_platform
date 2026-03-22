@@ -5,7 +5,7 @@ import re
 import httpx
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 _UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
 _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
@@ -98,8 +98,8 @@ def _inject_citation_links(text: str, citations: list[dict]) -> str:
     return text
 
 
-def get_chat_response_with_search(
-    client: OpenAI,
+async def get_chat_response_with_search(
+    client: AsyncOpenAI,
     model: str,
     messages: list[dict],
 ) -> dict[str, str | list]:
@@ -117,7 +117,7 @@ def get_chat_response_with_search(
     results = _filter_valid_urls(results)
 
     if not results:
-        resp = client.chat.completions.create(model=model, messages=messages)
+        resp = await client.chat.completions.create(model=model, messages=messages)
         return {"reply": (resp.choices[0].message.content or "").strip(), "citations": []}
 
     NL = chr(10)
@@ -164,7 +164,7 @@ def get_chat_response_with_search(
         ),
     }
 
-    resp = client.chat.completions.create(model=model, messages=augmented)
+    resp = await client.chat.completions.create(model=model, messages=augmented)
     reply_text = (resp.choices[0].message.content or "").strip()
 
     citations = [
