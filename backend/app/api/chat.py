@@ -309,7 +309,6 @@ async def chat(
     model_version = os.getenv("UF_OPENAI_API_MODEL")
 
     history = get_last_exchange(request.app.state.messages, conv_id)
-    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
 
     system_instruction = (
         "You are a helpful assistant who generates clear and concise answers "
@@ -321,6 +320,7 @@ async def chat(
         {"role": "user", "content": req.message},
     ], model_version)
 
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
     _save_message(
         request.app.state.messages,
         "assistant",
