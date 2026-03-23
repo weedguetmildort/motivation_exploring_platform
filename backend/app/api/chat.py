@@ -9,7 +9,7 @@ from typing import Optional
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
 from .auth import get_current_user
-from ..services.chat import get_last_exchange
+from ..services.chat import get_last_exchange, get_conversation_history
 from ..services.search import get_chat_response_with_search
 from ..services.followup import generate_followup_questions
 
@@ -68,13 +68,13 @@ async def get_chat_response(messages: list[dict]) -> str:
         raise HTTPException(status_code=502, detail="Upstream AI request failed")
 
 
-def get_chat_response_with_metadata(
+async def get_chat_response_with_metadata(
     messages: list[dict],
     model_version: Optional[str] = None,
 ) -> tuple[str, AIMessageMetadata]:
     try:
         start_time = time.time()
-        resp = _client.chat.completions.create(
+        resp = await _client.chat.completions.create(
             model=model_version or os.getenv("UF_OPENAI_API_MODEL"),
             messages=messages,
         )
@@ -148,7 +148,7 @@ async def double_chat(
             *history,
             {"role": "user", "content": req.message},
         ]
-        reply_a, metadata_a = get_chat_response_with_metadata(messages_a, model_version)
+        reply_a, metadata_a = await get_chat_response_with_metadata(messages_a, model_version)
 
     if run_agent_b:
         if run_agent_a:
@@ -170,7 +170,7 @@ async def double_chat(
                 {"role": "user", "content": req.message},
             ]
 
-        reply_b, metadata_b = get_chat_response_with_metadata(messages_b, model_version)
+        reply_b, metadata_b = await get_chat_response_with_metadata(messages_b, model_version)
 
     replies: list[str] = []
     metadata_list: list[AIMessageMetadata] = []
@@ -309,18 +309,18 @@ async def chat(
     model_version = os.getenv("UF_OPENAI_API_MODEL")
 
     history = get_last_exchange(request.app.state.messages, conv_id)
-    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
 
     system_instruction = (
         "You are a helpful assistant who generates clear and concise answers "
         "to help students answer some quiz questions."
     )
-    reply, metadata = get_chat_response_with_metadata([
+    reply, metadata = await get_chat_response_with_metadata([
         {"role": "system", "content": system_instruction},
         *history,
         {"role": "user", "content": req.message},
     ], model_version)
 
+    _save_message(request.app.state.messages, "user", user, conv_id, req.message)
     _save_message(
         request.app.state.messages,
         "assistant",
@@ -357,10 +357,7 @@ async def get_conversation_history(
     user: UserPublic = Depends(get_current_user),
 ):
     try:
-        docs = list(request.app.state.messages.find(
-            {"conversation_id": conversation_id},
-            sort=[("created_at", 1)],
-        ))
+        docs = get_conversation_history(request.app.state.messages, conversation_id)
 
         if not docs:
             return ConversationHistoryResponse(conversation_id=conversation_id, messages=[])

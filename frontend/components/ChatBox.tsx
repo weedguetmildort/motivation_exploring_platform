@@ -34,6 +34,7 @@ type ChatBoxProps = {
   quizId: string;
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
+  onLoadingChange?: (loading: boolean) => void;
   externalQuestion?: string | null;
   conversationId?: string | null;
 };
@@ -42,6 +43,7 @@ export default function ChatBox({
   quizId,
   onAssistantMessage,
   onError,
+  onLoadingChange,
   externalQuestion,
   conversationId = null,
 }: ChatBoxProps) {
@@ -77,6 +79,10 @@ export default function ChatBox({
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
   }, [messages, pending]);
+
+  useEffect(() => {
+    onLoadingChange?.(pending);
+  }, [pending]);
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();
@@ -173,6 +179,12 @@ export default function ChatBox({
     setInput("");
     setShowMentions(false);
     await sendMessage(content);
+  }
+
+  function handleCancel() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setPending(false);
   }
 
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -343,11 +355,11 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
-            onClick={onSend}
-            disabled={pending || !input.trim()}
+            className={`rounded-xl px-4 py-2 font-medium text-white ${pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            onClick={pending ? handleCancel : onSend}
+            disabled={!pending && !input.trim()}
           >
-            Send
+            {pending ? "Cancel" : "Send"}
           </button>
         </div>
       </div>

@@ -43,27 +43,8 @@ def get_last_exchange(messages_col: Collection, conv_id: str) -> list[dict]:
 
 
 def get_conversation_history(messages_col: Collection, conv_id: str) -> list[dict]:
-    """Return the full conversation history as alternating user/assistant messages.
-
-    Agent replies (stored as a list) are combined into a single assistant message
-    to satisfy the OpenAI alternating-role requirement:
-        [AGENT A] reply1
-
-        [AGENT B] reply2
-    """
-    docs = list(messages_col.find(
+    """Return all raw message documents for a conversation in chronological order."""
+    return list(messages_col.find(
         {"conversation_id": conv_id},
-        sort=[("created_at", 1)],  # chronological order
+        sort=[("created_at", 1)],
     ))
-
-    history = []
-    for doc in docs:
-        role = doc["role"]
-        content = doc["content"]
-        if role == "user":
-            history.append({"role": "user", "content": content})
-        elif role == "assistant":
-            combined = "\n\n".join(content) if isinstance(content, list) else content
-            history.append({"role": "assistant", "content": combined})
-
-    return history
