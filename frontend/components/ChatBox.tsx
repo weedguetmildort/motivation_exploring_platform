@@ -181,6 +181,12 @@ export default function ChatBox({
     await sendMessage(content);
   }
 
+  function handleCancel() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setPending(false);
+  }
+
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const newValue = e.target.value;
     setInput(newValue);
@@ -349,11 +355,11 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
-            onClick={onSend}
-            disabled={pending || !input.trim()}
+            className={`rounded-xl px-4 py-2 font-medium text-white ${pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            onClick={pending ? handleCancel : onSend}
+            disabled={!pending && !input.trim()}
           >
-            Send
+            {pending ? "Cancel" : "Send"}
           </button>
         </div>
       </div>
