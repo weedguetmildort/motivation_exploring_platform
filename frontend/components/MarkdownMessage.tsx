@@ -74,6 +74,11 @@ const components = {
     <td className="border border-gray-300 px-3 py-2 align-top">{children}</td>
   ),
   hr: () => <hr className="!mt-3 !mb-1 border-gray-300" />,
+  blockquote: ({ children }: { children?: React.ReactNode }) => (
+    <blockquote className="border-2 border-gray-800 rounded px-3 py-2 my-2 break-words overflow-wrap-anywhere text-[1.15em]">
+      {children}
+    </blockquote>
+  ),
 };
 
 const inlineComponents = {
