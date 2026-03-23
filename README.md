@@ -1,6 +1,6 @@
 # Motivation Exploring Platform — Full-Stack Project
 
-A secure, modular, and fully containerized full-stack platform for interactive learning, adaptive questioning, and AI-assisted exploration.  
+A secure, modular, and fully containerized full-stack platform for interactive learning, adaptive questioning, and AI-assisted exploration.
 This system includes user authentication, admin content management, question bank storage, and an AI-powered chat interface enriched with follow-up question suggestions.
 
 ## 🚀 Tech Stack
@@ -39,31 +39,79 @@ This system includes user authentication, admin content management, question ban
 │   │   ├── api/
 │   │   │   ├── auth.py
 │   │   │   ├── chat.py
+│   │   │   ├── demographics.py
 │   │   │   ├── questions.py
-│   │   ├── schemas/
-│   │   ├── services/
+│   │   │   ├── quiz.py
+│   │   │   └── surveys.py
 │   │   ├── core/
-│   │   ├── main.py
+│   │   │   ├── config.py
+│   │   │   └── security.py
+│   │   ├── schemas/
+│   │   │   ├── auth.py
+│   │   │   ├── message.py
+│   │   │   ├── question.py
+│   │   │   ├── quiz.py
+│   │   │   ├── survey.py
+│   │   │   └── user.py
+│   │   ├── services/
+│   │   │   ├── chat.py
+│   │   │   ├── followup.py
+│   │   │   ├── questions.py
+│   │   │   ├── quiz.py
+│   │   │   ├── search.py
+│   │   │   ├── surveys.py
+│   │   │   └── users.py
+│   │   └── main.py
 │   ├── Dockerfile
+│   ├── Dockerfile.dev
 │   └── requirements.txt
 │
 ├── frontend/
-│   ├── pages/
-│   │   ├── index.tsx
-│   │   ├── login.tsx
-│   │   ├── signup.tsx
-│   │   ├── dashboard.tsx
-│   │   ├── admin.tsx
-│   │   ├── playground.tsx
 │   ├── components/
-│   │   ├── ChatBox.tsx
-│   │   ├── QuestionBox.tsx
 │   │   ├── AnswerBox.tsx
-│   │   ├── FollowUpQuestionBox.tsx
+│   │   ├── AuthForm.tsx
+│   │   ├── ChatBox.tsx
+│   │   ├── Disclaimer.tsx
+│   │   ├── MarkdownMessage.tsx
+│   │   ├── MentionSuggestions.tsx
+│   │   └── QuestionBox.tsx
 │   ├── lib/
 │   │   ├── auth.ts
+│   │   ├── chat.ts
+│   │   ├── demographics.ts
 │   │   ├── fetcher.ts
-│   └── Dockerfile
+│   │   ├── mentions.ts
+│   │   ├── messageMetadataStore.ts
+│   │   ├── quiz.ts
+│   │   ├── quizSurvey.ts
+│   │   └── surveys.ts
+│   ├── pages/
+│   │   ├── quiz/
+│   │   │   └── [quiz_id].tsx
+│   │   ├── _app.tsx
+│   │   ├── admin.tsx
+│   │   ├── chat.tsx
+│   │   ├── dashboard.tsx
+│   │   ├── demographics.tsx
+│   │   ├── index.tsx
+│   │   ├── login.tsx
+│   │   ├── playground.tsx
+│   │   ├── profile.tsx
+│   │   ├── questions_panel.tsx
+│   │   ├── signup.tsx
+│   │   ├── survey.tsx
+│   │   └── surveys_panel.tsx
+│   ├── public/
+│   │   └── favicon.png
+│   ├── styles/
+│   │   └── globals.css
+│   ├── Dockerfile
+│   ├── Dockerfile.dev
+│   ├── next.config.js
+│   ├── package.json
+│   ├── postcss.config.js
+│   ├── tailwind.config.js
+│   └── tsconfig.json
 │
 ├── docker-compose.yml
 └── README.md
