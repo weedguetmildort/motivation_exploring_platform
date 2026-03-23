@@ -34,6 +34,7 @@ type ChatBoxProps = {
   quizId: string;
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
+  onLoadingChange?: (loading: boolean) => void;
   externalQuestion?: string | null;
   conversationId?: string | null;
 };
@@ -42,6 +43,7 @@ export default function ChatBox({
   quizId,
   onAssistantMessage,
   onError,
+  onLoadingChange,
   externalQuestion,
   conversationId = null,
 }: ChatBoxProps) {
@@ -77,6 +79,10 @@ export default function ChatBox({
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
   }, [messages, pending]);
+
+  useEffect(() => {
+    onLoadingChange?.(pending);
+  }, [pending]);
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();

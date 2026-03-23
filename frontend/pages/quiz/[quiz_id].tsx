@@ -113,7 +113,7 @@ export default function QuizPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [hasAskedChat, setHasAskedChat] = useState(false);
-  const [chatLoaded, setChatLoaded] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
 
   const quizId =
@@ -203,7 +203,7 @@ export default function QuizPage() {
     if (!current) return;
     setSelectedChoice(null);
     setHasAskedChat(false);
-    setChatLoaded(false);
+    setChatLoading(false);
     setExternalQuestion(null);
   }, [current?.id]);
 
@@ -421,7 +421,7 @@ export default function QuizPage() {
 
                             <button
                               onClick={onSubmit}
-                              disabled={!selectedChoice || submitting || !chatLoaded}
+                              disabled={!selectedChoice || submitting || chatLoading}
                               className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
                             >
                               {submitting ? "Submitting…" : "Submit answer"}
@@ -458,8 +458,7 @@ export default function QuizPage() {
                         quizId={quizId}
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}
-                        onAssistantMessage={() => setChatLoaded(true)}
-                        onError={() => setChatLoaded(true)}
+                        onLoadingChange={setChatLoading}
                       />
                     </div>
                   )}
