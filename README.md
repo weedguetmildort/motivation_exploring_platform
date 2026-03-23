@@ -63,7 +63,6 @@ This system includes user authentication, admin content management, question ban
 │   │   │   └── users.py
 │   │   └── main.py
 │   ├── Dockerfile
-│   ├── Dockerfile.dev
 │   └── requirements.txt
 │
 ├── frontend/
@@ -105,13 +104,7 @@ This system includes user authentication, admin content management, question ban
 │   │   └── favicon.png
 │   ├── styles/
 │   │   └── globals.css
-│   ├── Dockerfile
-│   ├── Dockerfile.dev
-│   ├── next.config.js
-│   ├── package.json
-│   ├── postcss.config.js
-│   ├── tailwind.config.js
-│   └── tsconfig.json
+│   └── Dockerfile
 │
 ├── docker-compose.yml
 └── README.md
