@@ -39,7 +39,7 @@ function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
 
 function isUsersAssignedVariant(
   quizId: string,
-  user?: ExtendedUser | null
+  user?: ExtendedUser | null,
 ): boolean {
   return Boolean(user?.assigned_var && quizId === user.assigned_var);
 }
@@ -214,8 +214,64 @@ export default function QuizPage() {
     if (!user) return;
     if (user.is_admin) return;
 
-    router.replace("/survey");
-  }, [router.isReady, quizCompleted, quizId, user, router]);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await getMe();
+        if (cancelled) return;
+
+        const refreshedUser = res.user as ExtendedUser;
+
+        if (quizId === "base") {
+          if (!refreshedUser.survey_post_base_completed) {
+            router.replace("/survey?stage=post_base");
+            return;
+          }
+
+          if (
+            refreshedUser.survey_post_base_completed &&
+            !refreshedUser.quiz_variant_completed
+          ) {
+            router.replace(
+              refreshedUser.assigned_var
+                ? `/quiz/${refreshedUser.assigned_var}`
+                : "/dashboard",
+            );
+            return;
+          }
+
+          if (
+            refreshedUser.quiz_variant_completed &&
+            !refreshedUser.survey_post_variant_completed
+          ) {
+            router.replace("/survey");
+            return;
+          }
+
+          router.replace("/dashboard");
+          return;
+        }
+
+        // Variant quiz completed
+        if (!refreshedUser.survey_post_variant_completed) {
+          router.replace("/survey?stage=post_variant");
+          return;
+        }
+
+        router.replace("/dashboard");
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          router.replace("/survey");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router.isReady, quizCompleted, quizId, router]);
 
   if (checking) {
     return (
@@ -255,11 +311,7 @@ export default function QuizPage() {
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(
-        quizId,
-        current.id,
-        selectedChoice
-      );
+      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
@@ -355,9 +407,11 @@ export default function QuizPage() {
                 </div>
               ) : (
                 <div className="rounded-xl bg-white p-6 shadow-sm border">
-                  <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
+                  <h2 className="text-lg font-semibold mb-2">
+                    You’re all done!
+                  </h2>
                   <p className="text-sm text-gray-600">
-                    Redirecting you to the next survey…
+                    Finishing your quiz and loading the next step…
                   </p>
                 </div>
               )
@@ -421,7 +475,9 @@ export default function QuizPage() {
 
                             <button
                               onClick={onSubmit}
-                              disabled={!selectedChoice || submitting || chatLoading}
+                              disabled={
+                                !selectedChoice || submitting || chatLoading
+                              }
                               className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
                             >
                               {submitting ? "Submitting…" : "Submit answer"}
