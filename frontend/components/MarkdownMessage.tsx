@@ -74,6 +74,20 @@ const components = {
     <td className="border border-gray-300 px-3 py-2 align-top">{children}</td>
   ),
   hr: () => <hr className="!mt-3 !mb-1 border-gray-300" />,
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
+  ),
+  li: ({ children }: { children?: React.ReactNode }) => (
+    <li className="leading-normal">{children}</li>
+  ),
+  blockquote: ({ children }: { children?: React.ReactNode }) => (
+    <blockquote className="inline-block border-2 border-gray-800 rounded px-3 py-2 my-2 break-words overflow-wrap-anywhere text-[1.15em] max-w-full">
+      {children}
+    </blockquote>
+  ),
 };
 
 const inlineComponents = {
