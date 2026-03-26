@@ -8,7 +8,9 @@ from fastapi import HTTPException
 
 from .questions import get_questions_collection
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload
-from ..schemas.user import SurveyStage
+from ..schemas.user import SurveyStage, AssignedVar
+
+_VARIANT_QUIZ_IDS = {v.value for v in AssignedVar}
 
 MAX_QUIZ_QUESTIONS = 10
 
@@ -108,7 +110,7 @@ def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
             "updated_at": completed_at,
         }
 
-    if quiz_id == "variant":
+    if quiz_id in _VARIANT_QUIZ_IDS:
         return {
             "quiz_variant_completed": True,
             "survey_stage": SurveyStage.post_variant.value,
@@ -129,7 +131,7 @@ def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
             "survey_stage": SurveyStage.pre_base.value,
             "updated_at": datetime.utcnow(),
         }
-    elif quiz_id == "variant":
+    elif quiz_id in _VARIANT_QUIZ_IDS:
         revert = {
             "quiz_variant_completed": False,
             "survey_stage": SurveyStage.post_base.value,
