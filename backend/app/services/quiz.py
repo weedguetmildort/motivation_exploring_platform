@@ -65,12 +65,33 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
     return doc
 
 
-def _find_next_unanswered(doc: dict) -> Optional[str]:
+def _find_next_unanswered(doc: dict, qcol=None) -> Optional[str]:
     answered_map = {a["question_id"] for a in doc.get("answers", []) if a.get("answered_at")}
     for qid in doc.get("question_order", []):
-        if qid not in answered_map:
-            return qid
+        if qid in answered_map:
+            continue
+        if qcol is not None and not qcol.count_documents({"_id": ObjectId(qid)}, limit=1):
+            continue  # question was deleted, skip it
+        return qid
     return None
+
+
+def _mark_quiz_completed(db, doc: dict) -> None:
+    """Mark a quiz attempt as completed and update user-level completion flags."""
+    completed_at = datetime.utcnow()
+    col = get_quiz_attempts_collection(db)
+    col.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {"status": "completed", "updated_at": completed_at}},
+    )
+    users = get_users_collection(db)
+    user_set_doc = _get_user_quiz_update_fields(doc["quiz_id"], completed_at)
+    result = users.update_one(
+        {"_id": ObjectId(doc["user_id"])},
+        {"$set": user_set_doc},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
 
 
 def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
@@ -124,8 +145,38 @@ def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
 
 def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
     qcol = get_questions_collection(db)
-    total = len(doc.get("question_order", []))
-    answered = sum(1 for a in doc.get("answers", []) if a.get("answered_at"))
+    question_order = doc.get("question_order", [])
+    conv_id = doc.get("conversation_id", "")
+
+    if doc["status"] == "completed":
+        # Use raw stored counts — never recompute against current DB state
+        total = len(question_order)
+        answered = sum(1 for a in doc.get("answers", []) if a.get("answered_at"))
+        attempt_pub = QuizAttemptPublic(
+            quiz_id=doc["quiz_id"],
+            status=doc["status"],
+            total_questions=total,
+            answered_count=answered,
+        )
+        return QuizStateResponse(
+            conversation_id=conv_id,
+            attempt=attempt_pub,
+            current_question=None,
+        )
+
+    # In-progress: filter total/answered to only questions that still exist in the DB
+    existing_ids = {
+        str(q["_id"])
+        for q in qcol.find(
+            {"_id": {"$in": [ObjectId(qid) for qid in question_order]}},
+            {"_id": 1},
+        )
+    }
+    total = len(existing_ids)
+    answered = sum(
+        1 for a in doc.get("answers", [])
+        if a.get("answered_at") and a["question_id"] in existing_ids
+    )
 
     attempt_pub = QuizAttemptPublic(
         quiz_id=doc["quiz_id"],
@@ -134,17 +185,15 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         answered_count=answered,
     )
 
-    conv_id = doc.get("conversation_id", "")
-
-    if doc["status"] == "completed":
-        return QuizStateResponse(
-            conversation_id=conv_id,
-            attempt=attempt_pub,
-            current_question=None,
-        )
-
-    next_qid = _find_next_unanswered(doc)
+    next_qid = _find_next_unanswered(doc, qcol)
     if not next_qid:
+        _mark_quiz_completed(db, doc)
+        attempt_pub = QuizAttemptPublic(
+            quiz_id=doc["quiz_id"],
+            status="completed",
+            total_questions=total,
+            answered_count=answered,
+        )
         return QuizStateResponse(
             conversation_id=conv_id,
             attempt=attempt_pub,
@@ -153,7 +202,19 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
 
     qdoc = qcol.find_one({"_id": ObjectId(next_qid)})
     if not qdoc:
-        raise HTTPException(status_code=500, detail="Question not found")
+        # Race condition: deleted between _find_next_unanswered and here
+        _mark_quiz_completed(db, doc)
+        attempt_pub = QuizAttemptPublic(
+            quiz_id=doc["quiz_id"],
+            status="completed",
+            total_questions=total,
+            answered_count=answered,
+        )
+        return QuizStateResponse(
+            conversation_id=conv_id,
+            attempt=attempt_pub,
+            current_question=None,
+        )
 
     question_payload = QuizQuestionPayload(
         id=str(qdoc["_id"]),
@@ -240,31 +301,11 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
         )
 
     updated = col.find_one({"_id": doc["_id"]})
-    next_qid = _find_next_unanswered(updated)
+    qcol = get_questions_collection(db)
+    next_qid = _find_next_unanswered(updated, qcol)
 
     if not next_qid:
-        completed_at = datetime.utcnow()
-
-        col.update_one(
-            {"_id": updated["_id"]},
-            {
-                "$set": {
-                    "status": "completed",
-                    "updated_at": completed_at,
-                }
-            },
-        )
-
-        users = get_users_collection(db)
-        user_set_doc = _get_user_quiz_update_fields(quiz_id, completed_at)
-
-        result = users.update_one(
-            {"_id": ObjectId(user_id)},
-            {"$set": user_set_doc},
-        )
-        if result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="User not found")
-
+        _mark_quiz_completed(db, updated)
         updated = col.find_one({"_id": updated["_id"]})
 
     return updated
