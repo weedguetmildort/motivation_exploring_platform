@@ -26,6 +26,13 @@ interface ChatApiResponse {
   metadata?: AIMessageMetadata[];
 }
 
+export async function loadUserHistory(conversationId: string): Promise<{
+  conversation_id: string;
+  messages: { role: string; content: string | string[] }[];
+}> {
+  return apiFetch(`/api/chat/load_user_history/${conversationId}`);
+}
+
 export async function sendChat(
   quizId: string,
   conversationId: string | null,

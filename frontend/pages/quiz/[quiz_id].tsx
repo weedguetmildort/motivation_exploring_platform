@@ -459,6 +459,7 @@ export default function QuizPage() {
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}
                         onLoadingChange={setChatLoading}
+                        onHistoryLoaded={() => setHasAskedChat(true)}
                       />
                     </div>
                   )}
