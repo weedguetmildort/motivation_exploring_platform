@@ -207,6 +207,55 @@ export default function QuizPage() {
     setExternalQuestion(null);
   }, [current?.id]);
 
+  async function redirectAfterCompletion() {
+    if (!quizId) return;
+    try {
+      const res = await getMe();
+      const refreshedUser = res.user as ExtendedUser;
+
+      if (quizId === "base") {
+        if (!refreshedUser.survey_post_base_completed) {
+          router.replace("/survey?stage=post_base");
+          return;
+        }
+
+        if (
+          refreshedUser.survey_post_base_completed &&
+          !refreshedUser.quiz_variant_completed
+        ) {
+          router.replace(
+            refreshedUser.assigned_var
+              ? `/quiz/${refreshedUser.assigned_var}`
+              : "/dashboard",
+          );
+          return;
+        }
+
+        if (
+          refreshedUser.quiz_variant_completed &&
+          !refreshedUser.survey_post_variant_completed
+        ) {
+          router.replace("/survey");
+          return;
+        }
+
+        router.replace("/dashboard");
+        return;
+      }
+
+      // Variant quiz completed
+      if (!refreshedUser.survey_post_variant_completed) {
+        router.replace("/survey?stage=post_variant");
+        return;
+      }
+
+      router.replace("/dashboard");
+    } catch (e) {
+      console.error(e);
+      router.replace("/survey");
+    }
+  }
+
   useEffect(() => {
     if (!router.isReady) return;
     if (!quizCompleted) return;
@@ -214,63 +263,7 @@ export default function QuizPage() {
     if (!user) return;
     if (user.is_admin) return;
 
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await getMe();
-        if (cancelled) return;
-
-        const refreshedUser = res.user as ExtendedUser;
-
-        if (quizId === "base") {
-          if (!refreshedUser.survey_post_base_completed) {
-            router.replace("/survey?stage=post_base");
-            return;
-          }
-
-          if (
-            refreshedUser.survey_post_base_completed &&
-            !refreshedUser.quiz_variant_completed
-          ) {
-            router.replace(
-              refreshedUser.assigned_var
-                ? `/quiz/${refreshedUser.assigned_var}`
-                : "/dashboard",
-            );
-            return;
-          }
-
-          if (
-            refreshedUser.quiz_variant_completed &&
-            !refreshedUser.survey_post_variant_completed
-          ) {
-            router.replace("/survey");
-            return;
-          }
-
-          router.replace("/dashboard");
-          return;
-        }
-
-        // Variant quiz completed
-        if (!refreshedUser.survey_post_variant_completed) {
-          router.replace("/survey?stage=post_variant");
-          return;
-        }
-
-        router.replace("/dashboard");
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) {
-          router.replace("/survey");
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    redirectAfterCompletion();
   }, [router.isReady, quizCompleted, quizId, router]);
 
   if (checking) {
@@ -394,6 +387,12 @@ export default function QuizPage() {
                       className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
                     >
                       Back to Dashboard
+                    </button>
+                    <button
+                      onClick={redirectAfterCompletion}
+                      className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm hover:bg-green-700"
+                    >
+                      Continue to Next Step
                     </button>
                     <button
                       onClick={async () => {
