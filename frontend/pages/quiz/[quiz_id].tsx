@@ -238,11 +238,15 @@ export default function QuizPage() {
   function onAskAssistantAboutQuestion() {
     if (!current) return;
 
-    const prompt = current.subtitle
-      ? `${current.stem}\n\n${current.subtitle}`
-      : current.stem;
+    const choicesText = current.choices
+      .map((c) => `${c.id}. ${c.label}`)
+      .join("\n");
 
-    setExternalQuestion(prompt);
+    const parts = [current.stem];
+    if (current.subtitle) parts.push(current.subtitle);
+    parts.push(`Answer choices:\n${choicesText}`);
+
+    setExternalQuestion(parts.join("\n\n"));
     setHasAskedChat(true);
   }
 
