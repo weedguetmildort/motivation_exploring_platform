@@ -1,7 +1,8 @@
 # backend/app/api/auth.py
+
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
 from pymongo.errors import DuplicateKeyError
-
+from datetime import datetime, timezone
 from ..core.security import hash_password
 from ..schemas.auth import (
     SignupRequest,
@@ -57,6 +58,10 @@ def build_user_public(doc: dict) -> UserPublic:
     return UserPublic(
         id=str(doc["_id"]),
         email=doc["email"],
+        first_name=doc.get("first_name"),
+        last_name=doc.get("last_name"),
+        consent=doc.get("consent"),
+        consent_given_at=doc.get("consent_given_at"),
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
@@ -67,6 +72,7 @@ def build_user_public(doc: dict) -> UserPublic:
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=survey_stage,
     )
+
 
 def get_current_user(request: Request) -> UserPublic:
     s = get_settings()
@@ -90,19 +96,33 @@ def get_current_user(request: Request) -> UserPublic:
 
     return build_user_public(doc)
 
+
 @router.post("/signup", response_model=AuthResponse)
 def signup(data: SignupRequest, request: Request, response: Response):
     users = get_users_collection(request.app.state.db)
     ensure_indexes(users)
 
+    if data.consent is not True:
+        raise HTTPException(status_code=400, detail="Consent is required")
+
     try:
-        user_pub = create_user(users, data.email, data.password)
+        user_pub = create_user(
+            users,
+            email=data.email,
+            password=data.password,
+            first_name=data.first_name,
+            last_name=data.last_name,
+            consent=data.consent,
+        )
     except DuplicateKeyError:
         raise HTTPException(status_code=400, detail="Email already registered")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
+
 
 @router.post("/login", response_model=AuthResponse)
 def login(data: LoginRequest, request: Request, response: Response):
@@ -117,14 +137,17 @@ def login(data: LoginRequest, request: Request, response: Response):
     set_session_cookie(response, token)
     return AuthResponse(user=user_pub)
 
+
 @router.get("/me", response_model=AuthResponse)
 def me(user: UserPublic = Depends(get_current_user)):
     return AuthResponse(user=user)
+
 
 @router.post("/logout")
 def logout(response: Response):
     clear_session_cookie(response)
     return {"ok": True}
+
 
 @router.post("/change-password")
 def change_password(
@@ -143,7 +166,12 @@ def change_password(
     new_hash = hash_password(data.new_password)
     users.update_one(
         {"_id": doc["_id"]},
-        {"$set": {"password_hash": new_hash}},
+        {
+            "$set": {
+                "password_hash": new_hash,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
     )
 
     return {"ok": True}

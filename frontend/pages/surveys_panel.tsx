@@ -4,7 +4,7 @@ import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
 
 export default function SurveyPanelPage() {
-  type SurveyStage = "pre_quiz" | "post_quiz" | string;
+  type SurveyStage = "pre_quiz" | "post_base" | string;
   type SurveyItemType = "likert" | "single_select";
 
   type SurveyOption = { id: string; label: string };
@@ -81,7 +81,7 @@ export default function SurveyPanelPage() {
   const stages = useMemo(
     () => [
       { value: "pre_quiz", label: "Pre-Quiz" },
-      { value: "post_quiz", label: "Post-Quiz" },
+      { value: "post_base", label: "Post-Quiz" },
     ],
     [],
   );

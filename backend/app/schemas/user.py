@@ -1,7 +1,7 @@
 # backend/app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
-
+from datetime import datetime
 from enum import Enum
 
 class SurveyStage(str, Enum):
@@ -19,16 +19,27 @@ class UserInDB(BaseModel):
     id: str
     email: EmailStr
     password_hash: str
+    first_name: str
+    last_name: str
+    consent: bool = True
+    consent_given_at: datetime
     assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
 
 class UserCreate(BaseModel):
+    first_name: str = Field(min_length=1)
+    last_name: str = Field(min_length=1)
     email: EmailStr
     password: str = Field(min_length=6)
+    consent: bool
 
 class UserPublic(BaseModel):
     id: str
     email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    consent: Optional[bool] = None
+    consent_given_at: Optional[datetime] = None
     assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
     demographics_completed: bool = False
@@ -44,6 +55,10 @@ class UserDBDoc(BaseModel):
     _id: str
     email: EmailStr
     password_hash: str
+    first_name: str
+    last_name: str
+    consent: bool = True
+    consent_given_at: datetime
     assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
     demographics_completed: bool = False

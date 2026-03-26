@@ -8,8 +8,11 @@ type Props = {
 
 export default function AuthForm({ mode }: Props) {
   const router = useRouter();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [consent, setConsent] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,14 +21,33 @@ export default function AuthForm({ mode }: Props) {
     if (pending) return;
 
     setError(null);
+
+    if (mode === "signup") {
+      if (!firstName.trim() || !lastName.trim()) {
+        setError("First name and last name are required.");
+        return;
+      }
+
+      if (!consent) {
+        setError("You must consent to participate in the study.");
+        return;
+      }
+    }
+
     setPending(true);
     try {
       if (mode === "login") {
         await login(email.trim(), password);
       } else {
-        await signup(email.trim(), password);
+        await signup({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          email: email.trim(),
+          password,
+          consent,
+        });
       }
-      // On success, go to chat
+
       router.push("/dashboard");
     } catch (err: any) {
       setError(err?.message || "Something went wrong.");
@@ -42,6 +64,32 @@ export default function AuthForm({ mode }: Props) {
       <h1 className="mb-4 text-xl font-semibold">
         {mode === "login" ? "Log in" : "Create an account"}
       </h1>
+
+      {mode === "signup" && (
+        <>
+          <label className="mb-2 block text-sm font-medium">First Name</label>
+          <input
+            type="text"
+            autoComplete="given-name"
+            className="mb-4 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring"
+            placeholder="John"
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            required
+          />
+
+          <label className="mb-2 block text-sm font-medium">Last Name</label>
+          <input
+            type="text"
+            autoComplete="family-name"
+            className="mb-4 w-full rounded-xl border px-3 py-2 focus:outline-none focus:ring"
+            placeholder="Doe"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            required
+          />
+        </>
+      )}
 
       <label className="mb-2 block text-sm font-medium">Email</label>
       <input
@@ -64,6 +112,22 @@ export default function AuthForm({ mode }: Props) {
         onChange={(e) => setPassword(e.target.value)}
         required
       />
+
+      {mode === "signup" && (
+        <label className="mb-4 flex items-start gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+            required
+          />
+          <span>
+            I consent to participate in this study and understand that my
+            information will be used for research purposes.
+          </span>
+        </label>
+      )}
 
       {error && (
         <div role="alert" className="mb-3 text-sm text-red-600">
