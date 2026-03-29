@@ -391,8 +391,8 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className={`rounded-xl px-4 py-2 font-medium text-white ${pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
-            onClick={pending ? handleCancel : onSend}
+            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            onClick={pending && !disableCancel ? handleCancel : onSend}
             disabled={(!pending && !input.trim()) || (pending && disableCancel)}
           >
             {pending ? "Cancel" : "Send"}
