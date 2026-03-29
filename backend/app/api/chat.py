@@ -4,13 +4,17 @@ import time
 import json
 import asyncio
 from typing import Optional, AsyncGenerator
-from pydantic import BaseModel
 from openai import AsyncOpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
+from ..schemas.chat import (
+    ChatRequest, ChatResponse, FollowupChatResponse, FollowupResponse,
+    UserMessageData, UserConversationHistoryResponse,
+    ConversationMessageData, ConversationHistoryResponse,
+)
 from .auth import get_current_user
 from ..services.chat import get_last_exchange, get_conversation_history as fetch_conversation_history
 from ..services.search import get_chat_response_with_search
@@ -25,18 +29,6 @@ MAX_TOKENS: int = 1000
 TEMPERATURE: float = 0.5
 
 
-class ChatRequest(BaseModel):
-    message: str
-    conversation_id: str | None = None
-    agents: list[str] = []
-
-
-class ChatResponse(BaseModel):
-    reply: list[str]
-    conversation_id: str
-    metadata: Optional[list[AIMessageMetadata]] = None
-
-
 def _extract_metadata_from_response(
     resp,
     model_version: Optional[str] = None,
@@ -48,11 +40,6 @@ def _extract_metadata_from_response(
         output_tokens=getattr(resp.usage, "completion_tokens", None) if resp.usage else None,
     )
 
-
-class FollowupChatResponse(BaseModel):
-    reply: list[str]
-    conversation_id: str
-    followup_questions: list[str]
 
 # Initialize OpenAI client with UF proxy settings (from env)
 _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
@@ -229,10 +216,6 @@ async def double_chat(
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
-class FollowupResponse(BaseModel):
-    questions: list[str]
-
-
 @router.post("/chat/followup")
 async def followup_quiz_chat(
     req: ChatRequest,
@@ -374,29 +357,6 @@ async def chat(
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-class UserMessageData(BaseModel):
-    role: str
-    content: str | list[str]
-
-
-class UserConversationHistoryResponse(BaseModel):
-    conversation_id: str
-    messages: list[UserMessageData]
-
-
-class ConversationMessageData(BaseModel):
-    role: str
-    content: str | list[str]
-    created_at: datetime
-    metadata: Optional[AIMessageMetadata] = None
-    user_email: Optional[str] = None
-
-
-class ConversationHistoryResponse(BaseModel):
-    conversation_id: str
-    messages: list[ConversationMessageData]
 
 
 @router.get("/chat/get_history/{conversation_id}", response_model=ConversationHistoryResponse)
