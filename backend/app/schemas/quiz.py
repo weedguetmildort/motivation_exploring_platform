@@ -8,6 +8,8 @@ class QuizAnswerRecord(BaseModel):
     shown_at: datetime
     answered_at: Optional[datetime] = None
     choice_id: Optional[str] = None
+    marked_correct: Optional[bool] = None
+    #TODO: should this also include the correct answer choice? 
 
 class QuizAttemptStatus(str):
     # not an actual Enum class to keep it simple for now

@@ -3,38 +3,41 @@ from fastapi import HTTPException
 from typing import List
 from datetime import datetime
 from pymongo.collection import Collection
-from ..schemas.question import QuestionCreate, QuestionPublic, QuestionUpdate
+from ..schemas.question import QuestionCreate, QuestionPublic, QuestionAdminPublic, QuestionUpdate
 
 def get_questions_collection(db) -> Collection:
     return db["questions"]
 
-def create_question(col: Collection, data: QuestionCreate) -> QuestionPublic:
+def create_question(col: Collection, data: QuestionCreate) -> QuestionAdminPublic:
     doc = {
         "stem": data.stem,
         "subtitle": data.subtitle,
         "choices": [c.model_dump() for c in data.choices],
+        "correct_choice_id": data.correct_choice_id,
         "created_at": datetime.utcnow(),
         "active": True,
     }
     res = col.insert_one(doc)
     doc["_id"] = res.inserted_id
-    return QuestionPublic(
+    return QuestionAdminPublic(
         id=str(doc["_id"]),
         stem=doc["stem"],
         subtitle=doc.get("subtitle"),
         choices=doc["choices"],
+        correct_choice_id=doc["correct_choice_id"],
     )
 
-def list_questions(col: Collection, limit: int = 100) -> List[QuestionPublic]:
+def list_questions(col: Collection, limit: int = 100) -> List[QuestionAdminPublic]:
     docs = col.find().sort("created_at", -1).limit(limit)
-    items: List[QuestionPublic] = []
+    items: List[QuestionAdminPublic] = []
     for doc in docs:
         items.append(
-            QuestionPublic(
+            QuestionAdminPublic(
                 id=str(doc["_id"]),
                 stem=doc["stem"],
                 subtitle=doc.get("subtitle"),
                 choices=doc["choices"],
+                correct_choice_id=doc.get("correct_choice_id", ""),
             )
         )
     return items
@@ -60,11 +63,12 @@ def update_question(col, question_id: str, data: QuestionUpdate) -> QuestionPubl
     if not res:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    return QuestionPublic(
+    return QuestionAdminPublic(
         id=str(res["_id"]),
         stem=res["stem"],
         subtitle=res.get("subtitle"),
         choices=res["choices"],
+        correct_choice_id=res.get("correct_choice_id", ""),
     )
 
 def delete_question(col, question_id: str) -> None:

@@ -9,9 +9,16 @@ class QuestionCreate(BaseModel):
     stem: str
     subtitle: str | None = None
     choices: List[QuestionChoice]
+    correct_choice_id: str
 
-class QuestionPublic(QuestionCreate):
+class QuestionPublic(BaseModel):
     id: str
+    stem: str
+    subtitle: str | None = None
+    choices: List[QuestionChoice]
+
+class QuestionAdminPublic(QuestionPublic):
+    correct_choice_id: str
 
 class QuestionUpdate(QuestionCreate):
     pass
