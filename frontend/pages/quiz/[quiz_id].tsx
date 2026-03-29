@@ -8,7 +8,10 @@ import {
   getQuizState,
   submitQuizAnswer,
   resetQuiz,
+  getQuizResults,
   type QuizStateResponse,
+  type QuizResultsResponse,
+  type QuizResultItem,
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 
@@ -112,6 +115,7 @@ export default function QuizPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [quizResults, setQuizResults] = useState<QuizResultsResponse | null>(null);
   const [hasAskedChat, setHasAskedChat] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
@@ -268,6 +272,13 @@ export default function QuizPage() {
     redirectAfterCompletion();
   }, [router.isReady, quizCompleted, quizId, router]);
 
+  useEffect(() => {
+    if (!quizCompleted || !user?.is_admin || !quizId) return;
+    let cancel = false;
+    getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
+    return () => { cancel = true; };
+  }, [quizCompleted, user?.is_admin, quizId]);
+
   if (checking) {
     return (
       <div className="grid min-h-screen place-items-center">
@@ -380,9 +391,28 @@ export default function QuizPage() {
                   <h2 className="text-lg font-semibold mb-2">
                     Quiz completed (admin view)
                   </h2>
-                  <p className="text-sm text-gray-600 mb-4">
-                    Reset to take it again, or go back to the dashboard.
-                  </p>
+
+                  {quizResults && (
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-gray-800 mb-2">
+                        {quizResults.correct_count} of {quizResults.total_questions} correct
+                      </p>
+                      {quizResults.items.filter((item) => !item.is_correct).length > 0 && (
+                        <ul className="space-y-1">
+                          {quizResults.items
+                            .filter((item) => !item.is_correct)
+                            .map((item: QuizResultItem) => (
+                              <li key={item.question_id} className="text-sm text-gray-700">
+                                <span className="font-medium text-red-600">Question {item.question_number}</span>{": "}
+                                answered: {item.user_choice_id.toUpperCase()}. {item.user_choice_label}, {" "}
+                                correct answer: {item.correct_choice_id.toUpperCase()}. {item.correct_choice_label}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex gap-3">
                     <button
                       onClick={() => router.push("/dashboard")}
@@ -403,6 +433,7 @@ export default function QuizPage() {
                         const state = await getQuizState(quizId);
                         setQuizState(state);
                         setSelectedChoice(null);
+                        setQuizResults(null);
                       }}
                       className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
                     >

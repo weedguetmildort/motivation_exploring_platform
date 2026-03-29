@@ -52,6 +52,7 @@ def update_question(col, question_id: str, data: QuestionUpdate) -> QuestionPubl
         "stem": data.stem,
         "subtitle": data.subtitle,
         "choices": [c.model_dump() for c in data.choices],
+        "correct_choice_id": data.correct_choice_id,
     }
 
     res = col.find_one_and_update(

@@ -7,7 +7,7 @@ from pymongo.collection import Collection
 from fastapi import HTTPException
 
 from .questions import get_questions_collection
-from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload
+from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload, QuizResultItem, QuizResultsResponse
 from ..schemas.user import SurveyStage, AssignedVar
 
 _VARIANT_QUIZ_IDS = {v.value for v in AssignedVar}
@@ -272,6 +272,10 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
 
     now = datetime.utcnow()
 
+    qcol = get_questions_collection(db)
+    qdoc = qcol.find_one({"_id": ObjectId(question_id)}, {"correct_choice_id": 1})
+    is_correct = bool(qdoc and qdoc.get("correct_choice_id") == choice_id)
+
     res = col.update_one(
         {
             "_id": doc["_id"],
@@ -281,6 +285,7 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
             "$set": {
                 "answers.$.choice_id": choice_id,
                 "answers.$.answered_at": now,
+                "answers.$.marked_correct": is_correct,
                 "updated_at": now,
             }
         },
@@ -296,6 +301,7 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
                         "shown_at": now,
                         "answered_at": now,
                         "choice_id": choice_id,
+                        "marked_correct": is_correct,
                     }
                 },
                 "$set": {"updated_at": now},
@@ -303,7 +309,6 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
         )
 
     updated = col.find_one({"_id": doc["_id"]})
-    qcol = get_questions_collection(db)
     next_qid = _find_next_unanswered(updated, qcol)
 
     if not next_qid:
@@ -311,3 +316,46 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
         updated = col.find_one({"_id": updated["_id"]})
 
     return updated
+
+# (Admin view for now) Get incorrect questions (id, selected and correct answers) and completion score
+def get_quiz_results(db, user_id: str, quiz_id: str) -> QuizResultsResponse:
+    col = get_quiz_attempts_collection(db)
+    doc = col.find_one({"user_id": user_id, "quiz_id": quiz_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No quiz attempt found")
+
+    qcol = get_questions_collection(db)
+    question_order = doc.get("question_order", [])
+    answers_by_qid = {a["question_id"]: a for a in doc.get("answers", []) if a.get("answered_at")}
+
+    items = []
+    for qid in question_order:
+        ans = answers_by_qid.get(qid)
+        if not ans:
+            continue
+        qdoc = qcol.find_one({"_id": ObjectId(qid)}, {"stem": 1, "choices": 1, "correct_choice_id": 1})
+        if not qdoc:
+            continue
+
+        choices_map = {c["id"]: c["label"] for c in qdoc.get("choices", [])}
+        correct_id = qdoc.get("correct_choice_id", "")
+        user_id_choice = ans.get("choice_id", "")
+
+        items.append(QuizResultItem(
+            question_number=question_order.index(qid) + 1,
+            question_id=qid,
+            stem=qdoc["stem"],
+            user_choice_id=user_id_choice,
+            user_choice_label=choices_map.get(user_id_choice, ""),
+            correct_choice_id=correct_id,
+            correct_choice_label=choices_map.get(correct_id, ""),
+            is_correct=bool(ans.get("marked_correct")),
+        ))
+
+    correct_count = sum(1 for item in items if item.is_correct)
+    return QuizResultsResponse(
+        quiz_id=quiz_id,
+        total_questions=len(items),
+        correct_count=correct_count,
+        items=items,
+    )

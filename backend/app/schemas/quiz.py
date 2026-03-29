@@ -37,3 +37,20 @@ class QuizStateResponse(BaseModel):
 class SubmitAnswerRequest(BaseModel):
     question_id: str
     choice_id: str
+
+# For results page after quiz completion (admin view only)
+class QuizResultItem(BaseModel):
+    question_number: int
+    question_id: str
+    stem: str
+    user_choice_id: str
+    user_choice_label: str
+    correct_choice_id: str
+    correct_choice_label: str
+    is_correct: bool
+
+class QuizResultsResponse(BaseModel):
+    quiz_id: str
+    total_questions: int
+    correct_count: int
+    items: List[QuizResultItem]
