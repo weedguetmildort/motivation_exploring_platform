@@ -115,6 +115,7 @@ export default function QuizPage() {
   const [hasAskedChat, setHasAskedChat] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
+  const [firstChatResponded, setFirstChatResponded] = useState(false);
 
   const quizId =
     rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
@@ -205,7 +206,57 @@ export default function QuizPage() {
     setHasAskedChat(false);
     setChatLoading(false);
     setExternalQuestion(null);
+    setFirstChatResponded(false);
   }, [current?.id]);
+
+  async function redirectAfterCompletion() {
+    if (!quizId) return;
+    try {
+      const res = await getMe();
+      const refreshedUser = res.user as ExtendedUser;
+
+      if (quizId === "base") {
+        if (!refreshedUser.survey_post_base_completed) {
+          router.replace("/survey?stage=post_base");
+          return;
+        }
+
+        if (
+          refreshedUser.survey_post_base_completed &&
+          !refreshedUser.quiz_variant_completed
+        ) {
+          router.replace(
+            refreshedUser.assigned_var
+              ? `/quiz/${refreshedUser.assigned_var}`
+              : "/dashboard",
+          );
+          return;
+        }
+
+        if (
+          refreshedUser.quiz_variant_completed &&
+          !refreshedUser.survey_post_variant_completed
+        ) {
+          router.replace("/survey");
+          return;
+        }
+
+        router.replace("/dashboard");
+        return;
+      }
+
+      // Variant quiz completed
+      if (!refreshedUser.survey_post_variant_completed) {
+        router.replace("/survey?stage=post_variant");
+        return;
+      }
+
+      router.replace("/dashboard");
+    } catch (e) {
+      console.error(e);
+      router.replace("/survey");
+    }
+  }
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -214,63 +265,7 @@ export default function QuizPage() {
     if (!user) return;
     if (user.is_admin) return;
 
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await getMe();
-        if (cancelled) return;
-
-        const refreshedUser = res.user as ExtendedUser;
-
-        if (quizId === "base") {
-          if (!refreshedUser.survey_post_base_completed) {
-            router.replace("/survey?stage=post_base");
-            return;
-          }
-
-          if (
-            refreshedUser.survey_post_base_completed &&
-            !refreshedUser.quiz_variant_completed
-          ) {
-            router.replace(
-              refreshedUser.assigned_var
-                ? `/quiz/${refreshedUser.assigned_var}`
-                : "/dashboard",
-            );
-            return;
-          }
-
-          if (
-            refreshedUser.quiz_variant_completed &&
-            !refreshedUser.survey_post_variant_completed
-          ) {
-            router.replace("/survey");
-            return;
-          }
-
-          router.replace("/dashboard");
-          return;
-        }
-
-        // Variant quiz completed
-        if (!refreshedUser.survey_post_variant_completed) {
-          router.replace("/survey?stage=post_variant");
-          return;
-        }
-
-        router.replace("/dashboard");
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) {
-          router.replace("/survey");
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    redirectAfterCompletion();
   }, [router.isReady, quizCompleted, quizId, router]);
 
   if (checking) {
@@ -294,11 +289,15 @@ export default function QuizPage() {
   function onAskAssistantAboutQuestion() {
     if (!current) return;
 
-    const prompt = current.subtitle
-      ? `${current.stem}\n\n${current.subtitle}`
-      : current.stem;
+    const choicesText = current.choices
+      .map((c) => `${c.id}. ${c.label}`)
+      .join("\n");
 
-    setExternalQuestion(prompt);
+    const parts = [current.stem];
+    if (current.subtitle) parts.push(current.subtitle);
+    parts.push(`Answer choices:\n${choicesText}`);
+
+    setExternalQuestion(parts.join("\n\n"));
     setHasAskedChat(true);
   }
 
@@ -390,6 +389,12 @@ export default function QuizPage() {
                       className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
                     >
                       Back to Dashboard
+                    </button>
+                    <button
+                      onClick={redirectAfterCompletion}
+                      className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm hover:bg-green-700"
+                    >
+                      Continue to Next Step
                     </button>
                     <button
                       onClick={async () => {
@@ -515,6 +520,9 @@ export default function QuizPage() {
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}
                         onLoadingChange={setChatLoading}
+                        onHistoryLoaded={() => setHasAskedChat(true)}
+                        disableCancel={!firstChatResponded}
+                        onAssistantMessage={() => setFirstChatResponded(true)}
                       />
                     </div>
                   )}

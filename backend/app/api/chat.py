@@ -9,7 +9,7 @@ from typing import Optional
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
 from .auth import get_current_user
-from ..services.chat import get_last_exchange, get_conversation_history
+from ..services.chat import get_last_exchange, get_conversation_history as fetch_conversation_history
 from ..services.search import get_chat_response_with_search
 from ..services.followup import generate_followup_questions
 
@@ -337,6 +337,16 @@ async def chat(
     )
 
 
+class UserMessageData(BaseModel):
+    role: str
+    content: str | list[str]
+
+
+class UserConversationHistoryResponse(BaseModel):
+    conversation_id: str
+    messages: list[UserMessageData]
+
+
 class ConversationMessageData(BaseModel):
     role: str
     content: str | list[str]
@@ -350,14 +360,14 @@ class ConversationHistoryResponse(BaseModel):
     messages: list[ConversationMessageData]
 
 
-@router.get("/chat/history/{conversation_id}", response_model=ConversationHistoryResponse)
+@router.get("/chat/get_history/{conversation_id}", response_model=ConversationHistoryResponse)
 async def get_conversation_history(
     conversation_id: str,
     request: Request,
     user: UserPublic = Depends(get_current_user),
 ):
     try:
-        docs = get_conversation_history(request.app.state.messages, conversation_id)
+        docs = fetch_conversation_history(request.app.state.messages, conversation_id)
 
         if not docs:
             return ConversationHistoryResponse(conversation_id=conversation_id, messages=[])
@@ -397,3 +407,23 @@ async def get_conversation_history(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve conversation: {str(e)}")
+
+
+@router.get("/chat/load_user_history/{conversation_id}", response_model=UserConversationHistoryResponse)
+async def load_user_history(
+    conversation_id: str,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    all_docs = fetch_conversation_history(request.app.state.messages, conversation_id)
+    if not all_docs:
+        return UserConversationHistoryResponse(conversation_id=conversation_id, messages=[])
+    if all_docs[0].get("user_id") != user.id:
+        raise HTTPException(status_code=403, detail="Unauthorized access to conversation")
+
+    user_docs = [d for d in all_docs if d["role"] == "user"][-5:]
+    assistant_docs = [d for d in all_docs if d["role"] == "assistant"][-5:]
+    combined = sorted(user_docs + assistant_docs, key=lambda d: d["created_at"])
+
+    messages = [UserMessageData(role=d["role"], content=d["content"]) for d in combined]
+    return UserConversationHistoryResponse(conversation_id=conversation_id, messages=messages)

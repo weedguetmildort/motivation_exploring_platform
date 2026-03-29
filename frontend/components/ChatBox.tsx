@@ -1,6 +1,6 @@
 // frontend/components/ChatBox.tsx
 import { useEffect, useRef, useState } from "react";
-import { sendChat } from "../lib/chat";
+import { sendChat, loadUserHistory } from "../lib/chat";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
 import {
@@ -35,8 +35,10 @@ type ChatBoxProps = {
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
   onLoadingChange?: (loading: boolean) => void;
+  onHistoryLoaded?: () => void;
   externalQuestion?: string | null;
   conversationId?: string | null;
+  disableCancel?: boolean;
 };
 
 export default function ChatBox({
@@ -44,8 +46,10 @@ export default function ChatBox({
   onAssistantMessage,
   onError,
   onLoadingChange,
+  onHistoryLoaded,
   externalQuestion,
   conversationId = null,
+  disableCancel = false,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -59,9 +63,41 @@ export default function ChatBox({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const historyFetched = useRef(false);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!activeConvId || historyFetched.current) return;
+    historyFetched.current = true;
+    let cancelled = false;
+    loadUserHistory(activeConvId).then(({ messages }) => {
+      if (cancelled || messages.length === 0) return;
+      const loaded: Msg[] = [];
+      for (const m of messages) {
+        if (m.role === "user") {
+          loaded.push({ id: crypto.randomUUID(), role: "user", content: m.content as string, ts: 0 });
+        } else {
+          const replies = Array.isArray(m.content) ? m.content : [m.content];
+          replies.forEach((r, i) => {
+            loaded.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: r,
+              ts: 0,
+              bot: agentFilter === "double"
+                ? (["A", "B"][i] as Bot ?? undefined)
+                : replies.length > 1 ? (["A", "B", "C", "D"][i] as Bot ?? "A") : undefined,
+            });
+          });
+        }
+      }
+      onHistoryLoaded?.();
+      setMessages(loaded);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeConvId]); // runs once when activeConvId first becomes available
 
   useEffect(() => {
     if (conversationId) {
@@ -355,9 +391,9 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className={`rounded-xl px-4 py-2 font-medium text-white ${pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
-            onClick={pending ? handleCancel : onSend}
-            disabled={!pending && !input.trim()}
+            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            onClick={pending && !disableCancel ? handleCancel : onSend}
+            disabled={(!pending && !input.trim()) || (pending && disableCancel)}
           >
             {pending ? "Cancel" : "Send"}
           </button>
