@@ -1,7 +1,8 @@
 '''
 Services for the quiz that are specifically for analysis after completion rather than for the quiz flow itself. These are not currently used by any API endpoints but can be imported and used in ad-hoc scripts or new endpoints as needed.
 
-get_question_accuracy(): query accuracy across all users for a specific question. Optional filter by quiz id 
+get_question_accuracy(): query accuracy across all users for a specific question. 
+- Optional filter by quiz id 
 get_quiz_accuracy(): query overall accuracy for a quiz type across all users.
 
 Useful for determining how the quiz type impacts accuracy overall and for different types of questions.
