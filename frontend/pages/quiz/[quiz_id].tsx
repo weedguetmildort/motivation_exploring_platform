@@ -115,6 +115,7 @@ export default function QuizPage() {
   const [hasAskedChat, setHasAskedChat] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
+  const [firstChatResponded, setFirstChatResponded] = useState(false);
 
   const quizId =
     rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
@@ -205,6 +206,7 @@ export default function QuizPage() {
     setHasAskedChat(false);
     setChatLoading(false);
     setExternalQuestion(null);
+    setFirstChatResponded(false);
   }, [current?.id]);
 
   async function redirectAfterCompletion() {
@@ -519,6 +521,8 @@ export default function QuizPage() {
                         externalQuestion={externalQuestion}
                         onLoadingChange={setChatLoading}
                         onHistoryLoaded={() => setHasAskedChat(true)}
+                        disableCancel={!firstChatResponded}
+                        onAssistantMessage={() => setFirstChatResponded(true)}
                       />
                     </div>
                   )}

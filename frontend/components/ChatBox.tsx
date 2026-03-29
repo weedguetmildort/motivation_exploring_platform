@@ -38,6 +38,7 @@ type ChatBoxProps = {
   onHistoryLoaded?: () => void;
   externalQuestion?: string | null;
   conversationId?: string | null;
+  disableCancel?: boolean;
 };
 
 export default function ChatBox({
@@ -48,6 +49,7 @@ export default function ChatBox({
   onHistoryLoaded,
   externalQuestion,
   conversationId = null,
+  disableCancel = false,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -391,7 +393,7 @@ export default function ChatBox({
           <button
             className={`rounded-xl px-4 py-2 font-medium text-white ${pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
             onClick={pending ? handleCancel : onSend}
-            disabled={!pending && !input.trim()}
+            disabled={(!pending && !input.trim()) || (pending && disableCancel)}
           >
             {pending ? "Cancel" : "Send"}
           </button>
