@@ -18,14 +18,6 @@ export interface ChatResponse {
   metadata?: AIMessageMetadata[];
 }
 
-interface ChatApiResponse {
-  reply?: string[];
-  message?: string;
-  conversation_id?: string;
-  followup_questions?: string[];
-  metadata?: AIMessageMetadata[];
-}
-
 export async function loadUserHistory(conversationId: string): Promise<{
   conversation_id: string;
   messages: { role: string; content: string | string[] }[];
@@ -39,28 +31,75 @@ export async function sendChat(
   message: string,
   agents: string[] = [],
   signal?: AbortSignal,
+  onToken?: (delta: string, agent?: string) => void,
 ): Promise<ChatResponse> {
-  const data = await apiFetch<ChatApiResponse>(
-    `/api/chat/${quizId}`,
-    {
-      method: "POST",
-      signal,
-      body: JSON.stringify({
-        message,
-        conversation_id: conversationId,
-        agents,
-      }),
+  const resp = await fetch(`/api/chat/${quizId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    signal,
+    body: JSON.stringify({ message, conversation_id: conversationId, agents }),
+  });
+
+  if (!resp.ok) {
+    let detail = `${resp.status} ${resp.statusText}`;
+    try {
+      const data = await resp.json();
+      detail = data.detail ?? data.message ?? detail;
+    } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+
+  // All chat endpoints now return SSE (text/event-stream).
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let sseBuffer = "";
+  const replyMap: Record<string, string> = {};
+  let returnedConvId = conversationId ?? "";
+  let followupQuestions: string[] | undefined;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split("\n");
+      sseBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        let event: Record<string, unknown>;
+        try {
+          event = JSON.parse(line.slice(6));
+        } catch {
+          continue;
+        }
+        if (event.type === "token") {
+          const delta = (event.content as string) ?? "";
+          const agent = event.agent != null ? (event.agent as string) : undefined;
+          const key = agent ?? "default";
+          replyMap[key] = (replyMap[key] ?? "") + delta;
+          onToken?.(delta, agent);
+        } else if (event.type === "followup") {
+          followupQuestions = event.questions as string[];
+        } else if (event.type === "done") {
+          returnedConvId = (event.conversation_id as string) ?? returnedConvId;
+        } else if (event.type === "error") {
+          throw new Error((event.detail as string) ?? "Upstream AI request failed");
+        }
+      }
     }
-  );
+  } finally {
+    reader.releaseLock();
+  }
 
-  const replies = Array.isArray(data.reply)
-    ? data.reply
-    : [(data.reply ?? data.message ?? "").toString()];
+  let replies: string[];
+  if ("A" in replyMap || "B" in replyMap) {
+    replies = [];
+    if ("A" in replyMap) replies.push(replyMap["A"]);
+    if ("B" in replyMap) replies.push(replyMap["B"]);
+  } else {
+    replies = [replyMap["default"] ?? ""];
+  }
 
-  return {
-    replies,
-    conversationId: data.conversation_id ?? conversationId ?? "",
-    followupQuestions: data.followup_questions,
-    metadata: data.metadata,
-  };
+  return { replies, conversationId: returnedConvId, followupQuestions };
 }
