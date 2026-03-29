@@ -15,6 +15,12 @@ from ..services.followup import generate_followup_questions
 
 router = APIRouter()
 
+# Max tokens the AI may generate per response. 0 = no limit. Valid range: 1–4096 (model-dependent).
+MAX_TOKENS: int = 1000
+
+# Controls response randomness. 0.0 = fully deterministic, 2.0 = very random. Valid range: 0.0–2.0. Recommended: 0.0–1.0.
+TEMPERATURE: float = 0.5
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -62,6 +68,8 @@ async def get_chat_response(messages: list[dict]) -> str:
         resp = await _client.chat.completions.create(
             model=os.getenv("UF_OPENAI_API_MODEL"),
             messages=messages,
+            temperature=TEMPERATURE,
+            **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception:
@@ -77,10 +85,11 @@ async def get_chat_response_with_metadata(
         resp = await _client.chat.completions.create(
             model=model_version or os.getenv("UF_OPENAI_API_MODEL"),
             messages=messages,
+            temperature=TEMPERATURE,
+            **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
         )
         processing_time_ms = int((time.time() - start_time) * 1000)
         reply = (resp.choices[0].message.content or "").strip()
-
         metadata = _extract_metadata_from_response(resp, model_version)
         metadata.processing_time_ms = processing_time_ms
         return reply, metadata
