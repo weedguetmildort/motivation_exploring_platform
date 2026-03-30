@@ -160,6 +160,14 @@ export default function SurveyPage() {
     Record<string, number | string | string[]>
   >({});
 
+  function isUnansweredValue(value: unknown): boolean {
+    if (value === undefined || value === null) return true;
+    if (typeof value === "string") return value.trim() === "";
+    if (typeof value === "number") return !Number.isFinite(value);
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  }
+
   const rawSurveyStage = isSurveyStage(user?.survey_stage)
     ? user.survey_stage
     : null;
@@ -248,13 +256,7 @@ export default function SurveyPage() {
   const requiredUnanswered = useMemo(() => {
     return items
       .filter((i) => i.required)
-      .filter((i) => {
-        const v = values[i.id];
-        if (v === undefined) return true;
-        if (typeof v === "string" && v.trim() === "") return true;
-        if (Array.isArray(v) && v.length === 0) return true;
-        return false;
-      });
+      .filter((i) => isUnansweredValue(values[i.id]));
   }, [items, values]);
 
   async function onLogout() {
@@ -286,9 +288,7 @@ export default function SurveyPage() {
       const answers: SurveyAnswer[] = items
         .map((i) => {
           const v = values[i.id];
-          if (v === undefined) return null;
-          if (typeof v === "string" && v.trim() === "") return null;
-          if (Array.isArray(v) && v.length === 0) return null;
+          if (isUnansweredValue(v)) return null;
           return { item_id: i.id, value: v };
         })
         .filter(Boolean) as SurveyAnswer[];
