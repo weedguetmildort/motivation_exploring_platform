@@ -343,7 +343,7 @@ export default function ChatBox({
   return (
     <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <div className="p-4 border-b sticky top-0 bg-white/80 backdrop-blur rounded-t-2xl">
-        <h2 className="text-lg font-semibold">Chat</h2>
+        <h2 className="text-lg 2xl:text-xl font-semibold text-gray-900">Chat</h2>
       </div>
 
       <div
@@ -410,7 +410,7 @@ export default function ChatBox({
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
-            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-sm"
+            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring font-medium text-gray-900"
             placeholder="Type a message…"
             value={input}
             onChange={handleInputChange}

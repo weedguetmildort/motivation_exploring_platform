@@ -393,7 +393,7 @@ export default function QuizPage() {
                           Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
                         </h2>
                         {current.subtitle && (
-                          <p className="text-sm text-gray-600">{current.subtitle}</p>
+                          <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
                         )}
                       </div>
                     )}
