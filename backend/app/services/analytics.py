@@ -1,9 +1,10 @@
 '''
 Services for the quiz that are specifically for analysis after completion rather than for the quiz flow itself. These are not currently used by any API endpoints but can be imported and used in ad-hoc scripts or new endpoints as needed.
 
-get_question_accuracy(): query accuracy across all users for a specific question. 
-- Optional filter by quiz id 
+get_question_accuracy(): query accuracy across all users for a specific question.
+- Optional filter by quiz id
 get_quiz_accuracy(): query overall accuracy for a quiz type across all users.
+get_user_quiz_accuracy(): query accuracy for a specific user on a specific quiz.
 
 Useful for determining how the quiz type impacts accuracy overall and for different types of questions.
 '''
@@ -32,6 +33,41 @@ def get_question_accuracy(db, question_id: str, quiz_id: str | None = None) -> d
     accuracy = correct / total if total > 0 else None
     return {
         "question_id": question_id,
+        "quiz_id": quiz_id,
+        "total": total,
+        "correct": correct,
+        "accuracy": accuracy,
+    }
+
+
+def get_user_quiz_accuracy(db, user_id: str, quiz_id: str) -> dict:
+    """
+    Returns accuracy for a specific user on a specific quiz.
+    """
+    col = get_quiz_attempts_collection(db)
+    attempt = col.find_one(
+        {"user_id": user_id, "quiz_id": quiz_id, "status": "completed"},
+        {"answers": 1},
+    )
+    if not attempt:
+        return {
+            "user_id": user_id,
+            "quiz_id": quiz_id,
+            "total": 0,
+            "correct": 0,
+            "accuracy": None,
+        }
+
+    total, correct = 0, 0
+    for ans in attempt.get("answers", []):
+        if ans.get("answered_at"):
+            total += 1
+            if ans.get("marked_correct"):
+                correct += 1
+
+    accuracy = correct / total if total > 0 else None
+    return {
+        "user_id": user_id,
         "quiz_id": quiz_id,
         "total": total,
         "correct": correct,
