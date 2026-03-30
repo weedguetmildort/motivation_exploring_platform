@@ -5,7 +5,47 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
+// Convert the body of a \begin{itemize} or \begin{enumerate} block to a
+// markdown list. Each \item becomes a bullet/numbered entry; continuation
+// lines (including already-converted nested lists) are indented by 2 spaces.
+function convertListBody(body: string, ordered: boolean): string {
+  const parts = body.split(/\\item\b\s*/);
+  let counter = 0;
+  return parts
+    .slice(1) // ignore preamble before first \item
+    .map((rawItem) => {
+      const trimmedItem = rawItem.trimEnd();
+      if (!trimmedItem.trim()) return "";
+      counter++;
+      const bullet = ordered ? `${counter}.` : `-`;
+      // Normalize each line: trim leading whitespace, drop blank continuation lines
+      const lines = trimmedItem
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l, i) => i === 0 || l.length > 0);
+      const first = lines[0];
+      if (!first) return "";
+      const rest = lines.slice(1).map((l) => `  ${l}`).join("\n");
+      return rest ? `${bullet} ${first}\n${rest}` : `${bullet} ${first}`;
+    })
+    .filter((s) => s.length > 0)
+    .join("\n");
+}
+
 function wrapExpressions(text: string): string {
+  // Step 0: Unwrap fenced code blocks whose content is LaTeX so the inner
+  // content gets processed as math/text instead of shown as raw code.
+  text = text.replace(/```[^\n]*\n([\s\S]+?)```/g, (match, inner) => {
+    const trimmed = inner.trim();
+    if (
+      /\$\$[\s\S]+?\$\$/.test(trimmed) ||
+      /\\begin\{(?:align|equation|gather|multline|tabular|quote|verse|itemize|enumerate)/.test(trimmed)
+    ) {
+      return "\n\n" + trimmed + "\n\n";
+    }
+    return match;
+  });
+
   // Step 1: Normalize \(...\) and \[...\] → $...$ / $$...$$ so all math uses one delimiter.
   // \[...\] is display math, must produce $$ so block environments like \begin{array} render correctly.
   text = text.replace(/(?:^|\n)\[\n([\s\S]+?)\n\](?:\n|$)/g,
@@ -40,6 +80,65 @@ function wrapExpressions(text: string): string {
     /(?<!\$)(\\begin\{align\*?\}[\s\S]+?\\end\{align\*?\}|\\begin\{gather\*?\}[\s\S]+?\\end\{gather\*?\}|\\begin\{equation\*?\}[\s\S]+?\\end\{equation\*?\}|\\begin\{multline\*?\}[\s\S]+?\\end\{multline\*?\})(?!\$)/g,
     (match) => `\n\n$$\n${match.trim()}\n$$\n\n`
   );
+
+  // Step 5: Convert LaTeX text environments to Markdown equivalents.
+
+  // \begin{quote}...\end{quote} → blockquote
+  text = text.replace(/\\begin\{quote\}([\s\S]+?)\\end\{quote\}/g, (_, inner) => {
+    const lines = inner.trim().split("\n").map((l: string) => `> ${l.trim()}`);
+    return "\n\n" + lines.join("\n") + "\n\n";
+  });
+
+  // \begin{verse}...\end{verse} → blockquote; \\ = forced line break (two trailing spaces)
+  text = text.replace(/\\begin\{verse\}([\s\S]+?)\\end\{verse\}/g, (_, inner) => {
+    const lines = inner.trim().split("\n").map((l: string) =>
+      "> " + l.replace(/\\\\$/, "").trim()
+    );
+    return "\n\n" + lines.join("  \n") + "\n\n";
+  });
+
+  // Step 6: Convert \begin{itemize} and \begin{enumerate} environments to
+  // Markdown lists. Processes iteratively so nested environments (same or
+  // mixed type) are converted innermost-first: the lazy [\s\S]+? always
+  // matches the nearest \end{...}, so each pass converts the innermost
+  // remaining environment until none are left.
+  {
+    let prev = "";
+    while (prev !== text) {
+      prev = text;
+      text = text.replace(
+        /\\begin\{(itemize|enumerate)\}([\s\S]+?)\\end\{\1\}/g,
+        (_, env, body) => convertListBody(body, env === "enumerate")
+      );
+    }
+  }
+
+  // \begin{tabular}{cols}...\end{tabular} → GFM Markdown table.
+  // Strips \hline, splits rows on \\, splits cells on &.
+  text = text.replace(/\\begin\{tabular\}\{[^}]*\}([\s\S]+?)\\end\{tabular\}/g, (_, body) => {
+    const rows = body
+      .replace(/\\hline/g, "")
+      .trim()
+      .split(/\\\\\s*\n?/)
+      .map((r: string) => r.trim())
+      .filter((r: string) => r.length > 0);
+
+    if (rows.length === 0) return "";
+
+    const parseRow = (row: string) => row.split("&").map((c: string) => c.trim());
+    const headers = parseRow(rows[0]);
+    const separator = headers.map(() => "---");
+    const dataRows = rows.slice(1).map(parseRow);
+    const toMdRow = (cells: string[]) => `| ${cells.join(" | ")} |`;
+
+    return (
+      "\n\n" +
+      toMdRow(headers) + "\n" +
+      toMdRow(separator) + "\n" +
+      dataRows.map(toMdRow).join("\n") +
+      "\n\n"
+    );
+  });
 
   return text;
 }
