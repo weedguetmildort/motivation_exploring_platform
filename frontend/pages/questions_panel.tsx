@@ -209,7 +209,7 @@ export default function QuestionPanelPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white border-b px-6 py-4">
+      <header className="sticky top-0 z-10 bg-white border-b px-6 py-4">
         <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">

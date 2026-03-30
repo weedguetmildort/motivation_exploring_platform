@@ -312,8 +312,8 @@ export default function QuizPage() {
   }
 
   return (
-    <div className="relative h-screen bg-gray-50 overflow-hidden">
-      <header className="h-24 bg-white border-b px-6 py-4">
+    <div className="flex flex-col h-screen bg-gray-50">
+      <header className="shrink-0 bg-white border-b px-6 py-4">
         <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between h-full">
           <div>
             <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
@@ -342,9 +342,9 @@ export default function QuizPage() {
         </div>
       </header>
 
-      <div className="absolute inset-x-0 bottom-0 top-24">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto h-full px-6 py-6">
-          <div className="grid h-full grid-rows-[auto_1fr] gap-4">
+      <div className="flex-1 min-h-0 overflow-auto">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-6 py-6">
+          <div className="flex flex-col gap-4">
             <div>
               {attempt && (
                 <div className="mb-4 text-sm text-gray-600">
@@ -380,9 +380,9 @@ export default function QuizPage() {
                 } : undefined}
               />
             ) : (
-              <div className="grid min-h-0 min-w-0 grid-cols-1 gap-6 md:grid-cols-[1.2fr_1fr]">
-                <div className="grid min-h-0 min-w-0 grid-rows-2 gap-6">
-                  <section className="min-h-0 rounded-xl border bg-white p-4 2xl:p-6 shadow-sm overflow-auto">
+              <div className="grid min-w-0 grid-cols-[1.2fr_1fr] gap-6">
+                <div className="flex flex-col gap-6">
+                  <section className="rounded-xl border bg-white p-4 2xl:p-6 shadow-sm overflow-auto">
                     <h2 className="text-lg 2xl:text-xl font-medium mb-3">Question</h2>
 
                     {!quizState && (
@@ -406,7 +406,7 @@ export default function QuizPage() {
                     )}
                   </section>
 
-                  <section className="min-h-0 rounded-xl border bg-white p-4 2xl:p-6 shadow-sm">
+                  <section className="rounded-xl border bg-white p-4 2xl:p-6 shadow-sm">
                     <h2 className="text-lg 2xl:text-xl font-medium mb-3">Options</h2>
 
                     {!quizState || !current ? (
@@ -471,9 +471,9 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="min-h-0 min-w-0">
+                <div className="min-w-0 self-start sticky top-0 h-[calc(100vh-6rem)]">
                   {quizId && (
-                    <div className="h-full min-h-0 min-w-0 rounded-2xl overflow-hidden">
+                    <div className="h-full min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox
                         quizId={quizId}
                         conversationId={conversationId}

@@ -122,7 +122,7 @@ export default function Playground() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 py-4">
+      <header className="sticky top-0 z-10 bg-white border-b px-6 py-4">
         <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">Playground</h1>
@@ -228,10 +228,10 @@ export default function Playground() {
           </div>
         </section>
 
-        <div className="grid gap-6 md:grid-cols-[1.2fr_1fr] pt-6 px-0 pb-6 min-h-0">
+        <div className="grid gap-6 md:grid-cols-[1.2fr_1fr] pt-6 px-0 pb-6">
           {/* Left column */}
-          <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full min-h-0">
-            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
+          <div className="flex flex-col gap-6">
+            <section className="rounded-xl bg-white p-4 shadow-sm border">
               <h2 className="text-lg 2xl:text-xl font-medium mb-3">Question</h2>
 
               {loadingQuestions && (
@@ -259,7 +259,7 @@ export default function Playground() {
               )}
             </section>
 
-            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
+            <section className="rounded-xl bg-white p-4 shadow-sm border">
               <h2 className="text-lg 2xl:text-xl font-medium mb-3">Options</h2>
 
               {!hasQuestions ? (
@@ -284,7 +284,7 @@ export default function Playground() {
           </div>
 
           {/* Right column (Chat) */}
-          <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
+          <div className="min-h-[500px] overflow-hidden">
             <ChatBox
               quizId={active}
             />
