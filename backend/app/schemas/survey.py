@@ -2,29 +2,39 @@
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List, Literal, Any, Dict
 
+# The survey stage this item belongs to (e.g. "pre_quiz", "post_base", "post_variant").
 SurveyStage = str  # keep flexible for now
 
+# Supported question types: Likert scale or single-choice select.
 SurveyItemType = Literal["likert", "single_select"]
 
+
+# A single selectable option for single_select survey items.
 class SurveyOption(BaseModel):
     id: str
     label: str
 
+
+# Defines the numeric range and optional endpoint labels for a Likert scale item.
 class SurveyScale(BaseModel):
     min: int = 1
     max: int = 5
     anchors: Optional[List[str]] = None  # e.g. ["Strongly disagree", "Strongly agree"]
 
+
+# Shared fields and validation logic for all survey question types.
+# The validator enforces that likert items have a scale and no options,
+# and that single_select items have at least two non-empty options.
 class SurveyItemBase(BaseModel):
     stage: SurveyStage
     prompt: str = Field(min_length=1)
     type: SurveyItemType = "likert"
     required: bool = True
-    order: int = 0
-    active: bool = True
+    order: int = 0              # controls display order within a stage
+    active: bool = True         # inactive items are hidden from participants
 
-    category: Optional[str] = None
-    reverse_scored: bool = False
+    category: Optional[str] = None      # optional grouping label for analysis
+    reverse_scored: bool = False        # if True, score is inverted during analysis
     scale: Optional[SurveyScale] = None
     options: Optional[List[SurveyOption]] = None  # for select types
 
@@ -76,9 +86,13 @@ class SurveyItemBase(BaseModel):
 
         return data
 
+# Payload sent by an admin when creating a new survey item. Inherits all SurveyItemBase fields.
 class SurveyItemCreate(SurveyItemBase):
     pass
 
+
+# Payload sent by an admin when partially updating a survey item.
+# All fields are optional so only changed fields need to be provided.
 class SurveyItemUpdate(BaseModel):
     prompt: Optional[str] = None
     type: Optional[SurveyItemType] = None
@@ -124,28 +138,41 @@ class SurveyItemUpdate(BaseModel):
 
         return data
 
+# Survey item data returned to the client, including the database-assigned id.
 class SurveyItemPublic(SurveyItemBase):
     id: str
 
+
+# A single answer submitted by the user for one survey item.
+# value type varies by item type: int for likert, str for single_select.
 class SurveyAnswerIn(BaseModel):
     item_id: str
     value: Any  # can be int (likert), str (text), list[str] (multi_select)
 
+
+# Full survey submission payload — all answers for a stage in one request.
 class SurveySubmitRequest(BaseModel):
     answers: List[SurveyAnswerIn]
 
+
+# A single answer as returned in the survey state, including timing fields for analysis.
 class SurveyAnswerPublic(BaseModel):
     item_id: str
     value: Any
     shown_at: Optional[str] = None
     answered_at: Optional[str] = None
 
+
+# Summary of the user's current survey attempt for a given stage.
 class SurveyAttemptPublic(BaseModel):
     stage: SurveyStage
-    status: str
+    status: str         # "in_progress" or "completed"
     answered_count: int
     total_items: int
 
+
+# Full survey state returned to the client for a given stage.
+# Contains the attempt summary, all items to display, and the user's existing answers.
 class SurveyStateResponse(BaseModel):
     attempt: SurveyAttemptPublic
     items: List[SurveyItemPublic]
