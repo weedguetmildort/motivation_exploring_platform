@@ -11,9 +11,9 @@ import {
   getQuizResults,
   type QuizStateResponse,
   type QuizResultsResponse,
-  type QuizResultItem,
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
+import QuizCompletionCard from "../../components/QuizCompletionCard";
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
 
@@ -263,21 +263,11 @@ export default function QuizPage() {
   }
 
   useEffect(() => {
-    if (!router.isReady) return;
-    if (!quizCompleted) return;
-    if (!quizId) return;
-    if (!user) return;
-    if (user.is_admin) return;
-
-    redirectAfterCompletion();
-  }, [router.isReady, quizCompleted, quizId, router]);
-
-  useEffect(() => {
-    if (!quizCompleted || !user?.is_admin || !quizId) return;
+    if (!quizCompleted || !user || !quizId) return;
     let cancel = false;
     getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
     return () => { cancel = true; };
-  }, [quizCompleted, user?.is_admin, quizId]);
+  }, [quizCompleted, user, quizId]);
 
   if (checking) {
     return (
@@ -386,71 +376,20 @@ export default function QuizPage() {
             </div>
 
             {quizCompleted ? (
-              user.is_admin ? (
-                <div className="rounded-xl bg-white p-6 shadow-sm border">
-                  <h2 className="text-lg font-semibold mb-2">
-                    Quiz completed (admin view)
-                  </h2>
-
-                  {quizResults && (
-                    <div className="mb-4">
-                      <p className="text-sm font-medium text-gray-800 mb-2">
-                        {quizResults.correct_count} of {quizResults.total_questions} correct
-                      </p>
-                      {quizResults.items.filter((item) => !item.is_correct).length > 0 && (
-                        <ul className="space-y-1">
-                          {quizResults.items
-                            .filter((item) => !item.is_correct)
-                            .map((item: QuizResultItem) => (
-                              <li key={item.question_id} className="text-sm text-gray-700">
-                                <span className="font-medium text-red-600">Question {item.question_number}</span>{": "}
-                                answered: {item.user_choice_id.toUpperCase()}. {item.user_choice_label}, {" "}
-                                correct answer: {item.correct_choice_id.toUpperCase()}. {item.correct_choice_label}
-                              </li>
-                            ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => router.push("/dashboard")}
-                      className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
-                    >
-                      Back to Dashboard
-                    </button>
-                    <button
-                      onClick={redirectAfterCompletion}
-                      className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm hover:bg-green-700"
-                    >
-                      Continue to Next Step
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!quizId) return;
-                        await resetQuiz(quizId);
-                        const state = await getQuizState(quizId);
-                        setQuizState(state);
-                        setSelectedChoice(null);
-                        setQuizResults(null);
-                      }}
-                      className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
-                    >
-                      Reset &amp; Retake
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-xl bg-white p-6 shadow-sm border">
-                  <h2 className="text-lg font-semibold mb-2">
-                    You’re all done!
-                  </h2>
-                  <p className="text-sm text-gray-600">
-                    Finishing your quiz and loading the next step…
-                  </p>
-                </div>
-              )
+              <QuizCompletionCard
+                isAdmin={user.is_admin}
+                quizResults={quizResults}
+                onDashboard={() => router.push("/dashboard")}
+                onNextStep={redirectAfterCompletion}
+                onReset={user.is_admin ? async () => {
+                  if (!quizId) return;
+                  await resetQuiz(quizId);
+                  const state = await getQuizState(quizId);
+                  setQuizState(state);
+                  setSelectedChoice(null);
+                  setQuizResults(null);
+                } : undefined}
+              />
             ) : (
               <div className="grid min-h-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
                 <div className="grid min-h-0 grid-rows-2 gap-6">
