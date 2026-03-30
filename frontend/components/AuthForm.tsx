@@ -6,6 +6,8 @@ type Props = {
   mode: "login" | "signup";
 };
 
+const MIN_PASSWORD_LENGTH = 6;
+
 export default function AuthForm({ mode }: Props) {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -13,11 +15,24 @@ export default function AuthForm({ mode }: Props) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const passwordTooShort =
+    mode === "signup" &&
+    password.length > 0 &&
+    password.length < MIN_PASSWORD_LENGTH;
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (pending) return;
 
     setError(null);
+
+    if (mode === "signup" && password.length < MIN_PASSWORD_LENGTH) {
+      setError(
+        `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`,
+      );
+      return;
+    }
+
     setPending(true);
     try {
       if (mode === "login") {
@@ -62,8 +77,17 @@ export default function AuthForm({ mode }: Props) {
         placeholder="••••••••"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
+        minLength={mode === "signup" ? MIN_PASSWORD_LENGTH : undefined}
         required
       />
+
+      {mode === "signup" && (
+        <p
+          className={`mb-4 text-xs ${passwordTooShort ? "text-red-600" : "text-gray-500"}`}
+        >
+          Password must be at least {MIN_PASSWORD_LENGTH} characters.
+        </p>
+      )}
 
       {error && (
         <div role="alert" className="mb-3 text-sm text-red-600">
