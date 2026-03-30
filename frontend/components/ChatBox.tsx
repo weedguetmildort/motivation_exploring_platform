@@ -422,7 +422,7 @@ export default function ChatBox({
             onClick={pending && !disableCancel ? handleCancel : onSend}
             disabled={(!pending && !input.trim()) || (pending && disableCancel)}
           >
-            {pending && !disableCancel ? "Cancel" : "Send"}
+            {pending ? "Cancel" : "Send"}
           </button>
         </div>
       </div>
