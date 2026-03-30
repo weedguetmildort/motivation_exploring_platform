@@ -343,7 +343,7 @@ export default function ChatBox({
   return (
     <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <div className="p-4 border-b sticky top-0 bg-white/80 backdrop-blur rounded-t-2xl">
-        <h2 className="text-lg 2xl:text-xl font-semibold text-gray-900">Chat</h2>
+        <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">Chat</h2>
       </div>
 
       <div

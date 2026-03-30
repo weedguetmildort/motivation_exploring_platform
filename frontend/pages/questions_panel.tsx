@@ -392,7 +392,7 @@ export default function QuestionPanelPage() {
                         {q.choices.map((c) => (
                           <li key={c.id}>
                             <span className="font-medium uppercase mr-1">
-                              {c.id}:
+                              {c.id.toUpperCase()}:
                             </span>
                             {c.label}
                             {c.id === q.correct_choice_id && (

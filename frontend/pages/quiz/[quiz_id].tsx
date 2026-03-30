@@ -279,7 +279,7 @@ export default function QuizPage() {
     if (!current) return;
 
     const choicesText = current.choices
-      .map((c) => `${c.id}. ${c.label}`)
+      .map((c) => `${c.id.toUpperCase()}. ${c.label}`)
       .join("\n");
 
     const parts = [current.stem];
@@ -376,26 +376,30 @@ export default function QuizPage() {
             ) : (
               <div className="grid min-w-0 grid-cols-[1fr_1.618fr] gap-6">
                 <div className="flex flex-col gap-6">
-                  <section className="rounded-xl border bg-white p-4 2xl:p-6 shadow-sm overflow-auto">
+                  <section className="rounded-xl border bg-white shadow-sm overflow-auto">
                     {!quizState && (
-                      <div className="text-sm text-gray-500">Loading quiz…</div>
+                      <div className="p-4 text-sm text-gray-500">Loading quiz…</div>
                     )}
 
                     {quizState && !current && (
-                      <div className="text-sm text-gray-500">
+                      <div className="p-4 text-sm text-gray-500">
                         No current question available.
                       </div>
                     )}
 
                     {quizState && current && (
-                      <div>
-                        <h2 className="text-lg 2xl:text-xl font-semibold text-gray-900 mb-2">
-                          Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
-                        </h2>
+                      <>
+                        <div className="p-4 border-b">
+                          <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
+                            Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
+                          </h2>
+                        </div>
                         {current.subtitle && (
-                          <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
+                          <div className="p-4">
+                            <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
+                          </div>
                         )}
-                      </div>
+                      </>
                     )}
                   </section>
 
@@ -426,7 +430,7 @@ export default function QuizPage() {
                             <div>
                               Selected:{" "}
                               <span className="font-medium">
-                                {selectedChoice ?? "(none)"}
+                                {selectedChoice?.toUpperCase() ?? "(none)"}
                               </span>
                             </div>
 

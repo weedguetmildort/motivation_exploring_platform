@@ -66,7 +66,7 @@ export default function AnswerBox({
                 ${active ? "border-blue-600 bg-blue-50" : "border-gray-200 bg-white"}
               `}
               >
-                <div className="font-medium text-gray-900">{c.label}</div>
+                <div className="font-medium text-gray-900"><span className="uppercase font-bold mr-2">{c.id}.</span>{c.label}</div>
                 {c.description && (
                   <div className="text-sm text-gray-600 mt-0.5">{c.description}</div>
                 )}
