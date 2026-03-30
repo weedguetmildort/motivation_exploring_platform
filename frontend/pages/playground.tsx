@@ -228,7 +228,7 @@ export default function Playground() {
           </div>
         </section>
 
-        <div className="grid gap-6 md:grid-cols-[1.2fr_1fr] pt-6 px-0 pb-6">
+        <div className="grid gap-6 grid-cols-[1fr_1.618fr] pt-6 px-0 pb-6">
           {/* Left column */}
           <div className="flex flex-col gap-6">
             <section className="rounded-xl bg-white p-4 shadow-sm border">
