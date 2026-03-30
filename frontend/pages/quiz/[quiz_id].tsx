@@ -314,12 +314,12 @@ export default function QuizPage() {
   return (
     <div className="relative h-screen bg-gray-50 overflow-hidden">
       <header className="h-24 bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between h-full">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">
+            <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
               Quiz {quizId ?? rawQuizId}
             </h1>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm 2xl:text-base text-gray-600">
               Answer each question once. Your progress is saved automatically.
             </p>
           </div>
@@ -343,7 +343,7 @@ export default function QuizPage() {
       </header>
 
       <div className="absolute inset-x-0 bottom-0 top-24">
-        <div className="max-w-6xl mx-auto h-full px-6 py-6">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto h-full px-6 py-6">
           <div className="grid h-full grid-rows-[auto_1fr] gap-4">
             <div>
               {attempt && (
@@ -380,10 +380,10 @@ export default function QuizPage() {
                 } : undefined}
               />
             ) : (
-              <div className="grid min-h-0 min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
+              <div className="grid min-h-0 min-w-0 grid-cols-1 gap-6 md:grid-cols-[1.2fr_1fr]">
                 <div className="grid min-h-0 min-w-0 grid-rows-2 gap-6">
-                  <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm overflow-auto">
-                    <h2 className="text-lg font-medium mb-3">Question</h2>
+                  <section className="min-h-0 rounded-xl border bg-white p-4 2xl:p-6 shadow-sm overflow-auto">
+                    <h2 className="text-lg 2xl:text-xl font-medium mb-3">Question</h2>
 
                     {!quizState && (
                       <div className="text-sm text-gray-500">Loading quiz…</div>
@@ -400,14 +400,14 @@ export default function QuizPage() {
                         <QuestionBox
                           question={current.stem}
                           subtitle={current.subtitle || undefined}
-                          className="max-w-3xl mx-auto"
+                          className="max-w-3xl 2xl:max-w-none mx-auto"
                         />
                       </div>
                     )}
                   </section>
 
-                  <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm">
-                    <h2 className="text-lg font-medium mb-3">Options</h2>
+                  <section className="min-h-0 rounded-xl border bg-white p-4 2xl:p-6 shadow-sm">
+                    <h2 className="text-lg 2xl:text-xl font-medium mb-3">Options</h2>
 
                     {!quizState || !current ? (
                       <div className="text-sm text-gray-500">
@@ -426,7 +426,7 @@ export default function QuizPage() {
                             choices={current.choices as Choice[]}
                             value={selectedChoice}
                             onChange={setSelectedChoice}
-                            className="max-w-3xl mx-auto"
+                            className="max-w-3xl 2xl:max-w-none mx-auto"
                           />
 
                           <div className="flex items-center justify-between text-sm text-gray-600">

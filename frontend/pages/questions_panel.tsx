@@ -210,12 +210,12 @@ export default function QuestionPanelPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">
+            <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
               Quiz Questions Panel
             </h1>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm 2xl:text-base text-gray-600">
               Manage quiz questions and answers
             </p>
           </div>
@@ -237,9 +237,9 @@ export default function QuestionPanelPage() {
       </header>
 
       {/* Main Content */}
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto p-6">
         <div className="bg-white rounded-xl p-8 shadow-sm border text-center">
-          <h2 className="text-xl font-semibold mb-2">Add Question</h2>
+          <h2 className="text-xl 2xl:text-2xl font-semibold mb-2">Add Question</h2>
 
           <form onSubmit={onSubmit} className="space-y-4 text-left">
             <div>
@@ -318,9 +318,9 @@ export default function QuestionPanelPage() {
           </form>
         </div>
       </div>
-      <div className="max-w-6xl mx-auto pt-0 px-6 pb-6">
+      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto pt-0 px-6 pb-6">
         <div className="bg-white rounded-xl p-8 shadow-sm border text-center">
-          <h2 className="text-xl font-semibold mb-2">View Questions</h2>
+          <h2 className="text-xl 2xl:text-2xl font-semibold mb-2">View Questions</h2>
 
           {loadingQuestions && (
             <p className="text-sm text-gray-500 text-center">

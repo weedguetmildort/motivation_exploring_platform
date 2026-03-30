@@ -58,10 +58,10 @@ useEffect(() => {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Admin Panel</h1>
-            <p className="text-sm text-gray-600">Manage quiz questions and survey questions</p>
+            <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">Admin Panel</h1>
+            <p className="text-sm 2xl:text-base text-gray-600">Manage quiz questions and survey questions</p>
           </div>
           <div className="flex items-center gap-4">
             <button 
@@ -80,7 +80,7 @@ useEffect(() => {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto p-6">
         <div className="grid gap-4 sm:grid-cols-2">
   
           {user?.is_admin && (
@@ -88,7 +88,7 @@ useEffect(() => {
               href="/questions_panel"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Quiz Questions Panel</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Quiz Questions Panel</h2>
               <p className="text-sm text-gray-600">Manage quiz questions and answers</p>
             </Link>
           )}
@@ -98,7 +98,7 @@ useEffect(() => {
               href="/surveys_panel"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Survey Questions Panel</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Survey Questions Panel</h2>
               <p className="text-sm text-gray-600">Manage stage-based surveys</p>
             </Link>
           )}

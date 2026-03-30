@@ -46,10 +46,10 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
-            <p className="text-sm text-gray-600">Welcome to the dashboard, {user.email}</p>
+            <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">Dashboard</h1>
+            <p className="text-sm 2xl:text-base text-gray-600">Welcome to the dashboard, {user.email}</p>
           </div>
           <div className="flex items-center gap-4">
             <button 
@@ -68,14 +68,14 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto p-6">
         <div className="grid gap-4 sm:grid-cols-2">
           {user?.is_admin && (
             <a
               href="/chat"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Chat</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Chat</h2>
               <p className="text-sm text-gray-600">
                 Ask questions and interact with AI chatbot
               </p>
@@ -87,7 +87,7 @@ export default function DashboardPage() {
               href="/playground"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Playground</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Playground</h2>
               <p className="text-sm text-gray-600">Sandbox to see how the different quiz styles look</p>
             </a>
           )}
@@ -97,7 +97,7 @@ export default function DashboardPage() {
               href="/admin"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Admin Panel</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Admin Panel</h2>
               <p className="text-sm text-gray-600">Manage questions and content</p>
             </a>
           )}
@@ -106,7 +106,7 @@ export default function DashboardPage() {
             href="/quiz/base"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
           {/*Additional Quizzes below*/}
@@ -115,7 +115,7 @@ export default function DashboardPage() {
             href="/quiz/double"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold">Dual Agent Quiz</h2>
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Dual Agent Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
           )}
@@ -124,7 +124,7 @@ export default function DashboardPage() {
             href="/quiz/links"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold">Links Quiz</h2>
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Links Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
           )}
@@ -133,7 +133,7 @@ export default function DashboardPage() {
             href="/quiz/followup"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold">Follow-up Questions Quiz</h2>
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Follow-up Questions Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
           )}
