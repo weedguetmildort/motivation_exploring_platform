@@ -92,14 +92,10 @@ export async function sendChat(
     reader.releaseLock();
   }
 
-  let replies: string[];
-  if ("A" in replyMap || "B" in replyMap) {
-    replies = [];
-    if ("A" in replyMap) replies.push(replyMap["A"]);
-    if ("B" in replyMap) replies.push(replyMap["B"]);
-  } else {
-    replies = [replyMap["default"] ?? ""];
-  }
+  const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
+  const replies = agentKeys.length > 0
+    ? agentKeys.map(k => replyMap[k])
+    : [replyMap["default"] ?? ""];
 
   return { replies, conversationId: returnedConvId, followupQuestions };
 }
