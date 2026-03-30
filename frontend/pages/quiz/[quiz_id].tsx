@@ -53,16 +53,13 @@ function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
   }
 
   if (quizId === "base") {
-    return (
-      Boolean(user.survey_pre_base_completed) &&
-      !Boolean(user.quiz_base_completed)
-    );
+    return !!user.survey_pre_base_completed && !user.quiz_base_completed;
   }
 
   return (
     isUsersAssignedVariant(quizId, user) &&
-    Boolean(user.survey_post_base_completed) &&
-    !Boolean(user.quiz_variant_completed)
+    !!user.survey_post_base_completed &&
+    !user.quiz_variant_completed
   );
 }
 
@@ -74,11 +71,11 @@ function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
   if (quizId === "base") {
     if (!user.survey_pre_base_completed) return "/survey";
 
-    if (user.quiz_base_completed && !user.survey_post_base_completed) {
+    if (!user.survey_post_base_completed) {
       return "/survey";
     }
 
-    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
+    if (!user.quiz_variant_completed) {
       return assignedVariantPath;
     }
 
@@ -100,12 +97,7 @@ function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
 
 export default function QuizPage() {
   const router = useRouter();
-  const rawQuizId =
-    typeof router.query.quiz_id === "string"
-      ? router.query.quiz_id
-      : Array.isArray(router.query.quiz_id)
-        ? router.query.quiz_id[0]
-        : null;
+  const rawQuizId = [router.query.quiz_id].flat()[0] ?? null;
 
   const [user, setUser] = useState<ExtendedUser | null>(null);
   const [checking, setChecking] = useState(true);
@@ -225,10 +217,7 @@ export default function QuizPage() {
           return;
         }
 
-        if (
-          refreshedUser.survey_post_base_completed &&
-          !refreshedUser.quiz_variant_completed
-        ) {
+        if (!refreshedUser.quiz_variant_completed) {
           router.replace(
             refreshedUser.assigned_var
               ? `/quiz/${refreshedUser.assigned_var}`
@@ -391,8 +380,8 @@ export default function QuizPage() {
                 } : undefined}
               />
             ) : (
-              <div className="grid min-h-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
-                <div className="grid min-h-0 grid-rows-2 gap-6">
+              <div className="grid min-h-0 min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
+                <div className="grid min-h-0 min-w-0 grid-rows-2 gap-6">
                   <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm overflow-auto">
                     <h2 className="text-lg font-medium mb-3">Question</h2>
 
@@ -482,9 +471,9 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="min-h-0">
+                <div className="min-h-0 min-w-0">
                   {quizId && (
-                    <div className="h-full min-h-0 rounded-2xl overflow-hidden">
+                    <div className="h-full min-h-0 min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox
                         quizId={quizId}
                         conversationId={conversationId}

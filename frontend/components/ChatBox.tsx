@@ -348,7 +348,7 @@ export default function ChatBox({
 
       <div
         ref={scrollerRef}
-        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-3"
       >
         {messages.map((m) => (
           <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
