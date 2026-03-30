@@ -10,6 +10,9 @@ Useful for determining how the quiz type impacts accuracy overall and for differ
 '''
 
 from .quiz import get_quiz_attempts_collection
+from ..schemas.user import AssignedVar
+
+_VARIANT_QUIZ_IDS = [v.value for v in AssignedVar]
 
 def get_question_accuracy(db, question_id: str, quiz_id: str | None = None) -> dict:
     """
@@ -40,19 +43,26 @@ def get_question_accuracy(db, question_id: str, quiz_id: str | None = None) -> d
     }
 
 
-def get_user_quiz_accuracy(db, user_id: str, quiz_id: str) -> dict:
+def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
     """
-    Returns accuracy for a specific user on a specific quiz.
+    Returns accuracy for a specific user on a quiz type.
+    quiz_type must be "base" or "variant".
     """
+    if quiz_type == "base":
+        quiz_filter = "base"
+    else:
+        quiz_filter = {"$in": _VARIANT_QUIZ_IDS}
+
     col = get_quiz_attempts_collection(db)
     attempt = col.find_one(
-        {"user_id": user_id, "quiz_id": quiz_id, "status": "completed"},
-        {"answers": 1},
+        {"user_id": user_id, "quiz_id": quiz_filter, "status": "completed"},
+        {"answers": 1, "quiz_id": 1},
     )
     if not attempt:
         return {
             "user_id": user_id,
-            "quiz_id": quiz_id,
+            "quiz_type": quiz_type,
+            "quiz_id": None,
             "total": 0,
             "correct": 0,
             "accuracy": None,
@@ -68,7 +78,8 @@ def get_user_quiz_accuracy(db, user_id: str, quiz_id: str) -> dict:
     accuracy = correct / total if total > 0 else None
     return {
         "user_id": user_id,
-        "quiz_id": quiz_id,
+        "quiz_type": quiz_type,
+        "quiz_id": attempt["quiz_id"],
         "total": total,
         "correct": correct,
         "accuracy": accuracy,
