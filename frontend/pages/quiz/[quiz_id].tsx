@@ -374,7 +374,7 @@ export default function QuizPage() {
                 } : undefined}
               />
             ) : (
-              <div className="grid min-w-0 grid-cols-[1.2fr_1fr] gap-6">
+              <div className="grid min-w-0 grid-cols-[1fr_1.618fr] gap-6">
                 <div className="flex flex-col gap-6">
                   <section className="rounded-xl border bg-white p-4 2xl:p-6 shadow-sm overflow-auto">
                     {!quizState && (
