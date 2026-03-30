@@ -1,7 +1,6 @@
 // frontend/pages/quiz/[quiz_id].tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import QuestionBox from "../../components/QuestionBox";
 import AnswerBox, { Choice } from "../../components/AnswerBox";
 import { getMe, logout, type User } from "../../lib/auth";
 import {
@@ -318,6 +317,14 @@ export default function QuizPage() {
           <div>
             <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
               Quiz {quizId ?? rawQuizId}
+              {attempt && (
+                <span className="ml-3 text-base 2xl:text-lg font-normal text-gray-500">
+                  {attempt.answered_count} of {attempt.total_questions} answered
+                  {quizCompleted && (
+                    <span className="ml-2 font-semibold text-green-700">(Completed)</span>
+                  )}
+                </span>
+              )}
             </h1>
             <p className="text-sm 2xl:text-base text-gray-600">
               Answer each question once. Your progress is saved automatically.
@@ -345,24 +352,11 @@ export default function QuizPage() {
       <div className="flex-1 min-h-0 overflow-auto">
         <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-6 py-6">
           <div className="flex flex-col gap-4">
-            <div>
-              {attempt && (
-                <div className="mb-4 text-sm text-gray-600">
-                  {attempt.answered_count} of {attempt.total_questions} answered
-                  {quizCompleted && (
-                    <span className="ml-2 font-semibold text-green-700">
-                      (Quiz completed)
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {error && (
-                <div className="mb-3 text-sm text-red-600" role="alert">
-                  {error}
-                </div>
-              )}
-            </div>
+            {error && (
+              <div className="text-sm text-red-600" role="alert">
+                {error}
+              </div>
+            )}
 
             {quizCompleted ? (
               <QuizCompletionCard
@@ -383,8 +377,6 @@ export default function QuizPage() {
               <div className="grid min-w-0 grid-cols-[1.2fr_1fr] gap-6">
                 <div className="flex flex-col gap-6">
                   <section className="rounded-xl border bg-white p-4 2xl:p-6 shadow-sm overflow-auto">
-                    <h2 className="text-lg 2xl:text-xl font-medium mb-3">Question</h2>
-
                     {!quizState && (
                       <div className="text-sm text-gray-500">Loading quiz…</div>
                     )}
@@ -396,12 +388,13 @@ export default function QuizPage() {
                     )}
 
                     {quizState && current && (
-                      <div className="space-y-4">
-                        <QuestionBox
-                          question={current.stem}
-                          subtitle={current.subtitle || undefined}
-                          className="max-w-3xl 2xl:max-w-none mx-auto"
-                        />
+                      <div>
+                        <h2 className="text-lg 2xl:text-xl font-semibold text-gray-900 mb-2">
+                          Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
+                        </h2>
+                        {current.subtitle && (
+                          <p className="text-sm text-gray-600">{current.subtitle}</p>
+                        )}
                       </div>
                     )}
                   </section>
