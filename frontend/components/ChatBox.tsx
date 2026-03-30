@@ -1,6 +1,6 @@
 // frontend/components/ChatBox.tsx
-import { useEffect, useRef, useState } from "react";
-import { sendChat } from "../lib/chat";
+import { memo, useEffect, useRef, useState } from "react";
+import { sendChat, loadUserHistory } from "../lib/chat";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
 import {
@@ -30,13 +30,51 @@ const BOT_COLORS: Record<Bot, string> = {
   D: "bg-orange-100 text-orange-900",
 };
 
+// Memoized so it only re-renders when message content changes, not on every keystroke.
+const MessageBubble = memo(function MessageBubble({
+  role,
+  content,
+  bot,
+}: {
+  role: "user" | "assistant";
+  content: string;
+  bot?: Bot;
+}) {
+  const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
+  const bubbleClass =
+    role === "user"
+      ? "bg-blue-600 text-white"
+      : bot
+        ? BOT_COLORS[bot]
+        : "bg-gray-100 text-gray-900";
+
+  return (
+    <div>
+      <div className={`text-xs text-gray-600 px-1 mb-1 ${role === "user" ? "text-right" : "text-left"}`}>
+        {label}
+      </div>
+      <div className={`flex ${role === "user" ? "justify-end" : "justify-start"}`}>
+        <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+          {role === "assistant" ? (
+            <MarkdownMessage content={content} />
+          ) : (
+            <div className="whitespace-pre-wrap">{content}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 type ChatBoxProps = {
   quizId: string;
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
   onLoadingChange?: (loading: boolean) => void;
+  onHistoryLoaded?: () => void;
   externalQuestion?: string | null;
   conversationId?: string | null;
+  disableCancel?: boolean;
 };
 
 export default function ChatBox({
@@ -44,13 +82,16 @@ export default function ChatBox({
   onAssistantMessage,
   onError,
   onLoadingChange,
+  onHistoryLoaded,
   externalQuestion,
   conversationId = null,
+  disableCancel = false,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
+  const [streamingMap, setStreamingMap] = useState<Record<string, string>>({});
   const [followupQuestions, setFollowupQuestions] = useState<string[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [activeConvId, setActiveConvId] = useState<string | null>(
@@ -59,9 +100,41 @@ export default function ChatBox({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const historyFetched = useRef(false);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!activeConvId || historyFetched.current) return;
+    historyFetched.current = true;
+    let cancelled = false;
+    loadUserHistory(activeConvId).then(({ messages }) => {
+      if (cancelled || messages.length === 0) return;
+      const loaded: Msg[] = [];
+      for (const m of messages) {
+        if (m.role === "user") {
+          loaded.push({ id: crypto.randomUUID(), role: "user", content: m.content as string, ts: 0 });
+        } else {
+          const replies = Array.isArray(m.content) ? m.content : [m.content];
+          replies.forEach((r, i) => {
+            loaded.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: r,
+              ts: 0,
+              bot: agentFilter === "double"
+                ? (["A", "B"][i] as Bot ?? undefined)
+                : replies.length > 1 ? (["A", "B", "C", "D"][i] as Bot ?? "A") : undefined,
+            });
+          });
+        }
+      }
+      onHistoryLoaded?.();
+      setMessages(loaded);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeConvId]); // runs once when activeConvId first becomes available
 
   useEffect(() => {
     if (conversationId) {
@@ -78,7 +151,7 @@ export default function ChatBox({
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-  }, [messages, pending]);
+  }, [messages, pending, streamingMap]);
 
   useEffect(() => {
     onLoadingChange?.(pending);
@@ -124,6 +197,10 @@ export default function ChatBox({
         messageForBackend,
         agents,
         controller.signal,
+        (delta, agent) => {
+          const key = agent ?? "default";
+          setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
+        },
       );
       if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
 
@@ -156,7 +233,7 @@ export default function ChatBox({
               : undefined,
       }));
 
-      setMessages((m) => [...m, ...botMsgs]);
+      setMessages((m: Msg[]) => [...m, ...botMsgs]);
       if (onAssistantMessage) {
         onAssistantMessage(replies[replies.length - 1]);
       }
@@ -170,6 +247,7 @@ export default function ChatBox({
     } finally {
       abortControllerRef.current = null;
       setPending(false);
+      setStreamingMap({});
     }
   }
 
@@ -185,6 +263,7 @@ export default function ChatBox({
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setPending(false);
+    setStreamingMap({});
   }
 
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -269,43 +348,11 @@ export default function ChatBox({
 
       <div
         ref={scrollerRef}
-        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-3"
       >
-        {messages.map((m) => {
-          const label =
-            m.role === "user" ? "You" : m.bot ? `Agent ${m.bot}` : "Assistant";
-          const bubbleClass =
-            m.role === "user"
-              ? "bg-blue-600 text-white"
-              : m.bot
-                ? BOT_COLORS[m.bot]
-                : "bg-gray-100 text-gray-900";
-
-          return (
-            <div key={m.id}>
-              <div
-                className={`text-xs text-gray-600 px-1 mb-1 ${
-                  m.role === "user" ? "text-right" : "text-left"
-                }`}
-              >
-                {label}
-              </div>
-              <div
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}
-                >
-                  {m.role === "assistant" ? (
-                    <MarkdownMessage content={m.content} />
-                  ) : (
-                    <div className="whitespace-pre-wrap">{m.content}</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {messages.map((m) => (
+          <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
+        ))}
 
         {followupQuestions && (
           <div className="mt-3 border-t border-gray-200 pt-3">
@@ -325,9 +372,25 @@ export default function ChatBox({
           </div>
         )}
 
-        {pending && (
+        {pending && Object.keys(streamingMap).length === 0 && (
           <div className="text-sm text-gray-500">Assistant is typing…</div>
         )}
+
+        {pending && (Object.entries(streamingMap) as [string, string][]).map(([agentKey, content]) => {
+          const bot: Bot | undefined = agentKey === "A" ? "A" : agentKey === "B" ? "B" : undefined;
+          const label = bot ? `Agent ${bot}` : "Assistant";
+          const bubbleClass = bot ? BOT_COLORS[bot] : "bg-gray-100 text-gray-900";
+          return (
+            <div key={`streaming-${agentKey}`}>
+              <div className="text-xs text-gray-600 px-1 mb-1 text-left">{label}</div>
+              <div className="flex justify-start">
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+                  <MarkdownMessage content={content} />
+                </div>
+              </div>
+            </div>
+          );
+        })}
 
         {error && (
           <div role="alert" className="text-sm text-red-600">
@@ -355,9 +418,9 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className={`rounded-xl px-4 py-2 font-medium text-white ${pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
-            onClick={pending ? handleCancel : onSend}
-            disabled={!pending && !input.trim()}
+            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            onClick={pending && !disableCancel ? handleCancel : onSend}
+            disabled={(!pending && !input.trim()) || (pending && disableCancel)}
           >
             {pending ? "Cancel" : "Send"}
           </button>

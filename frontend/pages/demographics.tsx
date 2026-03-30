@@ -1,3 +1,4 @@
+// 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
@@ -15,6 +16,7 @@ export default function DemographicsPage() {
   const [raceEthnicity, setRaceEthnicity] = useState<string[]>([]);
   const [year, setYear] = useState("");
   const [major, setMajor] = useState("");
+  const [className, setClassName] = useState("");
 
   useEffect(() => {
     let cancel = false;
@@ -68,6 +70,7 @@ export default function DemographicsPage() {
         race_ethnicity: raceEthnicity,
         year: year,
         major: major || undefined,
+        class_name: className || undefined,
       });
       router.replace("/dashboard");
     } catch (e) {
@@ -162,7 +165,8 @@ export default function DemographicsPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               How would you identify yourself in terms of race/ethnicity?
               <span className="text-red-500">*</span>
-              <br />Please select all that apply to you.
+              <br />
+              Please select all that apply to you.
             </label>
 
             <div className="space-y-2">
@@ -191,7 +195,7 @@ export default function DemographicsPage() {
                         setRaceEthnicity([...raceEthnicity, opt.value]);
                       } else {
                         setRaceEthnicity(
-                          raceEthnicity.filter((v) => v !== opt.value)
+                          raceEthnicity.filter((v) => v !== opt.value),
                         );
                       }
                     }}
@@ -233,6 +237,23 @@ export default function DemographicsPage() {
               className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
               placeholder="e.g., Computer Science"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Course (if taking for extra credit)
+            </label>
+            <input
+              type="text"
+              value={className}
+              onChange={(e) => setClassName(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
+              placeholder="e.g., COP3502 — or type N/A if not applicable"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              If you are not taking this study for extra credit, please enter
+              "N/A".
+            </p>
           </div>
 
           <div className="flex justify-end gap-3 pt-2">

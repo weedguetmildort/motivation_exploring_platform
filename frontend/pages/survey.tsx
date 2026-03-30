@@ -19,6 +19,8 @@ type ExtendedUser = User & {
   survey_pre_base_completed?: boolean;
   survey_post_base_completed?: boolean;
   survey_post_variant_completed?: boolean;
+  quiz_base_completed?: boolean;
+  quiz_variant_completed?: boolean;
 };
 
 const STAGE_CONFIG: Record<
@@ -71,6 +73,12 @@ function isSurveyStage(value: unknown): value is SurveyStage {
   );
 }
 
+function isActiveSurveyStage(value: unknown): value is ActiveSurveyStage {
+  return (
+    value === "pre_quiz" || value === "post_base" || value === "post_variant"
+  );
+}
+
 /**
  * Returns the survey stage that should actually be shown right now.
  * Returns null when the user should not see a survey page and should be routed onward.
@@ -80,18 +88,16 @@ function resolveCurrentSurveyStage(
 ): ActiveSurveyStage | null {
   if (!user) return null;
 
-  const stage = user.survey_stage;
-
-  if (stage === "pre_quiz") {
-    return user.survey_pre_base_completed ? null : "pre_quiz";
+  if (!user.survey_pre_base_completed) {
+    return "pre_quiz";
   }
 
-  if (stage === "post_base") {
-    return user.survey_post_base_completed ? null : "post_base";
+  if (user.quiz_base_completed && !user.survey_post_base_completed) {
+    return "post_base";
   }
 
-  if (stage === "post_variant") {
-    return user.survey_post_variant_completed ? null : "post_variant";
+  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
+    return "post_variant";
   }
 
   return null;
@@ -118,23 +124,24 @@ function getNextRouteForResolvedGap(
 ): string {
   if (!user) return "/dashboard";
 
-  if (user.survey_stage === "pre_quiz" && user.survey_pre_base_completed) {
-    return quizId ? `/quiz/${quizId}` : "/quiz/base";
+  if (!user.survey_pre_base_completed) {
+    return quizId ? `/survey?quiz_id=${quizId}` : "/survey";
   }
 
-  if (user.survey_stage === "post_base" && user.survey_post_base_completed) {
+  if (!user.quiz_base_completed) {
+    return "/quiz/base";
+  }
+
+  if (!user.survey_post_base_completed) {
+    return "/survey";
+  }
+
+  if (!user.quiz_variant_completed) {
     return user.assigned_var ? `/quiz/${user.assigned_var}` : "/dashboard";
   }
 
-  if (
-    user.survey_stage === "post_variant" &&
-    user.survey_post_variant_completed
-  ) {
-    return "/dashboard";
-  }
-
-  if (user.survey_stage === "complete") {
-    return "/dashboard";
+  if (!user.survey_post_variant_completed) {
+    return "/survey";
   }
 
   return "/dashboard";
@@ -142,7 +149,10 @@ function getNextRouteForResolvedGap(
 
 export default function SurveyPage() {
   const router = useRouter();
-  const { quiz_id } = router.query as { quiz_id?: string };
+  const { quiz_id, stage } = router.query as {
+    quiz_id?: string;
+    stage?: string;
+  };
 
   const [user, setUser] = useState<ExtendedUser | null>(null);
   const [checking, setChecking] = useState(true);
@@ -172,7 +182,9 @@ export default function SurveyPage() {
     ? user.survey_stage
     : null;
 
-  const activeSurveyStage = resolveCurrentSurveyStage(user);
+  const forcedStage = isActiveSurveyStage(stage) ? stage : null;
+
+  const activeSurveyStage = forcedStage ?? resolveCurrentSurveyStage(user);
   const loadStage = activeSurveyStage ? getLoadStage(activeSurveyStage) : null;
   const config = activeSurveyStage ? STAGE_CONFIG[activeSurveyStage] : null;
 
@@ -237,7 +249,11 @@ export default function SurveyPage() {
         setValues(initial);
 
         if (responseState.status === "completed") {
-          router.replace(getNextRouteForResolvedGap(user, quiz_id));
+          const refreshed = await getMe();
+          if (cancel) return;
+          router.replace(
+            getNextRouteForResolvedGap(refreshed.user as ExtendedUser, quiz_id),
+          );
           return;
         }
       } catch (e) {
@@ -313,10 +329,6 @@ export default function SurveyPage() {
             activeSurveyStage === "post_variant"
               ? true
               : user.survey_post_variant_completed,
-          survey_stage:
-            activeSurveyStage === "post_variant"
-              ? "complete"
-              : rawSurveyStage ?? user.survey_stage,
         } as ExtendedUser);
 
       router.replace(getNextRouteForResolvedGap(optimisticUser, quiz_id));

@@ -8,9 +8,12 @@ import {
   getQuizState,
   submitQuizAnswer,
   resetQuiz,
+  getQuizResults,
   type QuizStateResponse,
+  type QuizResultsResponse,
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
+import QuizCompletionCard from "../../components/QuizCompletionCard";
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
 
@@ -39,7 +42,7 @@ function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
 
 function isUsersAssignedVariant(
   quizId: string,
-  user?: ExtendedUser | null
+  user?: ExtendedUser | null,
 ): boolean {
   return Boolean(user?.assigned_var && quizId === user.assigned_var);
 }
@@ -50,16 +53,13 @@ function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
   }
 
   if (quizId === "base") {
-    return (
-      Boolean(user.survey_pre_base_completed) &&
-      !Boolean(user.quiz_base_completed)
-    );
+    return !!user.survey_pre_base_completed && !user.quiz_base_completed;
   }
 
   return (
     isUsersAssignedVariant(quizId, user) &&
-    Boolean(user.survey_post_base_completed) &&
-    !Boolean(user.quiz_variant_completed)
+    !!user.survey_post_base_completed &&
+    !user.quiz_variant_completed
   );
 }
 
@@ -71,11 +71,11 @@ function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
   if (quizId === "base") {
     if (!user.survey_pre_base_completed) return "/survey";
 
-    if (user.quiz_base_completed && !user.survey_post_base_completed) {
+    if (!user.survey_post_base_completed) {
       return "/survey";
     }
 
-    if (user.survey_post_base_completed && !user.quiz_variant_completed) {
+    if (!user.quiz_variant_completed) {
       return assignedVariantPath;
     }
 
@@ -97,12 +97,7 @@ function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
 
 export default function QuizPage() {
   const router = useRouter();
-  const rawQuizId =
-    typeof router.query.quiz_id === "string"
-      ? router.query.quiz_id
-      : Array.isArray(router.query.quiz_id)
-        ? router.query.quiz_id[0]
-        : null;
+  const rawQuizId = [router.query.quiz_id].flat()[0] ?? null;
 
   const [user, setUser] = useState<ExtendedUser | null>(null);
   const [checking, setChecking] = useState(true);
@@ -112,9 +107,11 @@ export default function QuizPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [quizResults, setQuizResults] = useState<QuizResultsResponse | null>(null);
   const [hasAskedChat, setHasAskedChat] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
+  const [firstChatResponded, setFirstChatResponded] = useState(false);
 
   const quizId =
     rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
@@ -205,17 +202,61 @@ export default function QuizPage() {
     setHasAskedChat(false);
     setChatLoading(false);
     setExternalQuestion(null);
+    setFirstChatResponded(false);
   }, [current?.id]);
 
-  useEffect(() => {
-    if (!router.isReady) return;
-    if (!quizCompleted) return;
+  async function redirectAfterCompletion() {
     if (!quizId) return;
-    if (!user) return;
-    if (user.is_admin) return;
+    try {
+      const res = await getMe();
+      const refreshedUser = res.user as ExtendedUser;
 
-    router.replace("/survey");
-  }, [router.isReady, quizCompleted, quizId, user, router]);
+      if (quizId === "base") {
+        if (!refreshedUser.survey_post_base_completed) {
+          router.replace("/survey?stage=post_base");
+          return;
+        }
+
+        if (!refreshedUser.quiz_variant_completed) {
+          router.replace(
+            refreshedUser.assigned_var
+              ? `/quiz/${refreshedUser.assigned_var}`
+              : "/dashboard",
+          );
+          return;
+        }
+
+        if (
+          refreshedUser.quiz_variant_completed &&
+          !refreshedUser.survey_post_variant_completed
+        ) {
+          router.replace("/survey");
+          return;
+        }
+
+        router.replace("/dashboard");
+        return;
+      }
+
+      // Variant quiz completed
+      if (!refreshedUser.survey_post_variant_completed) {
+        router.replace("/survey?stage=post_variant");
+        return;
+      }
+
+      router.replace("/dashboard");
+    } catch (e) {
+      console.error(e);
+      router.replace("/survey");
+    }
+  }
+
+  useEffect(() => {
+    if (!quizCompleted || !user || !quizId) return;
+    let cancel = false;
+    getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
+    return () => { cancel = true; };
+  }, [quizCompleted, user, quizId]);
 
   if (checking) {
     return (
@@ -238,11 +279,15 @@ export default function QuizPage() {
   function onAskAssistantAboutQuestion() {
     if (!current) return;
 
-    const prompt = current.subtitle
-      ? `${current.stem}\n\n${current.subtitle}`
-      : current.stem;
+    const choicesText = current.choices
+      .map((c) => `${c.id}. ${c.label}`)
+      .join("\n");
 
-    setExternalQuestion(prompt);
+    const parts = [current.stem];
+    if (current.subtitle) parts.push(current.subtitle);
+    parts.push(`Answer choices:\n${choicesText}`);
+
+    setExternalQuestion(parts.join("\n\n"));
     setHasAskedChat(true);
   }
 
@@ -255,11 +300,7 @@ export default function QuizPage() {
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(
-        quizId,
-        current.id,
-        selectedChoice
-      );
+      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
@@ -324,46 +365,23 @@ export default function QuizPage() {
             </div>
 
             {quizCompleted ? (
-              user.is_admin ? (
-                <div className="rounded-xl bg-white p-6 shadow-sm border">
-                  <h2 className="text-lg font-semibold mb-2">
-                    Quiz completed (admin view)
-                  </h2>
-                  <p className="text-sm text-gray-600 mb-4">
-                    Reset to take it again, or go back to the dashboard.
-                  </p>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => router.push("/dashboard")}
-                      className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
-                    >
-                      Back to Dashboard
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!quizId) return;
-                        await resetQuiz(quizId);
-                        const state = await getQuizState(quizId);
-                        setQuizState(state);
-                        setSelectedChoice(null);
-                      }}
-                      className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
-                    >
-                      Reset &amp; Retake
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-xl bg-white p-6 shadow-sm border">
-                  <h2 className="text-lg font-semibold mb-2">You’re all done!</h2>
-                  <p className="text-sm text-gray-600">
-                    Redirecting you to the next survey…
-                  </p>
-                </div>
-              )
+              <QuizCompletionCard
+                isAdmin={user.is_admin}
+                quizResults={quizResults}
+                onDashboard={() => router.push("/dashboard")}
+                onNextStep={redirectAfterCompletion}
+                onReset={user.is_admin ? async () => {
+                  if (!quizId) return;
+                  await resetQuiz(quizId);
+                  const state = await getQuizState(quizId);
+                  setQuizState(state);
+                  setSelectedChoice(null);
+                  setQuizResults(null);
+                } : undefined}
+              />
             ) : (
-              <div className="grid min-h-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
-                <div className="grid min-h-0 grid-rows-2 gap-6">
+              <div className="grid min-h-0 min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
+                <div className="grid min-h-0 min-w-0 grid-rows-2 gap-6">
                   <section className="min-h-0 rounded-xl border bg-white p-4 shadow-sm overflow-auto">
                     <h2 className="text-lg font-medium mb-3">Question</h2>
 
@@ -421,7 +439,9 @@ export default function QuizPage() {
 
                             <button
                               onClick={onSubmit}
-                              disabled={!selectedChoice || submitting || chatLoading}
+                              disabled={
+                                !selectedChoice || submitting || chatLoading
+                              }
                               className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
                             >
                               {submitting ? "Submitting…" : "Submit answer"}
@@ -451,14 +471,17 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="min-h-0">
+                <div className="min-h-0 min-w-0">
                   {quizId && (
-                    <div className="h-full min-h-0 rounded-2xl overflow-hidden">
+                    <div className="h-full min-h-0 min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox
                         quizId={quizId}
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}
                         onLoadingChange={setChatLoading}
+                        onHistoryLoaded={() => setHasAskedChat(true)}
+                        disableCancel={!firstChatResponded}
+                        onAssistantMessage={() => setFirstChatResponded(true)}
                       />
                     </div>
                   )}

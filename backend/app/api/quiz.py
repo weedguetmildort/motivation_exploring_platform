@@ -2,13 +2,14 @@
 from fastapi import APIRouter, Depends, Request, HTTPException
 from ..schemas.user import UserPublic
 from .auth import get_current_user
-from ..schemas.quiz import QuizStateResponse, SubmitAnswerRequest
+from ..schemas.quiz import QuizStateResponse, SubmitAnswerRequest, QuizResultsResponse
 from ..services.quiz import (
     _load_or_create_attempt,
     build_quiz_state_response,
     record_question_shown,
     record_answer,
     reset_quiz_attempt,
+    get_quiz_results,
 )
 
 #TODO: ensure quiz_id is valid - either in this file before querying responses or in services/quiz.py functions
@@ -60,6 +61,16 @@ def submit_quiz_answer(
     )
 
     return build_quiz_state_response(db, updated_doc)
+
+# Admin endpoint to get quiz results for a given quiz attempt
+@router.get("/results", response_model=QuizResultsResponse)
+def get_quiz_results_endpoint(
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    db = request.app.state.db
+    quiz_id = request.path_params["quiz_id"]
+    return get_quiz_results(db, user.id, quiz_id)
 
 
 @router.post("/reset", status_code=200)
