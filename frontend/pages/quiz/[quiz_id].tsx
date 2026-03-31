@@ -312,10 +312,10 @@ export default function QuizPage() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
-      <header className="shrink-0 bg-white border-b px-6 py-4">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between h-full">
+      <header className="shrink-0 bg-white border-b px-4 py-3 sm:px-6 sm:py-4">
+        <div className="site-header-inner">
           <div>
-            <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
+            <h1 className="page-title">
               Quiz {quizId ?? rawQuizId}
               {attempt && (
                 <span className="ml-3 text-base 2xl:text-lg font-normal text-gray-500">
@@ -326,7 +326,7 @@ export default function QuizPage() {
                 </span>
               )}
             </h1>
-            <p className="text-sm 2xl:text-base text-gray-600">
+            <p className="page-subtitle">
               Answer each question once. Your progress is saved automatically.
             </p>
           </div>
@@ -349,9 +349,9 @@ export default function QuizPage() {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-auto">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-6 py-6">
-          <div className="flex flex-col gap-4">
+      <div className="flex-1 min-h-0 md:overflow-auto">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-2 md:px-6 md:py-6 h-full md:h-auto">
+          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">
                 {error}
@@ -374,8 +374,8 @@ export default function QuizPage() {
                 } : undefined}
               />
             ) : (
-              <div className="grid min-w-0 grid-cols-[1fr_1.618fr] gap-6">
-                <div className="flex flex-col gap-6">
+              <div className="flex-1 min-h-0 md:flex-none grid min-w-0 grid-cols-1 md:grid-cols-[1fr_1.618fr] grid-rows-[2fr_3fr] md:grid-rows-none gap-3 md:gap-6">
+                <div className="flex flex-col gap-3 md:gap-6 min-h-0 overflow-auto">
                   <section className="rounded-xl border bg-white shadow-sm overflow-auto">
                     {!quizState && (
                       <div className="p-4 text-sm text-gray-500">Loading quiz…</div>
@@ -461,7 +461,7 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="min-w-0 self-start sticky top-0 h-[calc(100vh-9rem)]">
+                <div className="min-w-0 min-h-0 md:self-start md:sticky md:top-0 md:h-[calc(100vh-9rem)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox

@@ -52,22 +52,22 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="sticky top-0 z-10 bg-white border-b px-6 py-4">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between">
+      <header className="site-header">
+        <div className="site-header-inner">
           <div>
-            <h1 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">Chat</h1>
-            <p className="text-sm 2xl:text-base text-gray-600">Ask questions and interact with AI chatbot</p>
+            <h1 className="page-title">Chat</h1>
+            <p className="page-subtitle">Ask questions and interact with AI chatbot</p>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => router.push("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="btn-primary"
             >
               Back to Dashboard
             </button>
             <button
               onClick={onLogout}
-              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -75,7 +75,7 @@ export default function ChatPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto p-6">
+      <div className="page-container">
         <ChatBox quizId="default" />
       </div>
     </div>
