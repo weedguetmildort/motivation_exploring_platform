@@ -1,7 +1,7 @@
 // frontend/pages/quiz/[quiz_id].tsx
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import AnswerBox, { Choice } from "../../components/AnswerBox";
+import QuestionBox, { Choice } from "../../components/QuestionBox";
 import { getMe, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
@@ -427,7 +427,7 @@ export default function QuizPage() {
                                   : ""
                               }`}
                             >
-                              <AnswerBox
+                              <QuestionBox
                                 choices={current.choices as Choice[]}
                                 value={selectedChoice}
                                 onChange={setSelectedChoice}

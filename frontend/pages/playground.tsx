@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import QuestionBox from "../components/QuestionBox";
-import AnswerBox, { Choice } from "../components/AnswerBox";
+import QuestionBox, { Choice } from "../components/QuestionBox";
 import ChatBox from "../components/ChatBox";
 import { getMe, logout, type User } from "../lib/auth";
 import { useRouter } from "next/router";
@@ -231,54 +230,48 @@ export default function Playground() {
         <div className="grid gap-6 grid-cols-1 md:grid-cols-[1fr_1.618fr] pt-6 pb-6">
           {/* Left column */}
           <div className="flex flex-col gap-6">
-            <section className="rounded-xl bg-white p-4 shadow-sm border">
-              <h2 className="text-lg 2xl:text-xl font-medium mb-3">Question</h2>
-
+            <section className="rounded-xl border bg-white shadow-sm">
               {loadingQuestions && (
-                <div className="text-sm text-gray-500">Loading questions…</div>
+                <div className="p-4 text-sm text-gray-500">Loading questions…</div>
               )}
 
               {questionsError && (
-                <div className="text-sm text-red-600">{questionsError}</div>
+                <div className="p-4 text-sm text-red-600">{questionsError}</div>
               )}
 
               {!loadingQuestions && !questionsError && !hasQuestions && (
-                <div className="text-sm text-gray-500">
+                <div className="p-4 text-sm text-gray-500">
                   No questions available. Add some in the admin panel.
                 </div>
               )}
 
               {hasQuestions && (
-                <div className="space-y-4">
-                  <QuestionBox
-                    question={question}
-                    subtitle={subtitle || undefined}
-                    className="max-w-3xl 2xl:max-w-none mx-auto"
-                  />
-                </div>
-              )}
-            </section>
-
-            <section className="rounded-xl bg-white p-4 shadow-sm border">
-              <h2 className="text-lg 2xl:text-xl font-medium mb-3">Options</h2>
-
-              {!hasQuestions ? (
-                <div className="text-sm text-gray-500">
-                  Options will appear once there is at least one question.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <AnswerBox
-                    choices={choices}
-                    value={selected}
-                    onChange={setSelected}
-                    className="max-w-3xl 2xl:max-w-none mx-auto"
-                  />
-                  <div className="text-sm text-gray-600">
-                    Selected:{" "}
-                    <span className="font-medium">{selected ?? "(none)"}</span>
+                <>
+                  <div className="p-4">
+                    <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">{question}</h2>
                   </div>
-                </div>
+
+                  {subtitle && (
+                    <div className="px-4 pb-4">
+                      <p className="text-lg 2xl:text-xl text-gray-600">{subtitle}</p>
+                    </div>
+                  )}
+
+                  <hr className="border-gray-200" />
+
+                  <div className="p-4 space-y-3">
+                    <QuestionBox
+                      choices={choices}
+                      value={selected}
+                      onChange={setSelected}
+                      className="max-w-3xl 2xl:max-w-none mx-auto"
+                    />
+                    <div className="text-sm text-gray-600">
+                      Selected:{" "}
+                      <span className="font-medium">{selected ?? "(none)"}</span>
+                    </div>
+                  </div>
+                </>
               )}
             </section>
           </div>
