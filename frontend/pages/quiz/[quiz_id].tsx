@@ -323,7 +323,7 @@ export default function QuizPage() {
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-gray-50">
+    <div className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
       <header className="shrink-0 bg-white border-b px-4 py-3 sm:px-6 sm:py-4">
         <div className="site-header-inner">
           <div>
@@ -363,9 +363,9 @@ export default function QuizPage() {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 md:overflow-auto">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-2 md:px-6 md:py-6 h-full md:h-auto">
-          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto">
+      <div className="flex-1 min-h-0 md:overflow-auto [@media(max-height:700px)]:flex-none">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-2 md:px-6 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
+          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto [@media(max-height:700px)]:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">
                 {error}
@@ -390,7 +390,7 @@ export default function QuizPage() {
               />
               </div>
             ) : (
-              <div className="flex-1 min-h-0 md:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
+              <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
                   <section className="rounded-xl border bg-white shadow-sm">
                     {!quizState && (
@@ -477,7 +477,7 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="flex-1 min-h-0 md:flex-none min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
+                <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none [@media(max-height:700px)]:min-h-[420px] min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox
