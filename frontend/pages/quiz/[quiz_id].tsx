@@ -328,9 +328,11 @@ export default function QuizPage() {
                 </span>
               )}
             </h1>
-            <p className="page-subtitle">
-              Answer each question once. Your progress is saved automatically.
-            </p>
+            {!quizCompleted && (
+              <p className="page-subtitle">
+                Answer each question once. Your progress is saved automatically.
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
