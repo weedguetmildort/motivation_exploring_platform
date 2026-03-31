@@ -244,18 +244,22 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
     if (!el) return;
 
     const fitMath = () => {
-      // Reset all inline font-size overrides so we measure the natural width.
-      el.querySelectorAll<HTMLElement>(".katex-display").forEach((d: HTMLElement) => {
-        d.style.fontSize = "";
-      });
-      // Force a synchronous reflow so scrollWidth reflects the reset size.
-      void el.offsetHeight;
-      // Scale any block that still overflows its container.
-      el.querySelectorAll<HTMLElement>(".katex-display").forEach((d: HTMLElement) => {
-        const available = d.clientWidth;
-        if (d.scrollWidth > available && available > 0) {
-          d.style.fontSize = `${available / d.scrollWidth}em`;
-        }
+      // Reset all inline font-size overrides so the browser lays out at natural size.
+      const displays = el.querySelectorAll<HTMLElement>(".katex-display");
+      displays.forEach((d: HTMLElement) => { d.style.fontSize = ""; });
+      // Defer the measurement to the next animation frame — avoids forcing a
+      // synchronous reflow inside the ResizeObserver callback, which would
+      // re-trigger the observer and cause a flash/loop on resize.
+      requestAnimationFrame(() => {
+        if (!containerRef.current) return;
+        displays.forEach((d: HTMLElement) => {
+          const available = d.clientWidth;
+          if (d.scrollWidth > available && available > 0) {
+            // Clamp to 0.65em minimum so equations remain legible on mobile
+            // even when they can't fully fit — the container scrolls horizontally.
+            d.style.fontSize = `${Math.max(0.65, available / d.scrollWidth)}em`;
+          }
+        });
       });
     };
 
