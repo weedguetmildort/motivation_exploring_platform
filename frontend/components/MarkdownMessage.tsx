@@ -281,7 +281,7 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
   if (inline) return <span>{rendered}</span>;
 
   return (
-    <div ref={containerRef} className="prose prose-sm max-w-none break-words [&>*+h2]:mt-5 [&>*+h3]:mt-4 [&>*+h4]:mt-3 [&>p+p]:mt-3">
+    <div ref={containerRef} className="prose prose-sm text-[0.8125rem] max-w-none break-words [&>*+h2]:mt-5 [&>*+h3]:mt-4 [&>*+h4]:mt-3 [&>p+p]:mt-3">
       {rendered}
     </div>
   );
