@@ -16,7 +16,7 @@ export default function QuizCompletionCard({
   onReset,
 }: Props) {
   return (
-    <div className="rounded-xl bg-white p-6 shadow-sm border">
+    <div className="rounded-xl bg-white p-4 sm:p-6 shadow-sm border">
       <h2 className="text-lg font-semibold mb-2">
         Quiz completed{isAdmin ? " (admin view)" : ""}
       </h2>
@@ -51,7 +51,7 @@ export default function QuizCompletionCard({
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3">
         <button
           onClick={onDashboard}
           className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"

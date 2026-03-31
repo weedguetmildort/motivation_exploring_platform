@@ -361,6 +361,7 @@ export default function QuizPage() {
             )}
 
             {quizCompleted ? (
+              <div className="overflow-auto flex-1 min-h-0 md:flex-none">
               <QuizCompletionCard
                 isAdmin={user.is_admin}
                 quizResults={quizResults}
@@ -375,6 +376,7 @@ export default function QuizPage() {
                   setQuizResults(null);
                 } : undefined}
               />
+              </div>
             ) : (
               <div className="flex-1 min-h-0 md:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
