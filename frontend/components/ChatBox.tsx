@@ -410,7 +410,7 @@ export default function ChatBox({
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
-            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring font-medium text-gray-900"
+            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-gray-900"
             placeholder="Type a message…"
             value={input}
             onChange={handleInputChange}
