@@ -171,6 +171,11 @@ export default function QuizPage() {
     if (!router.isReady) return;
     if (!quizId) return;
 
+    // Reset stale state immediately so quizCompleted doesn't briefly read as
+    // true from a previous quiz while the new state loads.
+    setQuizState(null);
+    setQuizResults(null);
+
     let cancel = false;
 
     (async () => {
