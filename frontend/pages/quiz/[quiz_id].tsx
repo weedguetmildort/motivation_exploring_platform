@@ -389,81 +389,74 @@ export default function QuizPage() {
 
                     {quizState && current && (
                       <>
-                        <div className="p-4 border-b">
+                        <div className="p-4">
                           <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
                             Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
                           </h2>
                         </div>
+
                         {current.subtitle && (
-                          <div className="p-4">
+                          <div className="px-4 pb-4">
                             <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
                           </div>
                         )}
-                      </>
-                    )}
-                  </section>
 
-                  <section className="rounded-xl border bg-white p-4 2xl:p-6 shadow-sm">
-                    <h2 className="text-lg 2xl:text-xl font-medium mb-3">Options</h2>
+                        <hr className="border-gray-200" />
 
-                    {!quizState || !current ? (
-                      <div className="text-sm text-gray-500">
-                        Options will appear once a question is available.
-                      </div>
-                    ) : (
-                      <div className="relative h-full">
-                        <div
-                          className={`space-y-4 transition ${
-                            !hasAskedChat
-                              ? "pointer-events-none opacity-40 blur-[1px]"
-                              : ""
-                          }`}
-                        >
-                          <AnswerBox
-                            choices={current.choices as Choice[]}
-                            value={selectedChoice}
-                            onChange={setSelectedChoice}
-                            className="max-w-3xl 2xl:max-w-none mx-auto"
-                          />
+                        <div className="relative p-4">
+                          <div
+                            className={`space-y-3 transition ${
+                              !hasAskedChat
+                                ? "pointer-events-none opacity-40 blur-[1px]"
+                                : ""
+                            }`}
+                          >
+                            <AnswerBox
+                              choices={current.choices as Choice[]}
+                              value={selectedChoice}
+                              onChange={setSelectedChoice}
+                              className="max-w-3xl 2xl:max-w-none mx-auto"
+                            />
 
-                          <div className="flex items-center justify-between text-sm text-gray-600">
-                            <div>
-                              Selected:{" "}
-                              <span className="font-medium">
-                                {selectedChoice?.toUpperCase() ?? "(none)"}
-                              </span>
-                            </div>
+                            <div className="flex items-center justify-between text-sm text-gray-600 pt-1">
+                              <div>
+                                Selected:{" "}
+                                <span className="font-medium">
+                                  {selectedChoice?.toUpperCase() ?? "(none)"}
+                                </span>
+                              </div>
 
-                            <button
-                              onClick={onSubmit}
-                              disabled={
-                                !selectedChoice || submitting || chatLoading
-                              }
-                              className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
-                            >
-                              {submitting ? "Submitting…" : "Submit answer"}
-                            </button>
-                          </div>
-                        </div>
-
-                        {!hasAskedChat && (
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
-                              <p className="text-sm text-gray-800 mb-3">
-                                Before choosing an answer, send this question to
-                                the assistant and read the explanation.
-                              </p>
                               <button
-                                type="button"
-                                onClick={onAskAssistantAboutQuestion}
-                                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+                                onClick={onSubmit}
+                                disabled={
+                                  !selectedChoice || submitting || chatLoading
+                                }
+                                className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
                               >
-                                Ask the assistant about this question
+                                {submitting ? "Submitting…" : "Submit answer"}
                               </button>
                             </div>
                           </div>
-                        )}
-                      </div>
+
+                          {!hasAskedChat && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
+                                <p className="text-sm text-gray-800 mb-3">
+                                  Before choosing an answer, send this question to
+                                  the assistant and read the explanation.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={onAskAssistantAboutQuestion}
+                                  className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+                                >
+                                  Ask the assistant about this question
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </>
                     )}
                   </section>
                 </div>

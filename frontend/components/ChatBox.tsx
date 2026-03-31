@@ -54,11 +54,11 @@ const MessageBubble = memo(function MessageBubble({
         {label}
       </div>
       <div className={`flex ${role === "user" ? "justify-end" : "justify-start"}`}>
-        <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+        <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
           {role === "assistant" ? (
             <MarkdownMessage content={content} />
           ) : (
-            <div className="whitespace-pre-wrap">{content}</div>
+            <div className="text-[0.8125rem] whitespace-pre-wrap">{content}</div>
           )}
         </div>
       </div>
@@ -356,13 +356,13 @@ export default function ChatBox({
 
         {followupQuestions && (
           <div className="mt-3 border-t border-gray-200 pt-3">
-            <div className="mb-2 text-sm font-semibold text-gray-900">Follow-up Questions</div>
+            <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
             <div className="flex flex-wrap gap-2">
               {followupQuestions.map((q, i) => (
                 <button
                   key={i}
                   type="button"
-                  className="text-xs px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                  className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
                   onClick={() => handleFollowupClick(q)}
                 >
                   <MarkdownMessage content={q} inline />
@@ -384,7 +384,7 @@ export default function ChatBox({
             <div key={`streaming-${agentKey}`}>
               <div className="text-xs text-gray-600 px-1 mb-1 text-left">{label}</div>
               <div className="flex justify-start">
-                <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+                <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
                   <MarkdownMessage content={content} />
                 </div>
               </div>
