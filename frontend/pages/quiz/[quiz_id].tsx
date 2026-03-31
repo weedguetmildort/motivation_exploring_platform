@@ -477,7 +477,7 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="flex-1 min-h-0 md:flex-none min-w-0 md:self-start md:sticky md:top-0 md:h-[calc(100vh-9rem)]">
+                <div className="flex-1 min-h-0 md:flex-none min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox
