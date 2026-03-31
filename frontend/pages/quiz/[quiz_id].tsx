@@ -1,5 +1,5 @@
 // frontend/pages/quiz/[quiz_id].tsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import AnswerBox, { Choice } from "../../components/AnswerBox";
 import { getMe, logout, type User } from "../../lib/auth";
@@ -112,6 +112,7 @@ export default function QuizPage() {
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
   const [firstChatResponded, setFirstChatResponded] = useState(false);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
+  const lastResetQuestionId = useRef<string | undefined>(undefined);
 
   const quizId =
     rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
@@ -175,6 +176,7 @@ export default function QuizPage() {
     // true from a previous quiz while the new state loads.
     setQuizState(null);
     setQuizResults(null);
+    lastResetQuestionId.current = undefined;
 
     let cancel = false;
 
@@ -203,6 +205,9 @@ export default function QuizPage() {
 
   useEffect(() => {
     if (!current) return;
+    // Skip if this is the same question re-appearing after a quizState null reset
+    if (lastResetQuestionId.current === current.id) return;
+    lastResetQuestionId.current = current.id;
     setSelectedChoice(null);
     setHasAskedChat(false);
     setChatLoading(false);
@@ -342,7 +347,7 @@ export default function QuizPage() {
 
           <div className="flex items-center gap-3">
             <button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => router.replace("/dashboard")}
               className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
             >
               Back to Dashboard
@@ -372,7 +377,7 @@ export default function QuizPage() {
               <QuizCompletionCard
                 isAdmin={user.is_admin}
                 quizResults={quizResults}
-                onDashboard={() => router.push("/dashboard")}
+                onDashboard={() => router.replace("/dashboard")}
                 onNextStep={redirectAfterCompletion}
                 onReset={user.is_admin ? async () => {
                   if (!quizId) return;
