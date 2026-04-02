@@ -19,6 +19,19 @@ export default function Playground() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
+  const [lastAiMessage, setLastAiMessage] = useState<string | null>(null);
+  const [followupToSend, setFollowupToSend] = useState<string | null>(null);
+
+  function handleFollowupClick(question: string) {
+    setFollowupToSend(question);
+    console.log("Follow-up option clicked:", question);
+  }
+    useEffect(() => {
+    if (lastAiMessage) {
+      setFollowupToSend(null);
+    }
+  }, [lastAiMessage]);
+
 
   useEffect(() => {
     let cancel = false;
@@ -58,6 +71,8 @@ export default function Playground() {
   const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [questionsError, setQuestionsError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [incorrectQuestionIds, setIncorrectQuestionIds] = useState<string[]>([]);
+
 
   // Load questions once we know the user (and they’re admin)
   useEffect(() => {
@@ -98,6 +113,48 @@ export default function Playground() {
     setChoices(q.choices as Choice[]);
     setSelected(null); // reset selection when changing question
   }, [questions, currentIndex]);
+
+    useEffect(() => {
+    if (!questions.length) return;
+
+    const storageKey = `incorrectQuestions_playground_${active}`;
+    const stored = localStorage.getItem(storageKey);
+
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setIncorrectQuestionIds(parsed);
+          console.log(
+            "Incorrect questions (from storage):",
+            parsed.map((id: string) => {
+              const q = questions.find((q) => q.id === id);
+              return { id, question: q?.stem };
+            })
+          );
+          return;
+        }
+      } catch {
+        // ignore invalid storage
+      }
+    }
+
+    const ids = questions.map((q) => q.id);
+    const shuffled = [...ids].sort(() => Math.random() - 0.5);
+    const selectedIds = shuffled.slice(0, Math.min(5, ids.length));
+
+    setIncorrectQuestionIds(selectedIds);
+    console.log(
+      "Incorrect questions:",
+      selectedIds.map((id) => {
+        const q = questions.find((q) => q.id === id);
+        return { id, question: q?.stem };
+      })
+    );
+    localStorage.setItem(storageKey, JSON.stringify(selectedIds));
+  }, [questions, active]);
+
+
 
   if (checking) {
     return (
@@ -286,7 +343,13 @@ export default function Playground() {
           {/* Right column (Chat) */}
           <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
             <ChatBox
-              quizId={active}
+             quizId={active === "double" ? "double" : active === "followup" ? "followup" : active === "links" ? "links" : "playground"}
+              currentQuestionId={questions[currentIndex]?.id ?? null}
+              currentQuestionText={questions[currentIndex]?.stem ?? null}
+              currentChoices={questions[currentIndex]?.choices ?? []}
+              incorrectQuestionIds={incorrectQuestionIds}
+              onAssistantMessage={setLastAiMessage}
+              externalQuestion={followupToSend}
             />
           </div>
         </div>
@@ -299,11 +362,22 @@ export default function Playground() {
           >
             Previous
           </button>
-          <span className="text-sm text-gray-600 self-center">
-            {hasQuestions
-              ? `Question ${currentIndex + 1} of ${questions.length}`
-              : "No questions"}
-          </span>
+          <div className="text-center">
+            <span className="text-sm text-gray-600 self-center">
+              {hasQuestions
+                ? `Question ${currentIndex + 1} of ${questions.length}`
+                : "No questions"}
+            </span>
+            {hasQuestions && (
+              <div className="text-xs text-red-600 mt-1">
+                Incorrect AI for this question:{" "}
+                {incorrectQuestionIds.includes(questions[currentIndex]?.id)
+                  ? "YES"
+                  : "NO"}
+              </div>
+            )}
+          </div>
+
           <button
             className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
             onClick={() =>

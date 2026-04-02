@@ -32,6 +32,11 @@ const BOT_COLORS: Record<Bot, string> = {
 
 type ChatBoxProps = {
   quizId: string;
+  currentQuestionId?: string | null;
+  currentQuestionText?: string | null;
+  currentChoices?: { id: string; label: string }[];
+  incorrectQuestionIds?: string[];
+
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
   onLoadingChange?: (loading: boolean) => void;
@@ -43,6 +48,11 @@ type ChatBoxProps = {
 
 export default function ChatBox({
   quizId,
+  currentQuestionId = null,
+  currentQuestionText = null,
+  currentChoices = [],
+  incorrectQuestionIds = [],
+
   onAssistantMessage,
   onError,
   onLoadingChange,
@@ -77,27 +87,35 @@ export default function ChatBox({
       const loaded: Msg[] = [];
       for (const m of messages) {
         if (m.role === "user") {
-          loaded.push({ id: crypto.randomUUID(), role: "user", content: m.content as string, ts: 0 });
-        } else {
-          const replies = Array.isArray(m.content) ? m.content : [m.content];
-          replies.forEach((r, i) => {
             loaded.push({
               id: crypto.randomUUID(),
-              role: "assistant",
-              content: r,
+              role: "user",
+              content: m.content as string,
               ts: 0,
-              bot: agentFilter === "double"
-                ? (["A", "B"][i] as Bot ?? undefined)
-                : replies.length > 1 ? (["A", "B", "C", "D"][i] as Bot ?? "A") : undefined,
             });
-          });
-        }
+        } else {
+            const replies = Array.isArray(m.content) ? m.content : [m.content];
+            replies.forEach((r, i) => {
+              loaded.push({
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: r,
+                ts: 0,
+                bot:
+                  agentFilter === "double"
+                    ? ((["A", "B"][i] as Bot) ?? undefined)
+                    : replies.length > 1
+                      ? ((["A", "B", "C", "D"][i] as Bot) ?? "A")
+                      : undefined,
+              });
+            });
+          }
       }
       onHistoryLoaded?.();
       setMessages(loaded);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [activeConvId]); // runs once when activeConvId first becomes available
+  }, [activeConvId, agentFilter, onHistoryLoaded]); // runs once when activeConvId first becomes available
 
   useEffect(() => {
     if (conversationId) {
@@ -118,7 +136,7 @@ export default function ChatBox({
 
   useEffect(() => {
     onLoadingChange?.(pending);
-  }, [pending]);
+  }, [pending, onLoadingChange]);
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();
@@ -139,6 +157,10 @@ export default function ChatBox({
       messageForBackend = removeMentions(trimmed) || trimmed;
     }
 
+    const answerIncorrectly =
+      !!currentQuestionId && incorrectQuestionIds.includes(currentQuestionId);
+
+
     setError(null);
     setFollowupQuestions(undefined);
     const userMsg: Msg = {
@@ -154,13 +176,13 @@ export default function ChatBox({
 
     try {
       setPending(true);
-      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
-        quizId,
-        activeConvId,
-        messageForBackend,
-        agents,
-        controller.signal,
-      );
+      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(quizId, activeConvId, messageForBackend, {
+      agents,
+      answerIncorrectly,
+      questionText: currentQuestionText,
+      answerChoices: currentChoices,
+      signal: controller.signal,
+});
       if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
 
       const mapAgentToBot = (agent: string): Bot | undefined => {

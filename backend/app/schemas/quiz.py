@@ -18,6 +18,7 @@ class QuizAttemptPublic(BaseModel):
     status: str  # "in_progress" or "completed"
     total_questions: int
     answered_count: int
+    incorrect_question_ids: list[str] = []
 
 class QuizQuestionPayload(BaseModel):
     id: str

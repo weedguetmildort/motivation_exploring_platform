@@ -1,7 +1,7 @@
 import os
 import uuid
 import time
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
@@ -15,12 +15,17 @@ from ..services.followup import generate_followup_questions
 
 router = APIRouter()
 
+class AnswerChoice(BaseModel):
+    id: str
+    label: str
 
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
-    agents: list[str] = []
-
+    agents: list[str] = Field(default_factory=list)
+    answer_incorrectly: bool = False
+    question_text: str | None = None
+    answer_choices: list[AnswerChoice] = Field(default_factory=list)
 
 class ChatResponse(BaseModel):
     reply: list[str]
@@ -55,6 +60,60 @@ _BASE_SYSTEM_PROMPT = (
     "to help students answer some quiz questions."
     "Go through the explanation first, and only then provide the solution at the end."
 )
+
+def _format_question_with_choices(req: ChatRequest) -> str:
+    parts: list[str] = []
+
+    if req.question_text:
+        parts.append(f"Question:\n{req.question_text}")
+
+    if req.answer_choices:
+        formatted_choices = "\n".join(
+            [f"{choice.id}. {choice.label}" for choice in req.answer_choices]
+        )
+        parts.append(f"Answer choices:\n{formatted_choices}")
+
+    if req.message:
+        parts.append(f"Student message:\n{req.message}")
+
+    return "\n\n".join(parts).strip()
+
+
+def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
+    if answer_incorrectly and has_choices:
+        return (
+            "You are a helpful assistant helping a student with a multiple-choice question. "
+            "The user will provide a question and a fixed list of answer choices. "
+            "You MUST choose exactly ONE of the provided answer choices. "
+            "You MUST NOT invent a new answer choice. "
+            "You MUST choose an incorrect answer choice from the provided list. "
+            "You must sound confident and explain why your chosen answer is correct. "
+            "Do NOT say that you are unsure. "
+            "Do NOT mention that your answer is intentionally incorrect. "
+            "Start your response by clearly naming the selected answer choice."
+        )
+
+    if answer_incorrectly:
+        return (
+            "You are a helpful assistant helping a student with a question. "
+            "Respond confidently with an incorrect answer and explain it as if it were correct. "
+            "Do NOT say that you are unsure or that you may be wrong."
+        )
+
+    if has_choices:
+        return (
+            "You are a helpful assistant who helps students answer multiple-choice questions. "
+            "Carefully analyze the question and the provided answer choices. "
+            "Choose exactly ONE of the provided answer choices. "
+            "Do NOT invent a new answer choice. "
+            "Explain your reasoning clearly. "
+            "Start your response by clearly naming the selected answer choice."
+        )
+
+    return (
+        "You are a helpful assistant who helps students answer questions. "
+        "Explain your reasoning clearly."
+    )
 
 
 async def get_chat_response(messages: list[dict]) -> str:
@@ -136,17 +195,23 @@ async def double_chat(
     run_agent_b = "agentb" in selected_agents
 
     history = get_last_exchange(request.app.state.messages, conv_id)
-
+    prompt_content = _format_question_with_choices(req)
     reply_a = ""
     reply_b = ""
     metadata_a: Optional[AIMessageMetadata] = None
     metadata_b: Optional[AIMessageMetadata] = None
 
+
     if run_agent_a:
+        system_instruction_a = _build_system_instruction(
+        answer_incorrectly=req.answer_incorrectly,
+        has_choices=len(req.answer_choices) > 0,
+        )
+
         messages_a = [
-            {"role": "system", "content": _BASE_SYSTEM_PROMPT},
+            {"role": "system", "content": system_instruction_a},
             *history,
-            {"role": "user", "content": req.message},
+            {"role": "user", "content": prompt_content},
         ]
         reply_a, metadata_a = await get_chat_response_with_metadata(messages_a, model_version)
 
@@ -159,15 +224,17 @@ async def double_chat(
             messages_b = [
                 {"role": "system", "content": system_instruction_b},
                 *history,
-                {"role": "user", "content": req.message},
+                {"role": "user", "content": prompt_content},
                 {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
             ]
         else:
-            system_instruction_b = _BASE_SYSTEM_PROMPT
+            system_instruction_b = _build_system_instruction(
+                answer_incorrectly=req.answer_incorrectly,
+                has_choices=len(req.answer_choices) > 0,)
             messages_b = [
                 {"role": "system", "content": system_instruction_b},
                 *history,
-                {"role": "user", "content": req.message},
+                {"role": "user", "content": prompt_content},
             ]
 
         reply_b, metadata_b = await get_chat_response_with_metadata(messages_b, model_version)
@@ -225,10 +292,11 @@ async def followup_quiz_chat(
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = get_last_exchange(request.app.state.messages, conv_id)
 
+    prompt_content = _format_question_with_choices(req)
     reply = await get_chat_response([
         {"role": "system", "content": _BASE_SYSTEM_PROMPT},
         *history,
-        {"role": "user", "content": req.message},
+        {"role": "user", "content": prompt_content},
     ])
 
     _save_message(request.app.state.messages, "user", user, conv_id, req.message)
@@ -279,7 +347,7 @@ async def chat_with_embedded_links(
             messages=[
                 {"role": "system", "content": system_instruction},
                 *history,
-                {"role": "user", "content": req.message},
+                {"role": "user", "content": _format_question_with_choices(req)},
             ],
         )
     except Exception as e:
@@ -310,14 +378,17 @@ async def chat(
 
     history = get_last_exchange(request.app.state.messages, conv_id)
 
-    system_instruction = (
-        "You are a helpful assistant who generates clear and concise answers "
-        "to help students answer some quiz questions."
+    has_choices = len(req.answer_choices) > 0
+    system_instruction = _build_system_instruction(
+        answer_incorrectly=req.answer_incorrectly,
+        has_choices=has_choices,
     )
+    prompt_content = _format_question_with_choices(req)
+
     reply, metadata = await get_chat_response_with_metadata([
         {"role": "system", "content": system_instruction},
         *history,
-        {"role": "user", "content": req.message},
+        {"role": "user", "content": prompt_content},
     ], model_version)
 
     _save_message(request.app.state.messages, "user", user, conv_id, req.message)

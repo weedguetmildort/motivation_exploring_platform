@@ -179,6 +179,7 @@ export default function QuizPage() {
 
     (async () => {
       try {
+        console.log("quizId:", quizId);
         const state = await getQuizState(quizId);
         if (!cancel) {
           setQuizState(state);
@@ -320,7 +321,8 @@ export default function QuizPage() {
       setSubmitting(false);
     }
   }
-
+  console.log("incorrect ids:", quizState?.attempt?.incorrect_question_ids);
+  console.log("current:", current?.id);
   return (
     <div className="relative h-screen bg-gray-50 overflow-hidden">
       <header className="h-24 bg-white border-b px-6 py-4">
@@ -519,6 +521,10 @@ export default function QuizPage() {
                         quizId={quizId}
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}
+                        currentQuestionId={current?.id ?? null}
+                        currentQuestionText={current?.stem ?? null}
+                        currentChoices={current?.choices ?? []}
+                        incorrectQuestionIds={quizState?.attempt?.incorrect_question_ids ?? []}
                         onLoadingChange={setChatLoading}
                         onHistoryLoaded={() => setHasAskedChat(true)}
                         disableCancel={!firstChatResponded}
