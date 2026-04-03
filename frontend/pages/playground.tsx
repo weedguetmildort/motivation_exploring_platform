@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import QuestionBox from "../components/QuestionBox";
-import AnswerBox, { Choice } from "../components/AnswerBox";
+import QuestionBox, { Choice } from "../components/QuestionBox";
 import ChatBox from "../components/ChatBox";
 import { getMe, logout, type User } from "../lib/auth";
 import { useRouter } from "next/router";
@@ -122,24 +121,24 @@ export default function Playground() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="site-header">
+        <div className="site-header-inner">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Playground</h1>
-            <p className="text-sm text-gray-600">
+            <h1 className="page-title">Playground</h1>
+            <p className="page-subtitle">
               Sandbox to see how the different quiz styles look
             </p>
           </div>
           <div className="flex items-center gap-4">
             <button
               onClick={() => router.push("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="btn-primary"
             >
               Back to Dashboard
             </button>
             <button
               onClick={onLogout}
-              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -147,11 +146,11 @@ export default function Playground() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="page-container">
         <section className="rounded-xl bg-white p-4 shadow-sm border">
-          <h2 className="text-lg font-medium mb-3">Case Selection</h2>
-          <div className="space-y-4 max-w-3xl mx-auto">
-            <div className="flex justify-center gap-4 mt-8">
+          <h2 className="text-lg 2xl:text-xl font-medium mb-3">Case Selection</h2>
+          <div className="space-y-4 max-w-3xl 2xl:max-w-none mx-auto">
+            <div className="flex flex-wrap justify-center gap-3 mt-8">
               <button
                 onClick={() => setActive("base")}
                 aria-pressed={active === "base"}
@@ -228,63 +227,57 @@ export default function Playground() {
           </div>
         </section>
 
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-6 px-0 pb-6 min-h-0">
+        <div className="grid gap-6 grid-cols-1 md:grid-cols-[1fr_1.618fr] pt-6 pb-6">
           {/* Left column */}
-          <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full min-h-0">
-            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
-              <h2 className="text-lg font-medium mb-3">Question</h2>
-
+          <div className="flex flex-col gap-6">
+            <section className="rounded-xl border bg-white shadow-sm">
               {loadingQuestions && (
-                <div className="text-sm text-gray-500">Loading questions…</div>
+                <div className="p-4 text-sm text-gray-500">Loading questions…</div>
               )}
 
               {questionsError && (
-                <div className="text-sm text-red-600">{questionsError}</div>
+                <div className="p-4 text-sm text-red-600">{questionsError}</div>
               )}
 
               {!loadingQuestions && !questionsError && !hasQuestions && (
-                <div className="text-sm text-gray-500">
+                <div className="p-4 text-sm text-gray-500">
                   No questions available. Add some in the admin panel.
                 </div>
               )}
 
               {hasQuestions && (
-                <div className="space-y-4">
-                  <QuestionBox
-                    question={question}
-                    subtitle={subtitle || undefined}
-                    className="max-w-3xl mx-auto"
-                  />
-                </div>
-              )}
-            </section>
-
-            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
-              <h2 className="text-lg font-medium mb-3">Options</h2>
-
-              {!hasQuestions ? (
-                <div className="text-sm text-gray-500">
-                  Options will appear once there is at least one question.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <AnswerBox
-                    choices={choices}
-                    value={selected}
-                    onChange={setSelected}
-                    className="max-w-3xl mx-auto"
-                  />
-                  <div className="text-sm text-gray-600">
-                    Selected:{" "}
-                    <span className="font-medium">{selected ?? "(none)"}</span>
+                <>
+                  <div className="p-4">
+                    <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">{question}</h2>
                   </div>
-                </div>
+
+                  {subtitle && (
+                    <div className="px-4 pb-4">
+                      <p className="text-lg 2xl:text-xl text-gray-600">{subtitle}</p>
+                    </div>
+                  )}
+
+                  <hr className="border-gray-200" />
+
+                  <div className="p-4 space-y-3">
+                    <QuestionBox
+                      choices={choices}
+                      value={selected}
+                      onChange={setSelected}
+                      className="max-w-3xl 2xl:max-w-none mx-auto"
+                    />
+                    <div className="text-sm text-gray-600">
+                      Selected:{" "}
+                      <span className="font-medium">{selected ?? "(none)"}</span>
+                    </div>
+                  </div>
+                </>
               )}
             </section>
           </div>
 
           {/* Right column (Chat) */}
-          <div className="min-h-0 h-[calc(100vh-180px)] overflow-hidden">
+          <div className="h-[55vh] md:h-auto md:min-h-[500px] overflow-hidden">
             <ChatBox
               quizId={active}
             />
