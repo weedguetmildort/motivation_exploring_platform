@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
+
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
 from ..schemas.chat import (
@@ -155,7 +156,8 @@ async def double_chat(
     run_agent_a = "agenta" in selected_agents
     run_agent_b = "agentb" in selected_agents
 
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    # OPTIMIZATION: Non-blocking DB read for history
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
 
     messages_a = [
@@ -208,8 +210,10 @@ async def double_chat(
             replies_to_store.append(f"[AGENT A] {reply_a}")
         if run_agent_b:
             replies_to_store.append(f"[AGENT B] {reply_b}")
-        _save_message(col, "user", user, conv_id, req.message)
-        _save_message(col, "assistant", user, conv_id, replies_to_store)
+            
+        # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
 
         yield _sse({"type": "done", "conversation_id": conv_id})
 
@@ -226,7 +230,9 @@ async def followup_quiz_chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    
+    # OPTIMIZATION: Non-blocking DB read for history
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
 
     messages = [
@@ -246,11 +252,15 @@ async def followup_quiz_chat(
             yield _sse({"type": "error", "detail": "Upstream AI request failed"})
             return
 
-        # Save messages and generate follow-up questions concurrently (option 5)
-        save_user = asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
-        save_asst = asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [full_reply]))
+        # OPTIMIZATION: Fire and forget the database saves immediately
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [full_reply]))
+
+        # Tell the frontend the main text is finished BEFORE generating follow-ups.
+        yield _sse({"type": "text_done"})
+
+        # wait for the follow-ups. The user won't notice this delay.
         followup_questions = await generate_followup_questions(full_reply, get_chat_response)
-        await asyncio.gather(save_user, save_asst)
 
         yield _sse({"type": "followup", "questions": followup_questions})
         yield _sse({"type": "done", "conversation_id": conv_id})
@@ -270,7 +280,9 @@ async def chat_with_embedded_links(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    
+    # OPTIMIZATION: Non-blocking DB read for history
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
 
     system_instruction = (
         _BASE_SYSTEM_PROMPT +
@@ -314,8 +326,10 @@ async def chat_with_embedded_links(
         for i, word in enumerate(words):
             yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
 
-        _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-        _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
+        # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
+        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
+        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply]))
+        
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -333,7 +347,9 @@ async def chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    
+    # OPTIMIZATION: Non-blocking DB read for history
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
 
     messages = [
@@ -352,8 +368,10 @@ async def chat(
             yield _sse({"type": "error", "detail": "Upstream AI request failed"})
             return
 
-        _save_message(col, "user", user, conv_id, req.message)
-        _save_message(col, "assistant", user, conv_id, [full_reply])
+        # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [full_reply]))
+        
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -366,7 +384,8 @@ async def get_conversation_history(
     user: UserPublic = Depends(get_current_user),
 ):
     try:
-        docs = fetch_conversation_history(request.app.state.messages, conversation_id)
+        # OPTIMIZATION: Non-blocking DB read
+        docs = await asyncio.to_thread(fetch_conversation_history, request.app.state.messages, conversation_id)
 
         if not docs:
             return ConversationHistoryResponse(conversation_id=conversation_id, messages=[])
@@ -414,7 +433,9 @@ async def load_user_history(
     request: Request,
     user: UserPublic = Depends(get_current_user),
 ):
-    all_docs = fetch_conversation_history(request.app.state.messages, conversation_id)
+    # OPTIMIZATION: Non-blocking DB read
+    all_docs = await asyncio.to_thread(fetch_conversation_history, request.app.state.messages, conversation_id)
+    
     if not all_docs:
         return UserConversationHistoryResponse(conversation_id=conversation_id, messages=[])
     if all_docs[0].get("user_id") != user.id:
