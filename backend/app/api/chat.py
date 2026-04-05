@@ -160,22 +160,44 @@ async def _standard_stream(
     user_message: str,
     after_done: Optional[Callable[[str], AsyncGenerator[str, None]]] = None,
     request: Optional[Request] = None,
+    agent_tag: Optional[str] = None,
+    reply_prefix: str = "",
 ) -> AsyncGenerator[str, None]:
-    """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done."""
+    """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done.
+
+    agent_tag: if set, each token SSE includes an "agent" field (used by double quiz).
+    reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
+    """
     full_reply = ""
-    async for is_error, delta, sse in _stream_agent_tokens(messages):
+    async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag):
         yield sse
         if is_error:
             return
         full_reply += delta
 
+    stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
     asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [full_reply]))
+    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply]))
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
         async for event in after_done(full_reply):
             yield event
+
+
+async def _stream_into_queue(
+    messages: list[dict],
+    tag: str,
+    queue: asyncio.Queue,
+) -> None:
+    """Stream one agent's tokens into a shared queue for concurrent multi-agent rendering."""
+    try:
+        async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=tag):
+            await queue.put((is_error, delta, tag, sse))
+            if is_error:
+                return
+    except asyncio.CancelledError:
+        pass
 
 
 # Gets responses from Agents A and B. Each agent can be called separately.
@@ -208,36 +230,45 @@ async def double_chat(
     messages_a = _build_standard_messages(history_a, req.message, agent_name="Agent A")
     messages_b = _build_standard_messages(history_b, req.message, agent_name="Agent B")
 
+    # Single agent selected via @mention — reuse _standard_stream directly.
+    if not (run_agent_a and run_agent_b):
+        tag = "A" if run_agent_a else "B"
+        msgs = messages_a if run_agent_a else messages_b
+        return StreamingResponse(
+            _standard_stream(msgs, col, user, conv_id, req.message,
+                             agent_tag=tag, reply_prefix=f"[AGENT {tag}] "),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
+    # Both agents — run concurrently via shared queue.
     async def generate() -> AsyncGenerator[str, None]:
-        reply_a = ""
-        reply_b = ""
+        queue: asyncio.Queue = asyncio.Queue()
+        replies = {"A": "", "B": ""}
 
-        # _stream_agent_tokens reuses the core try/except streaming logic from _standard_stream.
-        # We keep the save logic here because double needs one combined assistant doc so that
-        # _format_assistant / get_last_exchange(agent_prefix=...) can extract per-agent replies next turn.
-        if run_agent_a:
-            async for is_error, delta, sse in _stream_agent_tokens(messages_a, agent_tag="A"):
-                yield sse
-                if is_error:
-                    return
-                reply_a += delta
+        async def _run_both() -> None:
+            await asyncio.gather(
+                _stream_into_queue(messages_a, "A", queue),
+                _stream_into_queue(messages_b, "B", queue),
+            )
 
-        if run_agent_b:
-            async for is_error, delta, sse in _stream_agent_tokens(messages_b, agent_tag="B"):
-                yield sse
-                if is_error:
-                    return
-                reply_b += delta
+        task = asyncio.create_task(_run_both())
+        task.add_done_callback(lambda _: queue.put_nowait(None))
 
-        replies_to_store = []
-        if run_agent_a:
-            replies_to_store.append(f"[AGENT A] {reply_a}")
-        if run_agent_b:
-            replies_to_store.append(f"[AGENT B] {reply_b}")
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            is_error, delta, tag, sse = item
+            yield sse
+            if is_error:
+                task.cancel()
+                return
+            replies[tag] += delta
 
+        replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
         asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
         asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
-
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
