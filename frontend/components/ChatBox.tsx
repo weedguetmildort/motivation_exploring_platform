@@ -97,6 +97,7 @@ export default function ChatBox({
   const [pending, setPending] = useState(false);
   const [streamingMap, setStreamingMap] = useState<Record<string, string>>({});
   const [followupQuestions, setFollowupQuestions] = useState<string[] | undefined>(undefined);
+  const [followupStreamText, setFollowupStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [activeConvId, setActiveConvId] = useState<string | null>(
     conversationId,
@@ -108,6 +109,13 @@ export default function ChatBox({
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
+
+  // Guards against double-committing bot messages when onDone fires mid-stream.
+  const textDoneCommitted = useRef(false);
+  // Mirrors followupStreamText for synchronous access after sendChat resolves.
+  const followupStreamTextRef = useRef("");
+  // Tracks how many \n-terminated lines have already been turned into chips.
+  const processedNewlinesRef = useRef(0);
 
   useEffect(() => {
     if (!activeConvId || historyFetched.current) return;
@@ -155,11 +163,34 @@ export default function ChatBox({
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-  }, [messages, pending, streamingMap]);
+  }, [messages, pending, streamingMap, followupStreamText]);
 
   useEffect(() => {
     onLoadingChange?.(pending);
   }, [pending]);
+
+  // Add a chip for each newly completed question line (\n-terminated).
+  // processedNewlinesRef tracks how many lines have already been turned into chips,
+  // so we only look at the new lines on each run — no re-parsing of existing chips.
+  useEffect(() => {
+    if (!followupStreamText) return;
+    const lines = followupStreamText.split("\n");
+    const completedCount = lines.length - 1; // lines before the trailing incomplete segment
+    if (completedCount <= processedNewlinesRef.current) return;
+    for (let i = processedNewlinesRef.current; i < completedCount; i++) {
+      const m = lines[i].trim().match(/^[0-9]+[.)\-:\s]+(.*)/);
+      if (m) {
+        const question = m[1].trim();
+        if (question) {
+          setFollowupQuestions(prev => {
+            if (prev?.includes(question)) return prev;
+            return [...(prev ?? []), question];
+          });
+        }
+      }
+    }
+    processedNewlinesRef.current = completedCount;
+  }, [followupStreamText]);
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();
@@ -182,6 +213,11 @@ export default function ChatBox({
 
     setError(null);
     setFollowupQuestions(undefined);
+    setFollowupStreamText("");
+    followupStreamTextRef.current = "";
+    processedNewlinesRef.current = 0;
+    textDoneCommitted.current = false;
+
     const userMsg: Msg = {
       id: crypto.randomUUID(),
       role: "user",
@@ -193,38 +229,24 @@ export default function ChatBox({
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    try {
-      setPending(true);
-      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
-        quizId,
-        activeConvId,
-        messageForBackend,
-        agents,
-        controller.signal,
-        (delta, agent) => {
-          const key = agent ?? "default";
-          setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
-        },
-      );
-      if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
+    const mapAgentToBot = (agent: string): Bot | undefined => {
+      const key = agent.toLowerCase();
+      if (key === "agenta") return "A";
+      if (key === "agentb") return "B";
+      return undefined;
+    };
 
-      const mapAgentToBot = (agent: string): Bot | undefined => {
-        const key = agent.toLowerCase();
-        if (key === "agenta") return "A";
-        if (key === "agentb") return "B";
-        return undefined;
-      };
+    const botOrder: Bot[] =
+      agentFilter === "double"
+        ? agents.length > 0
+          ? (agents
+              .map(mapAgentToBot)
+              .filter((bot): bot is Bot => Boolean(bot)) as Bot[])
+          : ["A", "B"]
+        : [];
 
-      const botOrder: Bot[] =
-        agentFilter === "double"
-          ? agents.length > 0
-            ? (agents
-                .map(mapAgentToBot)
-                .filter((bot): bot is Bot => Boolean(bot)) as Bot[])
-            : ["A", "B"]
-          : [];
-
-      const botMsgs: Msg[] = replies.map((r, i) => ({
+    const buildBotMsgs = (replies: string[]): Msg[] =>
+      replies.map((r, i) => ({
         id: crypto.randomUUID(),
         role: "assistant" as const,
         content: r,
@@ -237,19 +259,64 @@ export default function ChatBox({
               : undefined,
       }));
 
-      setMessages((m: Msg[]) => [...m, ...botMsgs]);
-      if (onAssistantMessage) {
-        onAssistantMessage(replies[replies.length - 1]);
+    try {
+      setPending(true);
+      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
+        quizId,
+        activeConvId,
+        messageForBackend,
+        agents,
+        controller.signal,
+        // onToken — streams main text at 60fps
+        (delta, agent) => {
+          const key = agent ?? "default";
+          setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
+        },
+        // onDone — fires when main text is finished; unlock UI immediately
+        (replies) => {
+          textDoneCommitted.current = true;
+          setMessages(m => [...m, ...buildBotMsgs(replies)]);
+          onAssistantMessage?.(replies[replies.length - 1]);
+          setPending(false);
+          setStreamingMap({});
+        },
+        // onFollowupToken — streams follow-up question tokens at 60fps
+        (delta) => {
+          followupStreamTextRef.current += delta;
+          setFollowupStreamText(prev => prev + delta);
+        },
+      );
+
+      if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
+
+      if (!textDoneCommitted.current) {
+        // onDone was never called (endpoint doesn't emit "done" mid-stream).
+        // Commit messages the conventional way.
+        const botMsgs = buildBotMsgs(replies);
+        setMessages((m: Msg[]) => [...m, ...botMsgs]);
+        if (onAssistantMessage) {
+          onAssistantMessage(replies[replies.length - 1]);
+        }
+        if (newFollowupQuestions?.length) {
+          setFollowupQuestions(newFollowupQuestions);
+        }
       }
-      if (newFollowupQuestions) {
-        setFollowupQuestions(newFollowupQuestions);
+
+      // If the AI didn't end with \n, the last question is still the "incomplete tail"
+      // from split("\n")'s perspective. Appending \n moves it into completeLines so the
+      // useEffect picks it up and the in-progress chip disappears naturally.
+      if (followupStreamTextRef.current && !followupStreamTextRef.current.endsWith("\n")) {
+        followupStreamTextRef.current += "\n";
+        setFollowupStreamText(prev => prev + "\n");
       }
+
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setError("Failed to contact the server.");
       onError?.();
     } finally {
       abortControllerRef.current = null;
+      textDoneCommitted.current = false;
       setPending(false);
       setStreamingMap({});
     }
@@ -344,6 +411,15 @@ export default function ChatBox({
     void sendMessage(question);
   }
 
+  // Current in-progress follow-up question text (the incomplete last line).
+  // If followupStreamText ends with \n, all lines are complete — no chip needed.
+  const followupInProgress = (() => {
+    if (!followupStreamText || followupStreamText.endsWith("\n")) return "";
+    const lines = followupStreamText.split("\n");
+    const lastLine = lines[lines.length - 1];
+    return lastLine.replace(/^[0-9]+[.)\-:\s]+/, "").trim();
+  })();
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b sticky top-0 bg-white/90 backdrop-blur rounded-t-2xl flex items-center justify-between gap-3">
@@ -389,11 +465,11 @@ export default function ChatBox({
           <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
         ))}
 
-        {followupQuestions && (
+        {(followupQuestions || followupInProgress) && (
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
             <div className="flex flex-wrap gap-2">
-              {followupQuestions.map((q, i) => (
+              {followupQuestions?.map((q, i) => (
                 <button
                   key={i}
                   type="button"
@@ -403,6 +479,11 @@ export default function ChatBox({
                   <MarkdownMessage content={q} inline />
                 </button>
               ))}
+              {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
+                <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
+                  {followupInProgress}
+                </span>
+              )}
             </div>
           </div>
         )}

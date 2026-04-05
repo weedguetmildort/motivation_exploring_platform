@@ -256,14 +256,12 @@ async def followup_quiz_chat(
         asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
         asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [full_reply]))
 
-        # Tell the frontend the main text is finished BEFORE generating follow-ups.
-        yield _sse({"type": "text_done"})
-
-        # wait for the follow-ups. The user won't notice this delay.
-        followup_questions = await generate_followup_questions(full_reply, get_chat_response)
-
-        yield _sse({"type": "followup", "questions": followup_questions})
+        # Signal main text is done — frontend unlocks UI here.
         yield _sse({"type": "done", "conversation_id": conv_id})
+
+        # Stream follow-up question tokens; frontend parses chips as lines complete.
+        async for delta in generate_followup_questions(full_reply, _stream_ai):
+            yield _sse({"type": "followup", "token": delta})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 

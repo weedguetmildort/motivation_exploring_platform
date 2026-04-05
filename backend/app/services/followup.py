@@ -1,12 +1,11 @@
 # backend/app/services/followup.py
-import re
-from typing import Callable, Awaitable
+from typing import AsyncGenerator, Callable
 
 
 async def generate_followup_questions(
     last_ai_message: str,
-    get_chat_response: Callable[[list[dict]], Awaitable[str]],
-) -> list[str]:
+    get_stream: Callable[[list[dict]], AsyncGenerator[str, None]],
+) -> AsyncGenerator[str, None]:
     system_prompt = (
         "You are a helpful assistant who generates short follow-up questions "
         "related ONLY to the explanation you just gave the student. "
@@ -20,21 +19,10 @@ async def generate_followup_questions(
         "\n\nGenerate exactly 3 possible follow-up questions the student might ask next."
     )
 
-    raw = await get_chat_response([
+    messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
-    ])
+    ]
 
-    questions: list[str] = []
-    for line in raw.split("\n"):
-        trimmed = line.strip()
-        if not trimmed:
-            continue
-        m = re.match(r"^[0-9]+[.)\-:\s]+(.*)", trimmed)
-        if m:
-            text = m.group(1).strip()
-            if text:
-                questions.append(text)
-    if not questions:
-        questions = [raw]
-    return questions[:3]
+    async for delta in get_stream(messages):
+        yield delta
