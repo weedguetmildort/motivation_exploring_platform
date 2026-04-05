@@ -110,8 +110,13 @@ export default function ChatBox({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
 
+  // True between onDone and finally — drives the follow-up loading indicator for all exchanges.
+  const [followupActive, setFollowupActive] = useState(false);
   // Guards against double-committing bot messages when onDone fires mid-stream.
   const textDoneCommitted = useRef(false);
+  // Tracks the last externalQuestion value that was sent, initialised to the prop value
+  // at mount time so that a remount with the same prop (e.g. HMR) doesn't re-send it.
+  const lastSentExternalRef = useRef<string | null>(externalQuestion ?? null);
   // Mirrors followupStreamText for synchronous access after sendChat resolves.
   const followupStreamTextRef = useRef("");
   // Tracks how many \n-terminated lines have already been turned into chips.
@@ -153,6 +158,13 @@ export default function ChatBox({
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
       setPending(false);
+      setMessages([]);
+      setFollowupQuestions(undefined);
+      setFollowupStreamText("");
+      setFollowupActive(false);
+      followupStreamTextRef.current = "";
+      processedNewlinesRef.current = 0;
+      historyFetched.current = false;
       setActiveConvId(conversationId);
     }
   }, [conversationId]);
@@ -272,12 +284,17 @@ export default function ChatBox({
           const key = agent ?? "default";
           setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
         },
-        // onDone — fires when main text is finished; unlock UI immediately
+        // onDone — fires when main text is finished.
+        // For the first exchange (disableCancel=true at call time), keep pending=true
+        // so chatLoading stays on until finally, blocking quiz submit during follow-up.
+        // For subsequent exchanges, release pending immediately so the user can re-submit
+        // while follow-up questions stream in.
         (replies) => {
           textDoneCommitted.current = true;
           setMessages(m => [...m, ...buildBotMsgs(replies)]);
           onAssistantMessage?.(replies[replies.length - 1]);
-          setPending(false);
+          if (!disableCancel) setPending(false);
+          setFollowupActive(true);
           setStreamingMap({});
         },
         // onFollowupToken — streams follow-up question tokens at 60fps
@@ -317,6 +334,7 @@ export default function ChatBox({
     } finally {
       abortControllerRef.current = null;
       textDoneCommitted.current = false;
+      setFollowupActive(false);
       setPending(false);
       setStreamingMap({});
     }
@@ -402,7 +420,12 @@ export default function ChatBox({
   }
 
   useEffect(() => {
-    if (!externalQuestion) return;
+    if (!externalQuestion) {
+      lastSentExternalRef.current = null; // reset so same text can be sent again next question
+      return;
+    }
+    if (externalQuestion === lastSentExternalRef.current) return;
+    lastSentExternalRef.current = externalQuestion;
     sendMessage(externalQuestion);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuestion]);
@@ -465,30 +488,34 @@ export default function ChatBox({
           <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
         ))}
 
-        {(followupQuestions || followupInProgress) && (
+        {(followupActive || followupStreamText !== "" || followupQuestions || followupInProgress) && (
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
-            <div className="flex flex-wrap gap-2">
-              {followupQuestions?.map((q, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
-                  onClick={() => handleFollowupClick(q)}
-                >
-                  <MarkdownMessage content={q} inline />
-                </button>
-              ))}
-              {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
-                <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
-                  {followupInProgress}
-                </span>
-              )}
-            </div>
+            {(followupActive || followupStreamText !== "") && !followupQuestions?.length && !followupInProgress ? (
+              <div className="text-sm text-gray-500">Loading follow-up questions…</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {followupQuestions?.map((q, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                    onClick={() => handleFollowupClick(q)}
+                  >
+                    <MarkdownMessage content={q} inline />
+                  </button>
+                ))}
+                {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
+                  <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
+                    {followupInProgress}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {pending && Object.keys(streamingMap).length === 0 && (
+        {pending && !followupActive && Object.keys(streamingMap).length === 0 && (
           <div className="text-sm text-gray-500">Assistant is typing…</div>
         )}
 
@@ -536,7 +563,7 @@ export default function ChatBox({
           <button
             className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
             onClick={pending && !disableCancel ? handleCancel : onSend}
-            disabled={(!pending && !input.trim()) || (pending && disableCancel)}
+            disabled={disableCancel || (!pending && !input.trim())}
           >
             {pending ? "Cancel" : "Send"}
           </button>
