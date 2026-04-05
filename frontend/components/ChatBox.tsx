@@ -163,7 +163,7 @@ export default function ChatBox({
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-  }, [messages, pending, streamingMap, followupStreamText]);
+  }, [messages, pending, streamingMap, followupStreamText, followupQuestions]);
 
   useEffect(() => {
     onLoadingChange?.(pending);
