@@ -58,12 +58,9 @@ export async function sendChat(
   let returnedConvId = conversationId ?? "";
   let followupQuestions: string[] | undefined;
 
-  // BATCHING LOGIC START ---
-  // Buffer to hold tokens before sending to the UI
+  // Batch token updates: flush to React at most once per animation frame (~16ms).
+  // This avoids one re-render per token while keeping streaming visually smooth.
   const tokenBuffer: Record<string, string> = {};
-  let lastFlushTime = Date.now();
-  const FLUSH_INTERVAL_MS = 50; 
-
   const flushTokens = () => {
     for (const [key, accumulatedDelta] of Object.entries(tokenBuffer)) {
       if (accumulatedDelta) {
@@ -72,9 +69,8 @@ export async function sendChat(
         tokenBuffer[key] = ""; // Clear the buffer after flushing
       }
     }
-    lastFlushTime = Date.now();
   };
-  // BATCHING LOGIC END ---
+  const flushInterval = setInterval(flushTokens, 16);
 
   try {
     while (true) {
@@ -95,18 +91,8 @@ export async function sendChat(
           const delta = (event.content as string) ?? "";
           const agent = event.agent != null ? (event.agent as string) : undefined;
           const key = agent ?? "default";
-          
-          // Save the full response in the map for the final return
           replyMap[key] = (replyMap[key] ?? "") + delta;
-          
-          // Add the delta to our UI buffer
           tokenBuffer[key] = (tokenBuffer[key] ?? "") + delta;
-
-          // If 50ms have passed, flush the buffer to React
-          if (Date.now() - lastFlushTime > FLUSH_INTERVAL_MS) {
-            flushTokens();
-          }
-
         } else if (event.type === "followup") {
           followupQuestions = event.questions as string[];
         } else if (event.type === "done") {
@@ -117,9 +103,9 @@ export async function sendChat(
       }
     }
   } finally {
+    clearInterval(flushInterval);
+    flushTokens(); // flush any tokens that arrived since the last interval tick
     reader.releaseLock();
-    // Do one final flush to ensure no tokens are left behind in the buffer
-    flushTokens(); 
   }
 
   const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
