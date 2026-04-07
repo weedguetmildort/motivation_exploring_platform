@@ -1,13 +1,14 @@
 import os
 import uuid
-import time
 import json
 import asyncio
-from typing import Optional, AsyncGenerator
+import time
+from typing import AsyncGenerator, Callable, Optional
 from openai import AsyncOpenAI
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
+
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
 from ..schemas.chat import (
@@ -28,17 +29,6 @@ MAX_TOKENS: int = 1000
 # Controls response randomness. 0.0 = fully deterministic, 2.0 = very random. Valid range: 0.0–2.0. Recommended: 0.0–1.0.
 TEMPERATURE: float = 0.5
 
-
-def _extract_metadata_from_response(
-    resp,
-    model_version: Optional[str] = None,
-) -> AIMessageMetadata:
-    return AIMessageMetadata(
-        model_version=model_version or getattr(resp, "model", None),
-        tokens_used=getattr(resp.usage, "total_tokens", None) if resp.usage else None,
-        input_tokens=getattr(resp.usage, "prompt_tokens", None) if resp.usage else None,
-        output_tokens=getattr(resp.usage, "completion_tokens", None) if resp.usage else None,
-    )
 
 
 # Initialize OpenAI client with UF proxy settings (from env)
@@ -73,39 +63,6 @@ async def _stream_ai(messages: list[dict]) -> AsyncGenerator[str, None]:
             yield delta
 
 
-async def get_chat_response(messages: list[dict]) -> str:
-    try:
-        resp = await _client.chat.completions.create(
-            model=os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages,
-            temperature=TEMPERATURE,
-            **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
-
-
-async def get_chat_response_with_metadata(
-    messages: list[dict],
-    model_version: Optional[str] = None,
-) -> tuple[str, AIMessageMetadata]:
-    try:
-        start_time = time.time()
-        resp = await _client.chat.completions.create(
-            model=model_version or os.getenv("UF_OPENAI_API_MODEL"),
-            messages=messages,
-            temperature=TEMPERATURE,
-            **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
-        )
-        processing_time_ms = int((time.time() - start_time) * 1000)
-        reply = (resp.choices[0].message.content or "").strip()
-        metadata = _extract_metadata_from_response(resp, model_version)
-        metadata.processing_time_ms = processing_time_ms
-        return reply, metadata
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI request failed")
-
 
 def _save_message(
     col,
@@ -135,6 +92,114 @@ def _save_message(
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
+# Not currently used — all endpoints stream tokens via _stream_ai / _standard_stream.
+# Restore this if any endpoint switches back to a single blocking AI call that needs
+# metadata (latency, token counts, model version) attached to the stored message.
+# To use: call alongside _client.chat.completions.create(stream=False), pass the
+# response object and optionally a model_version override, then include the returned
+# AIMessageMetadata in the _save_message(..., metadata=...) call.
+def _extract_metadata_from_response(
+    resp,
+    model_version: Optional[str] = None,
+) -> AIMessageMetadata:
+    return AIMessageMetadata(
+        model_version=model_version or getattr(resp, "model", None),
+        tokens_used=getattr(resp.usage, "total_tokens", None) if resp.usage else None,
+        input_tokens=getattr(resp.usage, "prompt_tokens", None) if resp.usage else None,
+        output_tokens=getattr(resp.usage, "completion_tokens", None) if resp.usage else None,
+        processing_time_ms=None,  # populate with int((time.time() - start_time) * 1000) at call site
+    )
+
+
+def _build_standard_messages(
+    history: list[dict],
+    user_message: str,
+    system_prompt: Optional[str] = None,
+    agent_name: Optional[str] = None,
+) -> list[dict]:
+    """Build the standard [system, *history, user] message list.
+
+    agent_name: if provided, appends 'You are {agent_name}.' to the system prompt
+    so the agent is aware of its identity in multi-agent contexts.
+    """
+    base = system_prompt or _BASE_SYSTEM_PROMPT
+    if agent_name:
+        base = f"{base}\nYou are {agent_name}."
+    return [
+        {"role": "system", "content": base},
+        *history,
+        {"role": "user", "content": user_message},
+    ]
+
+
+async def _stream_agent_tokens(
+    messages: list[dict],
+    agent_tag: Optional[str] = None,
+) -> AsyncGenerator[tuple[bool, str, str], None]:
+    """Core token-streaming helper. Yields (is_error, delta, sse_str) tuples.
+
+    On success: is_error=False, delta=token text, sse_str=token SSE event.
+    On failure: is_error=True, delta='', sse_str=error SSE event (then stops).
+    Callers accumulate delta to reconstruct the full reply.
+    """
+    try:
+        async for delta in _stream_ai(messages):
+            event: dict = {"type": "token", "content": delta}
+            if agent_tag:
+                event["agent"] = agent_tag
+            yield False, delta, _sse(event)
+    except Exception:
+        yield True, "", _sse({"type": "error", "detail": "Upstream AI request failed"})
+
+
+async def _standard_stream(
+    messages: list[dict],
+    col,
+    user: UserPublic,
+    conv_id: str,
+    user_message: str,
+    after_done: Optional[Callable[[str], AsyncGenerator[str, None]]] = None,
+    request: Optional[Request] = None,
+    agent_tag: Optional[str] = None,
+    reply_prefix: str = "",
+) -> AsyncGenerator[str, None]:
+    """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done.
+
+    agent_tag: if set, each token SSE includes an "agent" field (used by double quiz).
+    reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
+    """
+    full_reply = ""
+    async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag):
+        yield sse
+        if is_error:
+            return
+        full_reply += delta
+
+    stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
+    asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
+    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply]))
+    yield _sse({"type": "done", "conversation_id": conv_id})
+
+    if after_done and not (request and await request.is_disconnected()):
+        async for event in after_done(full_reply):
+            yield event
+
+
+async def _stream_into_queue(
+    messages: list[dict],
+    tag: str,
+    queue: asyncio.Queue,
+) -> None:
+    """Stream one agent's tokens into a shared queue for concurrent multi-agent rendering."""
+    try:
+        async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=tag):
+            await queue.put((is_error, delta, tag, sse))
+            if is_error:
+                return
+    except asyncio.CancelledError:
+        pass
+
+
 # Gets responses from Agents A and B. Each agent can be called separately.
 @router.post("/chat/double")
 async def double_chat(
@@ -155,62 +220,55 @@ async def double_chat(
     run_agent_a = "agenta" in selected_agents
     run_agent_b = "agentb" in selected_agents
 
-    history = get_last_exchange(request.app.state.messages, conv_id)
     col = request.app.state.messages
-
-    messages_a = [
-        {"role": "system", "content": _BASE_SYSTEM_PROMPT},
-        *history,
-        {"role": "user", "content": req.message},
-    ]
-    system_b_with_a = (
-        _BASE_SYSTEM_PROMPT +
-        " Double check that the answers provided by [AGENT A] are correct, and if not, provide the correct answer."
+    # Each agent gets only its own last reply as history — no cross-agent context.
+    # This simplifies @mention routing: each agent's memory is isolated to its own turns.
+    history_a, history_b = await asyncio.gather(
+        asyncio.to_thread(get_last_exchange, col, conv_id, "[AGENT A]"),
+        asyncio.to_thread(get_last_exchange, col, conv_id, "[AGENT B]"),
     )
+    messages_a = _build_standard_messages(history_a, req.message, agent_name="Agent A")
+    messages_b = _build_standard_messages(history_b, req.message, agent_name="Agent B")
 
+    # Single agent selected via @mention — reuse _standard_stream directly.
+    if not (run_agent_a and run_agent_b):
+        tag = "A" if run_agent_a else "B"
+        msgs = messages_a if run_agent_a else messages_b
+        return StreamingResponse(
+            _standard_stream(msgs, col, user, conv_id, req.message,
+                             agent_tag=tag, reply_prefix=f"[AGENT {tag}] "),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
+    # Both agents — run concurrently via shared queue.
     async def generate() -> AsyncGenerator[str, None]:
-        reply_a = ""
-        reply_b = ""
+        queue: asyncio.Queue = asyncio.Queue()
+        replies = {"A": "", "B": ""}
 
-        if run_agent_a:
-            try:
-                async for delta in _stream_ai(messages_a):
-                    reply_a += delta
-                    yield _sse({"type": "token", "agent": "A", "content": delta})
-            except Exception:
-                yield _sse({"type": "error", "detail": "Upstream AI request failed"})
+        async def _run_both() -> None:
+            await asyncio.gather(
+                _stream_into_queue(messages_a, "A", queue),
+                _stream_into_queue(messages_b, "B", queue),
+            )
+
+        task = asyncio.create_task(_run_both())
+        task.add_done_callback(lambda _: queue.put_nowait(None))
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            is_error, delta, tag, sse = item
+            yield sse
+            if is_error:
+                task.cancel()
                 return
+            replies[tag] += delta
 
-        if run_agent_b:
-            if run_agent_a:
-                messages_b = [
-                    {"role": "system", "content": system_b_with_a},
-                    *history,
-                    {"role": "user", "content": req.message},
-                    {"role": "assistant", "content": f"[AGENT A] {reply_a}"},
-                ]
-            else:
-                messages_b = [
-                    {"role": "system", "content": _BASE_SYSTEM_PROMPT},
-                    *history,
-                    {"role": "user", "content": req.message},
-                ]
-            try:
-                async for delta in _stream_ai(messages_b):
-                    reply_b += delta
-                    yield _sse({"type": "token", "agent": "B", "content": delta})
-            except Exception:
-                yield _sse({"type": "error", "detail": "Upstream AI request failed"})
-                return
-
-        replies_to_store = []
-        if run_agent_a:
-            replies_to_store.append(f"[AGENT A] {reply_a}")
-        if run_agent_b:
-            replies_to_store.append(f"[AGENT B] {reply_b}")
-        _save_message(col, "user", user, conv_id, req.message)
-        _save_message(col, "assistant", user, conv_id, replies_to_store)
-
+        replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -226,36 +284,19 @@ async def followup_quiz_chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
+    messages = _build_standard_messages(history, req.message)
 
-    messages = [
-        {"role": "system", "content": _BASE_SYSTEM_PROMPT},
-        *history,
-        {"role": "user", "content": req.message},
-    ]
+    async def after_done(full_reply: str) -> AsyncGenerator[str, None]:
+        async for delta in generate_followup_questions(full_reply, _stream_ai):
+            yield _sse({"type": "followup", "token": delta})
 
-    async def generate() -> AsyncGenerator[str, None]:
-        full_reply = ""
-
-        try:
-            async for delta in _stream_ai(messages):
-                full_reply += delta
-                yield _sse({"type": "token", "content": delta})
-        except Exception:
-            yield _sse({"type": "error", "detail": "Upstream AI request failed"})
-            return
-
-        # Save messages and generate follow-up questions concurrently (option 5)
-        save_user = asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
-        save_asst = asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [full_reply]))
-        followup_questions = await generate_followup_questions(full_reply, get_chat_response)
-        await asyncio.gather(save_user, save_asst)
-
-        yield _sse({"type": "followup", "questions": followup_questions})
-        yield _sse({"type": "done", "conversation_id": conv_id})
-
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+    return StreamingResponse(
+        _standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
 
 
 # Returns chat with inline citation links embedded in the response text.
@@ -270,7 +311,9 @@ async def chat_with_embedded_links(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    
+    # OPTIMIZATION: Non-blocking DB read for history
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
 
     system_instruction = (
         _BASE_SYSTEM_PROMPT +
@@ -297,11 +340,7 @@ async def chat_with_embedded_links(
             output = await get_chat_response_with_search(
                 client=_client,
                 model=os.getenv("UF_OPENAI_API_MODEL"),
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    *history,
-                    {"role": "user", "content": req.message},
-                ],
+                messages=_build_standard_messages(history, req.message, system_prompt=system_instruction),
             )
         except Exception as e:
             yield _sse({"type": "error", "detail": f"Upstream AI request failed: {e}"})
@@ -314,8 +353,10 @@ async def chat_with_embedded_links(
         for i, word in enumerate(words):
             yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
 
-        _save_message(request.app.state.messages, "user", user, conv_id, req.message)
-        _save_message(request.app.state.messages, "assistant", user, conv_id, [reply])
+        # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
+        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
+        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply]))
+        
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -333,30 +374,15 @@ async def chat(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    history = get_last_exchange(request.app.state.messages, conv_id)
+    history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
+    messages = _build_standard_messages(history, req.message)
 
-    messages = [
-        {"role": "system", "content": _BASE_SYSTEM_PROMPT},
-        *history,
-        {"role": "user", "content": req.message},
-    ]
-
-    async def generate() -> AsyncGenerator[str, None]:
-        full_reply = ""
-        try:
-            async for delta in _stream_ai(messages):
-                full_reply += delta
-                yield _sse({"type": "token", "content": delta})
-        except Exception:
-            yield _sse({"type": "error", "detail": "Upstream AI request failed"})
-            return
-
-        _save_message(col, "user", user, conv_id, req.message)
-        _save_message(col, "assistant", user, conv_id, [full_reply])
-        yield _sse({"type": "done", "conversation_id": conv_id})
-
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+    return StreamingResponse(
+        _standard_stream(messages, col, user, conv_id, req.message),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
 
 
 @router.get("/chat/get_history/{conversation_id}", response_model=ConversationHistoryResponse)
@@ -366,7 +392,8 @@ async def get_conversation_history(
     user: UserPublic = Depends(get_current_user),
 ):
     try:
-        docs = fetch_conversation_history(request.app.state.messages, conversation_id)
+        # OPTIMIZATION: Non-blocking DB read
+        docs = await asyncio.to_thread(fetch_conversation_history, request.app.state.messages, conversation_id)
 
         if not docs:
             return ConversationHistoryResponse(conversation_id=conversation_id, messages=[])
@@ -414,7 +441,9 @@ async def load_user_history(
     request: Request,
     user: UserPublic = Depends(get_current_user),
 ):
-    all_docs = fetch_conversation_history(request.app.state.messages, conversation_id)
+    # OPTIMIZATION: Non-blocking DB read
+    all_docs = await asyncio.to_thread(fetch_conversation_history, request.app.state.messages, conversation_id)
+    
     if not all_docs:
         return UserConversationHistoryResponse(conversation_id=conversation_id, messages=[])
     if all_docs[0].get("user_id") != user.id:

@@ -97,6 +97,7 @@ export default function ChatBox({
   const [pending, setPending] = useState(false);
   const [streamingMap, setStreamingMap] = useState<Record<string, string>>({});
   const [followupQuestions, setFollowupQuestions] = useState<string[] | undefined>(undefined);
+  const [followupStreamText, setFollowupStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [activeConvId, setActiveConvId] = useState<string | null>(
     conversationId,
@@ -108,6 +109,18 @@ export default function ChatBox({
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
+
+  // True between onDone and finally — drives the follow-up loading indicator for all exchanges.
+  const [followupActive, setFollowupActive] = useState(false);
+  // Guards against double-committing bot messages when onDone fires mid-stream.
+  const textDoneCommitted = useRef(false);
+  // Tracks the last externalQuestion value that was sent, initialised to the prop value
+  // at mount time so that a remount with the same prop (e.g. HMR) doesn't re-send it.
+  const lastSentExternalRef = useRef<string | null>(externalQuestion ?? null);
+  // Mirrors followupStreamText for synchronous access after sendChat resolves.
+  const followupStreamTextRef = useRef("");
+  // Tracks how many \n-terminated lines have already been turned into chips.
+  const processedNewlinesRef = useRef(0);
 
   useEffect(() => {
     if (!activeConvId || historyFetched.current) return;
@@ -145,6 +158,13 @@ export default function ChatBox({
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
       setPending(false);
+      setMessages([]);
+      setFollowupQuestions(undefined);
+      setFollowupStreamText("");
+      setFollowupActive(false);
+      followupStreamTextRef.current = "";
+      processedNewlinesRef.current = 0;
+      historyFetched.current = false;
       setActiveConvId(conversationId);
     }
   }, [conversationId]);
@@ -155,11 +175,34 @@ export default function ChatBox({
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
-  }, [messages, pending, streamingMap]);
+  }, [messages, pending, streamingMap, followupStreamText, followupQuestions]);
 
   useEffect(() => {
     onLoadingChange?.(pending);
   }, [pending]);
+
+  // Add a chip for each newly completed question line (\n-terminated).
+  // processedNewlinesRef tracks how many lines have already been turned into chips,
+  // so we only look at the new lines on each run — no re-parsing of existing chips.
+  useEffect(() => {
+    if (!followupStreamText) return;
+    const lines = followupStreamText.split("\n");
+    const completedCount = lines.length - 1; // lines before the trailing incomplete segment
+    if (completedCount <= processedNewlinesRef.current) return;
+    for (let i = processedNewlinesRef.current; i < completedCount; i++) {
+      const m = lines[i].trim().match(/^[0-9]+[.)\-:\s]+(.*)/);
+      if (m) {
+        const question = m[1].trim();
+        if (question) {
+          setFollowupQuestions(prev => {
+            if (prev?.includes(question)) return prev;
+            return [...(prev ?? []), question];
+          });
+        }
+      }
+    }
+    processedNewlinesRef.current = completedCount;
+  }, [followupStreamText]);
 
   async function sendMessage(content: string) {
     const trimmed = content.trim();
@@ -182,6 +225,11 @@ export default function ChatBox({
 
     setError(null);
     setFollowupQuestions(undefined);
+    setFollowupStreamText("");
+    followupStreamTextRef.current = "";
+    processedNewlinesRef.current = 0;
+    textDoneCommitted.current = false;
+
     const userMsg: Msg = {
       id: crypto.randomUUID(),
       role: "user",
@@ -193,38 +241,24 @@ export default function ChatBox({
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    try {
-      setPending(true);
-      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
-        quizId,
-        activeConvId,
-        messageForBackend,
-        agents,
-        controller.signal,
-        (delta, agent) => {
-          const key = agent ?? "default";
-          setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
-        },
-      );
-      if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
+    const mapAgentToBot = (agent: string): Bot | undefined => {
+      const key = agent.toLowerCase();
+      if (key === "agenta") return "A";
+      if (key === "agentb") return "B";
+      return undefined;
+    };
 
-      const mapAgentToBot = (agent: string): Bot | undefined => {
-        const key = agent.toLowerCase();
-        if (key === "agenta") return "A";
-        if (key === "agentb") return "B";
-        return undefined;
-      };
+    const botOrder: Bot[] =
+      agentFilter === "double"
+        ? agents.length > 0
+          ? (agents
+              .map(mapAgentToBot)
+              .filter((bot): bot is Bot => Boolean(bot)) as Bot[])
+          : ["A", "B"]
+        : [];
 
-      const botOrder: Bot[] =
-        agentFilter === "double"
-          ? agents.length > 0
-            ? (agents
-                .map(mapAgentToBot)
-                .filter((bot): bot is Bot => Boolean(bot)) as Bot[])
-            : ["A", "B"]
-          : [];
-
-      const botMsgs: Msg[] = replies.map((r, i) => ({
+    const buildBotMsgs = (replies: string[]): Msg[] =>
+      replies.map((r, i) => ({
         id: crypto.randomUUID(),
         role: "assistant" as const,
         content: r,
@@ -237,19 +271,70 @@ export default function ChatBox({
               : undefined,
       }));
 
-      setMessages((m: Msg[]) => [...m, ...botMsgs]);
-      if (onAssistantMessage) {
-        onAssistantMessage(replies[replies.length - 1]);
+    try {
+      setPending(true);
+      const { replies, conversationId: returnedConvId, followupQuestions: newFollowupQuestions } = await sendChat(
+        quizId,
+        activeConvId,
+        messageForBackend,
+        agents,
+        controller.signal,
+        // onToken — streams main text at 60fps
+        (delta, agent) => {
+          const key = agent ?? "default";
+          setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
+        },
+        // onDone — fires when main text is finished.
+        // For the first exchange (disableCancel=true at call time), keep pending=true
+        // so chatLoading stays on until finally, blocking quiz submit during follow-up.
+        // For subsequent exchanges, release pending immediately so the user can re-submit
+        // while follow-up questions stream in.
+        (replies) => {
+          textDoneCommitted.current = true;
+          setMessages(m => [...m, ...buildBotMsgs(replies)]);
+          onAssistantMessage?.(replies[replies.length - 1]);
+          if (!disableCancel) setPending(false);
+          setFollowupActive(true);
+          setStreamingMap({});
+        },
+        // onFollowupToken — streams follow-up question tokens at 60fps
+        (delta) => {
+          followupStreamTextRef.current += delta;
+          setFollowupStreamText(prev => prev + delta);
+        },
+      );
+
+      if (returnedConvId && !activeConvId) setActiveConvId(returnedConvId);
+
+      if (!textDoneCommitted.current) {
+        // onDone was never called (endpoint doesn't emit "done" mid-stream).
+        // Commit messages the conventional way.
+        const botMsgs = buildBotMsgs(replies);
+        setMessages((m: Msg[]) => [...m, ...botMsgs]);
+        if (onAssistantMessage) {
+          onAssistantMessage(replies[replies.length - 1]);
+        }
+        if (newFollowupQuestions?.length) {
+          setFollowupQuestions(newFollowupQuestions);
+        }
       }
-      if (newFollowupQuestions) {
-        setFollowupQuestions(newFollowupQuestions);
+
+      // If the AI didn't end with \n, the last question is still the "incomplete tail"
+      // from split("\n")'s perspective. Appending \n moves it into completeLines so the
+      // useEffect picks it up and the in-progress chip disappears naturally.
+      if (followupStreamTextRef.current && !followupStreamTextRef.current.endsWith("\n")) {
+        followupStreamTextRef.current += "\n";
+        setFollowupStreamText(prev => prev + "\n");
       }
+
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setError("Failed to contact the server.");
       onError?.();
     } finally {
       abortControllerRef.current = null;
+      textDoneCommitted.current = false;
+      setFollowupActive(false);
       setPending(false);
       setStreamingMap({});
     }
@@ -335,7 +420,12 @@ export default function ChatBox({
   }
 
   useEffect(() => {
-    if (!externalQuestion) return;
+    if (!externalQuestion) {
+      lastSentExternalRef.current = null; // reset so same text can be sent again next question
+      return;
+    }
+    if (externalQuestion === lastSentExternalRef.current) return;
+    lastSentExternalRef.current = externalQuestion;
     sendMessage(externalQuestion);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuestion]);
@@ -343,6 +433,15 @@ export default function ChatBox({
   function handleFollowupClick(question: string) {
     void sendMessage(question);
   }
+
+  // Current in-progress follow-up question text (the incomplete last line).
+  // If followupStreamText ends with \n, all lines are complete — no chip needed.
+  const followupInProgress = (() => {
+    if (!followupStreamText || followupStreamText.endsWith("\n")) return "";
+    const lines = followupStreamText.split("\n");
+    const lastLine = lines[lines.length - 1];
+    return lastLine.replace(/^[0-9]+[.)\-:\s]+/, "").trim();
+  })();
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
@@ -389,25 +488,34 @@ export default function ChatBox({
           <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
         ))}
 
-        {followupQuestions && (
+        {(followupActive || followupStreamText !== "" || followupQuestions || followupInProgress) && (
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
-            <div className="flex flex-wrap gap-2">
-              {followupQuestions.map((q, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
-                  onClick={() => handleFollowupClick(q)}
-                >
-                  <MarkdownMessage content={q} inline />
-                </button>
-              ))}
-            </div>
+            {(followupActive || followupStreamText !== "") && !followupQuestions?.length && !followupInProgress ? (
+              <div className="text-sm text-gray-500">Loading follow-up questions…</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {followupQuestions?.map((q, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                    onClick={() => handleFollowupClick(q)}
+                  >
+                    <MarkdownMessage content={q} inline />
+                  </button>
+                ))}
+                {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
+                  <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
+                    {followupInProgress}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {pending && Object.keys(streamingMap).length === 0 && (
+        {pending && !followupActive && Object.keys(streamingMap).length === 0 && (
           <div className="text-sm text-gray-500">Assistant is typing…</div>
         )}
 
@@ -455,7 +563,7 @@ export default function ChatBox({
           <button
             className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
             onClick={pending && !disableCancel ? handleCancel : onSend}
-            disabled={(!pending && !input.trim()) || (pending && disableCancel)}
+            disabled={disableCancel || (!pending && !input.trim())}
           >
             {pending ? "Cancel" : "Send"}
           </button>
