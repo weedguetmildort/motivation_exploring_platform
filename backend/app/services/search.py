@@ -1,9 +1,7 @@
-"""Search agent service using NaviGator AI search endpoint + one-shot citation injection."""
-
 import os
 import re
 import httpx
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
 from urllib.parse import urlparse
 from openai import AsyncOpenAI
 
@@ -12,46 +10,44 @@ _UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
 _UF_SEARCH_TOOL = os.getenv("UF_SEARCH_TOOL_NAME", "litellm-search")
 
 
-def _run_search(query: str, max_results: int = 5) -> list[dict]:
-    """Execute a NaviGator AI search and return raw results.
+async def _run_search(query: str, max_results: int = 5) -> list[dict]:
+    """Execute a NaviGator AI search asynchronously and return raw results.
 
     Returns [] on any failure so the caller can fall back to answering without search.
     """
-    #max_results = min(max_results, 10)
     try:
-        resp = httpx.post(
-            f"{_UF_BASE_URL}/v1/search/{_UF_SEARCH_TOOL}",
-            headers={"Authorization": f"Bearer {_UF_API_KEY}", "Content-Type": "application/json"},
-            json={"query": query, "max_results": max_results},
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        return resp.json().get("results", [])
+        # Use AsyncClient to prevent blocking the FastAPI event loop
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{_UF_BASE_URL}/v1/search/{_UF_SEARCH_TOOL}",
+                headers={"Authorization": f"Bearer {_UF_API_KEY}", "Content-Type": "application/json"},
+                json={"query": query, "max_results": max_results},
+            )
+            resp.raise_for_status()
+            return resp.json().get("results", [])
     except Exception:
         return []
-    # Each result: {"title": str, "url": str, "snippet": str, "date": str, "last_updated": str}
 
 
-def _check_url(url: str) -> tuple[str, bool]:
-    """Validate a URL by streaming a GET (no body downloaded).
+async def _check_url(url: str, client: httpx.AsyncClient) -> tuple[str, bool]:
+    """Validate a URL asynchronously.
 
     Drops the URL if:
     - HTTP 404 status
-    - Redirected to the site homepage (path vanished) — indicates the article
-      was removed but the domain still exists (stale search index entries).
-
-    Keeps the URL on any other response or error (paywalled, rate-limited, slow).
+    - Redirected to the site homepage (path vanished)
+    Keeps the URL on any other response or error.
     """
     try:
-        with httpx.stream(
+        # Stream the GET request asynchronously (no body downloaded)
+        async with client.stream(
             "GET", url,
-            timeout=3.0,
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
         ) as r:
             if r.status_code == 404:
                 return url, False
-            # Homepage redirect: original URL had a path, final URL is just the root
+            
+            # Homepage redirect check
             original_path = urlparse(url).path.rstrip("/")
             final_path = urlparse(str(r.url)).path.rstrip("/")
             if original_path and not final_path:
@@ -61,17 +57,21 @@ def _check_url(url: str) -> tuple[str, bool]:
         return url, True  # Keep on error — don't penalise slow/protected URLs
 
 
-def _filter_valid_urls(results: list[dict]) -> list[dict]:
-    """Remove results whose URL definitively returns 404. Checks run in parallel."""
+async def _filter_valid_urls(results: list[dict]) -> list[dict]:
+    """Remove results whose URL definitively returns 404. Checks run concurrently via asyncio."""
     if not results:
         return results
-    with ThreadPoolExecutor(max_workers=len(results)) as pool:
-        futures = {pool.submit(_check_url, r["url"]): r for r in results}
-        valid_urls = set()
-        for f in as_completed(futures):
-            url, ok = f.result()
-            if ok:
-                valid_urls.add(url)
+
+    # Share a single AsyncClient for all concurrent checks to save connection overhead
+    async with httpx.AsyncClient(timeout=3.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
+        # Create a list of background tasks for checking URLs
+        tasks = [_check_url(r["url"], client) for r in results]
+        
+        # Await them all simultaneously
+        checked_urls = await asyncio.gather(*tasks)
+
+    # Filter into a set of valid URLs
+    valid_urls = {url for url, is_valid in checked_urls if is_valid}
     return [r for r in results if r["url"] in valid_urls]
 
 
@@ -113,8 +113,9 @@ async def get_chat_response_with_search(
         (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
     )
 
-    results = _run_search(query)
-    results = _filter_valid_urls(results)
+    # Await the new async functions
+    results = await _run_search(query)
+    results = await _filter_valid_urls(results)
 
     if not results:
         resp = await client.chat.completions.create(model=model, messages=messages)

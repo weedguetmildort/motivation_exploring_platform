@@ -1,6 +1,6 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
-from ..schemas.question import QuestionCreate, QuestionPublic, QuestionUpdate
+from ..schemas.question import QuestionCreate, QuestionAdminPublic, QuestionUpdate
 from ..schemas.user import UserPublic
 from .auth import get_current_user
 from ..services.questions import (
@@ -18,17 +18,17 @@ def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 
-@router.post("", response_model=QuestionPublic, dependencies=[Depends(require_admin)])
+@router.post("", response_model=QuestionAdminPublic, dependencies=[Depends(require_admin)])
 def create_question_endpoint(data: QuestionCreate, request: Request):
     col = get_questions_collection(request.app.state.db)
     return create_question(col, data)
 
-@router.get("", response_model=List[QuestionPublic], dependencies=[Depends(require_admin)])
+@router.get("", response_model=List[QuestionAdminPublic], dependencies=[Depends(require_admin)])
 def list_questions_endpoint(request: Request):
     col = get_questions_collection(request.app.state.db)
     return list_questions(col)
 
-@router.put("/{question_id}", response_model=QuestionPublic, dependencies=[Depends(require_admin)])
+@router.put("/{question_id}", response_model=QuestionAdminPublic, dependencies=[Depends(require_admin)])
 def update_question_endpoint(question_id: str, data: QuestionUpdate, request: Request):
     col = get_questions_collection(request.app.state.db)
     return update_question(col, question_id, data)

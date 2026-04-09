@@ -4,6 +4,7 @@
 const nextConfig = {
   output: "standalone", // creates a minimal server runtime in .next/standalone (optional but recommended)
   reactStrictMode: true,
+  compress: false, // Disable gzip so SSE chunks are forwarded immediately without buffering
 
   async rewrites() {
     // If we don't have a BACKEND_URL in prod, return no rewrites to avoid bad routes.

@@ -1,4 +1,4 @@
-// 
+//
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
@@ -10,13 +10,25 @@ export default function DemographicsPage() {
   const [checking, setChecking] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<{
+    gender?: string;
+    raceEthnicity?: string;
+    year?: string;
+    major?: string;
+  }>({});
 
   const [gender, setGender] = useState("");
   const [otherGender, setOtherGender] = useState("");
   const [raceEthnicity, setRaceEthnicity] = useState<string[]>([]);
   const [year, setYear] = useState("");
   const [major, setMajor] = useState("");
+  const [otherMajor, setOtherMajor] = useState("");
   const [className, setClassName] = useState("");
+
+  const fieldClass = (hasError: boolean) =>
+    `w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring ${
+      hasError ? "border-red-500 ring-1 ring-red-200" : "border-gray-300"
+    }`;
 
   useEffect(() => {
     let cancel = false;
@@ -57,10 +69,30 @@ export default function DemographicsPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!gender || !raceEthnicity || !year) {
+    const newErrors: {
+      gender?: string;
+      raceEthnicity?: string;
+      year?: string;
+      major?: string;
+    } = {};
+
+    if (!gender) newErrors.gender = "Please select your gender.";
+    if (raceEthnicity.length === 0) {
+      newErrors.raceEthnicity = "Please select at least one option.";
+    }
+    if (!year) newErrors.year = "Please select your year in college.";
+    if (!major) newErrors.major = "Please select your major/field of study.";
+    if (major === "Other" && !otherMajor.trim()) {
+      newErrors.major = "Please enter your major/field of study.";
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
       setError("Please fill out the required fields.");
       return;
     }
+
+    setErrors({});
 
     setSaving(true);
     try {
@@ -69,7 +101,7 @@ export default function DemographicsPage() {
         other_gender: otherGender || undefined,
         race_ethnicity: raceEthnicity,
         year: year,
-        major: major || undefined,
+        major: major === "Other" ? otherMajor.trim() || undefined : major || undefined,
         class_name: className || undefined,
       });
       router.replace("/dashboard");
@@ -91,8 +123,8 @@ export default function DemographicsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="bg-white border-b px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
+        <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">
               Demographics
@@ -135,8 +167,11 @@ export default function DemographicsPage() {
             </label>
             <select
               value={gender}
-              onChange={(e) => setGender(e.target.value)}
-              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
+              onChange={(e) => {
+                setGender(e.target.value);
+                setErrors((prev) => ({ ...prev, gender: undefined }));
+              }}
+              className={fieldClass(!!errors.gender)}
             >
               <option value="">Select gender</option>
               <option value="Male">Male</option>
@@ -146,6 +181,9 @@ export default function DemographicsPage() {
                 Prefer not to disclose
               </option>
             </select>
+            {errors.gender && (
+              <p className="mt-1 text-sm text-red-600">{errors.gender}</p>
+            )}
           </div>
 
           <div>
@@ -198,6 +236,11 @@ export default function DemographicsPage() {
                           raceEthnicity.filter((v) => v !== opt.value),
                         );
                       }
+
+                      setErrors((prev) => ({
+                        ...prev,
+                        raceEthnicity: undefined,
+                      }));
                     }}
                     className="h-4 w-4 rounded border-gray-400"
                   />
@@ -205,6 +248,11 @@ export default function DemographicsPage() {
                 </label>
               ))}
             </div>
+            {errors.raceEthnicity && (
+              <p className="mt-2 text-sm text-red-600">
+                {errors.raceEthnicity}
+              </p>
+            )}
           </div>
 
           <div>
@@ -214,8 +262,11 @@ export default function DemographicsPage() {
             </label>
             <select
               value={year}
-              onChange={(e) => setYear(e.target.value)}
-              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
+              onChange={(e) => {
+                setYear(e.target.value);
+                setErrors((prev) => ({ ...prev, year: undefined }));
+              }}
+              className={fieldClass(!!errors.year)}
             >
               <option value="">Select year in college</option>
               <option value="first">First Year</option>
@@ -224,20 +275,62 @@ export default function DemographicsPage() {
               <option value="fourth">Fourth Year</option>
               <option value="other">Other</option>
             </select>
+            {errors.year && (
+              <p className="mt-1 text-sm text-red-600">{errors.year}</p>
+            )}
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Major/Field of study
+              <span className="text-red-500">*</span>
             </label>
-            <input
-              type="text"
+
+            <select
               value={major}
-              onChange={(e) => setMajor(e.target.value)}
-              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
-              placeholder="e.g., Computer Science"
-            />
+              onChange={(e) => {
+                setMajor(e.target.value);
+                setErrors((prev) => ({ ...prev, major: undefined }));
+
+                if (e.target.value !== "Other") {
+                  setMajor("");
+                }
+              }}
+              className={fieldClass(!!errors.major)}
+            >
+              <option value="">Select Major/Field of study</option>
+
+              <option value="Computer Science">Computer Science</option>
+              <option value="Computer Engineering">Computer Engineering</option>
+              <option value="Data Science">Data Science</option>
+              <option value="Information Systems">Information Systems</option>
+              <option value="Other">Other</option>
+            </select>
+            {errors.major && major !== "Other" && (
+              <p className="mt-1 text-sm text-red-600">{errors.major}</p>
+            )}
           </div>
+
+          {major === "Other" && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Other Major/Field of study
+              </label>
+              <input
+                type="text"
+                value={otherMajor}
+                onChange={(e) => {
+                  setOtherMajor(e.target.value);
+                  setErrors((prev) => ({ ...prev, major: undefined }));
+                }}
+                className={fieldClass(!!errors.major && major === "Other")}
+                placeholder="e.g., Computer Science"
+              />
+              {errors.major && major === "Other" && (
+                <p className="mt-1 text-sm text-red-600">{errors.major}</p>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
