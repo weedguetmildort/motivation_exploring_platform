@@ -15,6 +15,7 @@ export default function DemographicsPage() {
     raceEthnicity?: string;
     year?: string;
     major?: string;
+    ageGroup?: string;
   }>({});
 
   const [gender, setGender] = useState("");
@@ -24,6 +25,7 @@ export default function DemographicsPage() {
   const [major, setMajor] = useState("");
   const [otherMajor, setOtherMajor] = useState("");
   const [className, setClassName] = useState("");
+  const [ageGroup, setAgeGroup] = useState("");
 
   const fieldClass = (hasError: boolean) =>
     `w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring ${
@@ -74,6 +76,7 @@ export default function DemographicsPage() {
       raceEthnicity?: string;
       year?: string;
       major?: string;
+      ageGroup?: string;
     } = {};
 
     if (!gender) newErrors.gender = "Please select your gender.";
@@ -85,6 +88,7 @@ export default function DemographicsPage() {
     if (major === "Other" && !otherMajor.trim()) {
       newErrors.major = "Please enter your major/field of study.";
     }
+    if (!ageGroup) newErrors.ageGroup = "Please select your age group.";
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -101,8 +105,12 @@ export default function DemographicsPage() {
         other_gender: otherGender || undefined,
         race_ethnicity: raceEthnicity,
         year: year,
-        major: major === "Other" ? otherMajor.trim() || undefined : major || undefined,
+        major:
+          major === "Other"
+            ? otherMajor.trim() || undefined
+            : major || undefined,
         class_name: className || undefined,
+        // age_group: ageGroup,
       });
       router.replace("/dashboard");
     } catch (e) {
@@ -257,6 +265,30 @@ export default function DemographicsPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
+              Age Group<span className="text-red-500">*</span>
+            </label>
+            <select
+              value={ageGroup}
+              onChange={(e) => {
+                setAgeGroup(e.target.value);
+                setErrors((prev) => ({ ...prev, ageGroup: undefined }));
+              }}
+              className={fieldClass(!!errors.ageGroup)}
+            >
+              <option value="">Select age group</option>
+              <option value="18-20">18–20</option>
+              <option value="21-24">21–24</option>
+              <option value="25-29">25–29</option>
+              <option value="30+">30+</option>
+              <option value="prefer_not_to_say">Prefer not to say</option>
+            </select>
+            {errors.ageGroup && (
+              <p className="mt-1 text-sm text-red-600">{errors.ageGroup}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               What is your year in college?
               <span className="text-red-500">*</span>
             </label>
@@ -289,11 +321,12 @@ export default function DemographicsPage() {
             <select
               value={major}
               onChange={(e) => {
-                setMajor(e.target.value);
+                const value = e.target.value;
+                setMajor(value);
                 setErrors((prev) => ({ ...prev, major: undefined }));
 
-                if (e.target.value !== "Other") {
-                  setMajor("");
+                if (value !== "Other") {
+                  setOtherMajor("");
                 }
               }}
               className={fieldClass(!!errors.major)}
