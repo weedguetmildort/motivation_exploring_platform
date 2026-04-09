@@ -8,6 +8,7 @@ export type DemographicsPayload = {
   year: string;
   major?: string;
   class_name?: string;
+  age_group: string;
 };
 
 export async function saveMyDemographics(payload: DemographicsPayload) {

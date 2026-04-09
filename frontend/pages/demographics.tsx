@@ -110,7 +110,7 @@ export default function DemographicsPage() {
             ? otherMajor.trim() || undefined
             : major || undefined,
         class_name: className || undefined,
-        // age_group: ageGroup,
+        age_group: ageGroup,
       });
       router.replace("/dashboard");
     } catch (e) {
