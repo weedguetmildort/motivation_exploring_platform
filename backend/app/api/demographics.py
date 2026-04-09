@@ -9,10 +9,12 @@ from .auth import get_current_user
 
 router = APIRouter(prefix="/demographics", tags=["demographics"])
 
+
 class DemographicsPayload(BaseModel):
     gender: str
     other_gender: Optional[str] = None
     race_ethnicity: List[str] = Field(default_factory=list)
+    age_group: str
     year: str
     major: Optional[str] = None
     class_name: Optional[str] = None
