@@ -1,5 +1,5 @@
 // frontend/components/ChatBox.tsx
-import { memo, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { sendChat, loadUserHistory } from "../lib/chat";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
