@@ -7,7 +7,9 @@ export type DemographicsPayload = {
   race_ethnicity: string[];
   year: string;
   major?: string;
+  other_major?: string;
   class_name?: string;
+  age: string;
 };
 
 export async function saveMyDemographics(payload: DemographicsPayload) {

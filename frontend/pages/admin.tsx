@@ -102,6 +102,16 @@ useEffect(() => {
               <p className="text-sm text-gray-600">Manage stage-based surveys</p>
             </Link>
           )}
+
+          {user?.is_admin && (
+            <Link
+              href="/links_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Links Panel</h2>
+              <p className="text-sm text-gray-600">Manage links</p>
+            </Link>
+          )}
         </div>
       </div>
     </div>

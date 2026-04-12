@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api.chat import router as chat_router
 from .api.auth import router as auth_router
+from .api.knowledge_links import router as knowledge_links_router
 from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
@@ -79,6 +80,7 @@ def health():
 # Mount the chat router
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(knowledge_links_router)
 app.include_router(questions_router.router)
 app.include_router(quiz_router.router)
 app.include_router(demographics_router.router)

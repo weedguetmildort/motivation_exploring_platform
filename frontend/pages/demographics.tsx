@@ -15,6 +15,7 @@ export default function DemographicsPage() {
     raceEthnicity?: string;
     year?: string;
     major?: string;
+    age?: string;
   }>({});
 
   const [gender, setGender] = useState("");
@@ -24,6 +25,7 @@ export default function DemographicsPage() {
   const [major, setMajor] = useState("");
   const [otherMajor, setOtherMajor] = useState("");
   const [className, setClassName] = useState("");
+  const [age, setAge] = useState("");
 
   const fieldClass = (hasError: boolean) =>
     `w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring ${
@@ -74,6 +76,7 @@ export default function DemographicsPage() {
       raceEthnicity?: string;
       year?: string;
       major?: string;
+      age?: string;
     } = {};
 
     if (!gender) newErrors.gender = "Please select your gender.";
@@ -84,6 +87,17 @@ export default function DemographicsPage() {
     if (!major) newErrors.major = "Please select your major/field of study.";
     if (major === "Other" && !otherMajor.trim()) {
       newErrors.major = "Please enter your major/field of study.";
+    }
+
+    const trimmedAge = age.trim();
+    const parsedAge = Number(trimmedAge);
+
+    if (!trimmedAge) {
+      newErrors.age = "Please enter your age.";
+    } else if (!Number.isInteger(parsedAge)) {
+      newErrors.age = "Age must be a whole number.";
+    } else if (parsedAge < 16 || parsedAge > 120) {
+      newErrors.age = "Please enter a valid age between 16 and 120.";
     }
 
     if (Object.keys(newErrors).length > 0) {
@@ -98,11 +112,15 @@ export default function DemographicsPage() {
     try {
       await saveMyDemographics({
         gender: gender,
-        other_gender: otherGender || undefined,
+        other_gender:
+          gender === "Other" ? otherGender.trim() || undefined : undefined,
         race_ethnicity: raceEthnicity,
         year: year,
-        major: major === "Other" ? otherMajor.trim() || undefined : major || undefined,
-        class_name: className || undefined,
+        major: major === "Other" ? "Other" : major || undefined,
+        other_major:
+          major === "Other" ? otherMajor.trim() || undefined : undefined,
+        class_name: className.trim() || undefined,
+        age: String(parsedAge),
       });
       router.replace("/dashboard");
     } catch (e) {
@@ -123,7 +141,7 @@ export default function DemographicsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
+      <header className="bg-white border-b px-6 h-[8dvh] max-h-24 overflow-hidden">
         <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">
@@ -186,18 +204,20 @@ export default function DemographicsPage() {
             )}
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Self-describe gender
-            </label>
-            <input
-              type="text"
-              value={otherGender}
-              onChange={(e) => setOtherGender(e.target.value)}
-              className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
-              placeholder="e.g., Non-binary"
-            />
-          </div>
+          {gender === "Other" && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Self-describe gender
+              </label>
+              <input
+                type="text"
+                value={otherGender}
+                onChange={(e) => setOtherGender(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring"
+                placeholder="e.g., Non-binary"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -257,6 +277,29 @@ export default function DemographicsPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
+              Age<span className="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={16}
+              max={120}
+              step={1}
+              value={age}
+              onChange={(e) => {
+                setAge(e.target.value);
+                setErrors((prev) => ({ ...prev, age: undefined }));
+              }}
+              className={fieldClass(!!errors.age)}
+              placeholder="e.g., 18"
+            />
+            {errors.age && (
+              <p className="mt-1 text-sm text-red-600">{errors.age}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               What is your year in college?
               <span className="text-red-500">*</span>
             </label>
@@ -289,11 +332,12 @@ export default function DemographicsPage() {
             <select
               value={major}
               onChange={(e) => {
-                setMajor(e.target.value);
+                const value = e.target.value;
+                setMajor(value);
                 setErrors((prev) => ({ ...prev, major: undefined }));
 
-                if (e.target.value !== "Other") {
-                  setMajor("");
+                if (value !== "Other") {
+                  setOtherMajor("");
                 }
               }}
               className={fieldClass(!!errors.major)}

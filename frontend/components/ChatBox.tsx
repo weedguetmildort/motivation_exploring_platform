@@ -30,6 +30,53 @@ const BOT_COLORS: Record<Bot, string> = {
   D: "bg-orange-100 text-orange-900",
 };
 
+// Memoized so it only re-renders when message content changes, not on every keystroke.
+const MessageBubble = memo(function MessageBubble({
+  role,
+  content,
+  bot,
+  assistantAlign = "left",
+  showLabel = true,
+  labelAlign,
+}: {
+  role: "user" | "assistant";
+  content: string;
+  bot?: Bot;
+  assistantAlign?: "left" | "right";
+  showLabel?: boolean;
+  labelAlign?: "left" | "right" | "center";
+}) {
+  const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
+  const bubbleClass =
+    role === "user"
+      ? "bg-blue-600 text-white"
+      : bot
+        ? BOT_COLORS[bot]
+        : "bg-gray-100 text-gray-900";
+  const isRightAligned = role === "user" || assistantAlign === "right";
+  const computedLabelAlign =
+    labelAlign ?? (isRightAligned ? "right" : "left");
+
+  return (
+    <div>
+      {showLabel && (
+        <div className={`text-xs text-gray-600 px-1 mb-1 ${computedLabelAlign === "center" ? "text-center" : computedLabelAlign === "right" ? "text-right" : "text-left"}`}>
+          {label}
+        </div>
+      )}
+      <div className={`flex ${isRightAligned ? "justify-end" : "justify-start"}`}>
+        <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+          {role === "assistant" ? (
+            <MarkdownMessage content={content} />
+          ) : (
+            <div className="text-[0.8125rem] whitespace-pre-wrap">{content}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 type ChatBoxProps = {
   quizId: string;
   currentQuestionId?: string | null;
@@ -319,6 +366,125 @@ export default function ChatBox({
     void sendMessage(question);
   }
 
+  // Current in-progress follow-up question text (the incomplete last line).
+  // If followupStreamText ends with \n, all lines are complete — no chip needed.
+  const followupInProgress = (() => {
+    if (!followupStreamText || followupStreamText.endsWith("\n")) return "";
+    const lines = followupStreamText.split("\n");
+    const lastLine = lines[lines.length - 1];
+    return lastLine.replace(/^[0-9]+[.)\-:\s]+/, "").trim();
+  })();
+
+  type DualBot = "A" | "B";
+
+  const toBot = (value?: string): DualBot | undefined => {
+    const key = (value ?? "").toLowerCase();
+    if (key === "a" || key === "agenta") return "A";
+    if (key === "b" || key === "agentb") return "B";
+    return undefined;
+  };
+
+  const renderMessages = () => {
+    if (agentFilter !== "double") {
+      return messages.map((m) => (
+        <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
+      ));
+    }
+
+    const rows: JSX.Element[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const current = messages[i];
+      const currentBot = toBot(current.bot);
+
+      if (current.role !== "assistant" || !currentBot) {
+        rows.push(
+          <MessageBubble key={current.id} role={current.role} content={current.content} bot={current.bot} />,
+        );
+        continue;
+      }
+
+      const pair: { A?: Msg; B?: Msg } = {};
+      pair[currentBot] = current;
+
+      const next = messages[i + 1];
+      const nextBot = next ? toBot(next.bot) : undefined;
+      if (next && next.role === "assistant" && nextBot && nextBot !== currentBot) {
+        pair[nextBot] = next;
+        i += 1;
+      }
+
+      rows.push(
+        <div key={`pair-${pair.A?.id ?? "none"}-${pair.B?.id ?? "none"}`} className="grid grid-cols-2 gap-3">
+          <div>
+            {pair.A ? (
+              <MessageBubble role="assistant" content={pair.A.content} bot="A" assistantAlign="left" showLabel labelAlign="center" />
+            ) : null}
+          </div>
+          <div>
+            {pair.B ? (
+              <MessageBubble role="assistant" content={pair.B.content} bot="B" assistantAlign="right" showLabel labelAlign="center" />
+            ) : null}
+          </div>
+        </div>,
+      );
+    }
+
+    return rows;
+  };
+
+  const renderStreaming = () => {
+    if (!pending) return null;
+
+    const entries = Object.entries(streamingMap) as [string, string][];
+    if (entries.length === 0) return null;
+
+    if (agentFilter !== "double") {
+      return entries.map(([agentKey, content]) => {
+        const bot: Bot | undefined = toBot(agentKey);
+        const label = bot ? `Agent ${bot}` : "Assistant";
+        const bubbleClass = bot ? BOT_COLORS[bot] : "bg-gray-100 text-gray-900";
+        return (
+          <div key={`streaming-${agentKey}`}>
+            <div className="text-xs text-gray-600 px-1 mb-1 text-left">{label}</div>
+            <div className="flex justify-start">
+              <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
+                <MarkdownMessage content={content} />
+              </div>
+            </div>
+          </div>
+        );
+      });
+    }
+
+    const byBot: Partial<Record<Bot, string>> = {};
+    entries.forEach(([agentKey, content]) => {
+      const bot = toBot(agentKey);
+      if (bot) byBot[bot] = content;
+    });
+
+    if (!byBot.A && !byBot.B) {
+      return entries.map(([agentKey, content]) => (
+        <MessageBubble
+          key={`streaming-${agentKey}`}
+          role="assistant"
+          content={content}
+          assistantAlign="left"
+        />
+      ));
+    }
+
+    return (
+      <div key="streaming-dual" className="grid grid-cols-2 gap-3">
+        <div>
+          {byBot.A ? <MessageBubble role="assistant" content={byBot.A} bot="A" assistantAlign="left" showLabel labelAlign="center" /> : null}
+        </div>
+        <div>
+          {byBot.B ? <MessageBubble role="assistant" content={byBot.B} bot="B" assistantAlign="right" showLabel labelAlign="center" /> : null}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <div className="p-4 border-b sticky top-0 bg-white/80 backdrop-blur rounded-t-2xl">
@@ -329,41 +495,40 @@ export default function ChatBox({
         ref={scrollerRef}
         className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3"
       >
-        {messages.map((m) => {
-          const label =
-            m.role === "user" ? "You" : m.bot ? `Agent ${m.bot}` : "Assistant";
-          const bubbleClass =
-            m.role === "user"
-              ? "bg-blue-600 text-white"
-              : m.bot
-                ? BOT_COLORS[m.bot]
-                : "bg-gray-100 text-gray-900";
+        {renderMessages()}
 
-          return (
-            <div key={m.id}>
-              <div
-                className={`text-xs text-gray-600 px-1 mb-1 ${
-                  m.role === "user" ? "text-right" : "text-left"
-                }`}
-              >
-                {label}
+        {(followupActive || followupStreamText !== "" || followupQuestions || followupInProgress) && (
+          <div className="mt-3 border-t border-gray-200 pt-3">
+            <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
+            {(followupActive || followupStreamText !== "") && !followupQuestions?.length && !followupInProgress ? (
+              <div className="text-sm text-gray-500">Loading follow-up questions…</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {followupQuestions?.map((q, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                    onClick={() => handleFollowupClick(q)}
+                  >
+                    <MarkdownMessage content={q} inline />
+                  </button>
+                ))}
+                {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
+                  <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
+                    {followupInProgress}
+                  </span>
+                )}
               </div>
-              <div
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${bubbleClass}`}
-                >
-                  {m.role === "assistant" ? (
-                    <MarkdownMessage content={m.content} />
-                  ) : (
-                    <div className="whitespace-pre-wrap">{m.content}</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+            )}
+          </div>
+        )}
+
+        {pending && !followupActive && Object.keys(streamingMap).length === 0 && (
+          <div className="text-sm text-gray-500">Assistant is typing…</div>
+        )}
+
+        {renderStreaming()}
 
         {followupQuestions && (
           <div className="mt-3 border-t border-gray-200 pt-3">
