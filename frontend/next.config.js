@@ -16,15 +16,15 @@ const nextConfig = {
     return [
       {
         source: "/api/chat/:path*",
-        destination: `${backend}/chat/:path*`
+        destination: `${backend}/chat/:path*`,
       },
       {
-        source: "/auth/:path*", 
-        destination: `${backend}/auth/:path*`
+        source: "/auth/:path*",
+        destination: `${backend}/auth/:path*`,
       },
-      { 
+      {
         source: "/api/questions/:path*",
-        destination: `${backend}/questions/:path*` 
+        destination: `${backend}/questions/:path*`,
       },
       {
         source: "/api/quiz/:path*",
@@ -38,7 +38,11 @@ const nextConfig = {
         source: "/api/surveys/:path*",
         destination: `${backend}/surveys/:path*`,
       },
-        {
+      {
+        source: "/api/knowledge-links/:path*",
+        destination: `${backend}/knowledge-links/:path*`,
+      },
+      {
         source: "/api/:path*",
         destination: `${backend}/api/:path*`,
       },
