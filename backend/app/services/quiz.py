@@ -49,6 +49,9 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
     random.shuffle(ids)
 
     ids = ids[:MAX_QUIZ_QUESTIONS]
+    lower_bound = 3 if len(ids) >= 3 else 1
+    incorrect_count = random.randint(3, min(5, len(ids)))
+    incorrect_question_ids = random.sample(ids, incorrect_count)
 
     now = datetime.utcnow()
     doc = {
@@ -58,6 +61,7 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
         "conversation_id": str(uuid.uuid4()),
         "status": "in_progress",
         "question_order": ids,
+        "incorrect_question_ids": incorrect_question_ids,
         "answers": [],
         "created_at": now,
         "updated_at": now,
@@ -72,8 +76,11 @@ def _find_next_unanswered(doc: dict, qcol=None) -> Optional[str]:
     for qid in doc.get("question_order", []):
         if qid in answered_map:
             continue
-        if qcol is not None and not qcol.count_documents({"_id": ObjectId(qid)}, limit=1):
-            continue  # question was deleted, skip it
+        if qcol is not None:
+            if not ObjectId.is_valid(qid):
+                continue
+            if not qcol.count_documents({"_id": ObjectId(qid)}, limit=1):
+                continue  # question was deleted, skip it
         return qid
     return None
 
@@ -159,6 +166,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             status=doc["status"],
             total_questions=total,
             answered_count=answered,
+            incorrect_question_ids=doc.get("incorrect_question_ids", [])
         )
         return QuizStateResponse(
             conversation_id=conv_id,
@@ -167,10 +175,15 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         )
 
     # In-progress: filter total/answered to only questions that still exist in the DB
+    valid_object_ids = []
+    for qid in question_order:
+        if ObjectId.is_valid(qid):
+            valid_object_ids.append(ObjectId(qid))
+
     existing_ids = {
         str(q["_id"])
         for q in qcol.find(
-            {"_id": {"$in": [ObjectId(qid) for qid in question_order]}},
+            {"_id": {"$in": valid_object_ids}},
             {"_id": 1},
         )
     }
@@ -185,6 +198,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         status=doc["status"],
         total_questions=total,
         answered_count=answered,
+        incorrect_question_ids=doc.get("incorrect_question_ids", [])
     )
 
     next_qid = _find_next_unanswered(doc, qcol)
@@ -195,6 +209,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             status="completed",
             total_questions=total,
             answered_count=answered,
+            incorrect_question_ids=doc.get("incorrect_question_ids", [])
         )
         return QuizStateResponse(
             conversation_id=conv_id,
@@ -211,6 +226,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             status="completed",
             total_questions=total,
             answered_count=answered,
+            incorrect_question_ids=doc.get("incorrect_question_ids", [])
         )
         return QuizStateResponse(
             conversation_id=conv_id,

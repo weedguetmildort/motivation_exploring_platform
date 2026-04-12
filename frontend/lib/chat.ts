@@ -11,10 +11,32 @@ export interface AIMessageMetadata {
   custom_metadata?: Record<string, unknown>;
 }
 
+ export interface ChatChoice {
+  id: string;
+  label: string;
+}
+
 export interface ChatResponse {
   replies: string[];
   conversationId: string;
   followupQuestions?: string[];
+  metadata?: AIMessageMetadata[];
+}
+
+interface SendChatOptions {
+  agents?: string[];
+  answerIncorrectly?: boolean;
+  questionText?: string | null;
+  answerChoices?: ChatChoice[];
+  signal?: AbortSignal;
+}
+
+
+interface ChatApiResponse {
+  reply?: string[];
+  message?: string;
+  conversation_id?: string;
+  followup_questions?: string[];
   metadata?: AIMessageMetadata[];
 }
 
@@ -25,115 +47,53 @@ export async function loadUserHistory(conversationId: string): Promise<{
   return apiFetch(`/api/chat/load_user_history/${conversationId}`);
 }
 
+function getChatEndpoint(quizId: string): string {
+  if (quizId === "double") return "/api/chat/double";
+  if (quizId === "followup") return "/api/chat/followup";
+  if (quizId === "links") return "/api/chat/links";
+  return `/api/chat/${quizId}`;
+}
+
 export async function sendChat(
   quizId: string,
   conversationId: string | null,
   message: string,
-  agents: string[] = [],
-  signal?: AbortSignal,
-  onToken?: (delta: string, agent?: string) => void,
-  onDone?: (replies: string[], convId: string) => void,
-  onFollowupToken?: (delta: string) => void,
+  options: SendChatOptions = {},
+
 ): Promise<ChatResponse> {
-  const resp = await fetch(`/api/chat/${quizId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
+  const {
+    agents = [],
+    answerIncorrectly = false,
+    questionText = null,
+    answerChoices = [],
     signal,
-    body: JSON.stringify({ message, conversation_id: conversationId, agents }),
-  });
+  } = options;
 
-  if (!resp.ok) {
-    let detail = `${resp.status} ${resp.statusText}`;
-    try {
-      const data = await resp.json();
-      detail = data.detail ?? data.message ?? detail;
-    } catch { /* ignore */ }
-    throw new Error(detail);
-  }
+  const data = await apiFetch<ChatApiResponse>(
+    getChatEndpoint(quizId),
 
-  // All chat endpoints now return SSE (text/event-stream).
-  const reader = resp.body!.getReader();
-  const decoder = new TextDecoder();
-  let sseBuffer = "";
-  const replyMap: Record<string, string> = {};
-  let returnedConvId = conversationId ?? "";
-  let followupQuestions: string[] | undefined;
-
-  // Batch token updates: flush to React at most once per animation frame (~16ms).
-  // This avoids one re-render per token while keeping streaming visually smooth.
-  const FOLLOWUP_KEY = "__followup__";
-  const tokenBuffer: Record<string, string> = {};
-
-  const flushTokens = () => {
-    for (const [key, accumulatedDelta] of Object.entries(tokenBuffer)) {
-      if (accumulatedDelta) {
-        if (key === FOLLOWUP_KEY) {
-          onFollowupToken?.(accumulatedDelta);
-        } else {
-          const agentName = key === "default" ? undefined : key;
-          onToken?.(accumulatedDelta, agentName);
-        }
-        tokenBuffer[key] = "";
-      }
+    {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        message,
+        conversation_id: conversationId,
+        agents,
+        answer_incorrectly: answerIncorrectly,
+        question_text: questionText,
+        answer_choices: answerChoices,
+      }),
     }
+  );
+
+  const replies = Array.isArray(data.reply)
+    ? data.reply
+    : [(data.reply ?? data.message ?? "").toString()];
+
+  return {
+    replies,
+    conversationId: data.conversation_id ?? conversationId ?? "",
+    followupQuestions: data.followup_questions,
+    metadata: data.metadata,
   };
-  const flushInterval = setInterval(flushTokens, 16);
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      sseBuffer += decoder.decode(value, { stream: true });
-      const lines = sseBuffer.split("\n");
-      sseBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        let event: Record<string, unknown>;
-        try {
-          event = JSON.parse(line.slice(6));
-        } catch {
-          continue;
-        }
-        if (event.type === "token") {
-          const delta = (event.content as string) ?? "";
-          const agent = event.agent != null ? (event.agent as string) : undefined;
-          const key = agent ?? "default";
-          replyMap[key] = (replyMap[key] ?? "") + delta;
-          tokenBuffer[key] = (tokenBuffer[key] ?? "") + delta;
-        } else if (event.type === "followup") {
-          if ("token" in event) {
-            // Streaming follow-up token — buffer at 60fps alongside main tokens.
-            tokenBuffer[FOLLOWUP_KEY] = (tokenBuffer[FOLLOWUP_KEY] ?? "") + (event.token as string);
-          } else {
-            // Batch questions (backwards compat for endpoints that send the full array).
-            followupQuestions = [...(followupQuestions ?? []), ...(event.questions as string[])];
-          }
-        } else if (event.type === "done") {
-          returnedConvId = (event.conversation_id as string) ?? returnedConvId;
-          if (onDone) {
-            flushTokens();
-            const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
-            const replies = agentKeys.length > 0
-              ? agentKeys.map(k => replyMap[k])
-              : [replyMap["default"] ?? ""];
-            onDone(replies, returnedConvId);
-          }
-        } else if (event.type === "error") {
-          throw new Error((event.detail as string) ?? "Upstream AI request failed");
-        }
-      }
-    }
-  } finally {
-    clearInterval(flushInterval);
-    flushTokens(); // flush any tokens that arrived since the last interval tick
-    reader.releaseLock();
-  }
-
-  const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
-  const replies = agentKeys.length > 0
-    ? agentKeys.map(k => replyMap[k])
-    : [replyMap["default"] ?? ""];
-
-  return { replies, conversationId: returnedConvId, followupQuestions };
 }
