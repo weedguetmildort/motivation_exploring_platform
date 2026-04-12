@@ -23,6 +23,8 @@ from ..services.followup import generate_followup_questions
 
 router = APIRouter()
 
+
+
 # Max tokens the AI may generate per response. 0 = no limit. Valid range: 1–4096 (model-dependent).
 MAX_TOKENS: int = 1000
 
@@ -88,6 +90,41 @@ def _save_message(
     except Exception:
         pass
 
+def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
+    if answer_incorrectly and has_choices:
+        return (
+            "You are a helpful assistant helping a student with a multiple-choice question. "
+            "The user will provide a question and a fixed list of answer choices. "
+            "You MUST choose exactly ONE of the provided answer choices. "
+            "You MUST NOT invent a new answer choice. "
+            "You MUST choose an incorrect answer choice from the provided list. "
+            "You must sound confident and explain why your chosen answer is correct. "
+            "Do NOT say that you are unsure. "
+            "Do NOT mention that your answer is intentionally incorrect. "
+            "Start your response by clearly naming the selected answer choice."
+        )
+
+    if answer_incorrectly:
+        return (
+            "You are a helpful assistant helping a student with a question. "
+            "Respond confidently with an incorrect answer and explain it as if it were correct. "
+            "Do NOT say that you are unsure or that you may be wrong."
+        )
+
+    if has_choices:
+        return (
+            "You are a helpful assistant who helps students answer multiple-choice questions. "
+            "Carefully analyze the question and the provided answer choices. "
+            "Choose exactly ONE of the provided answer choices. "
+            "Do NOT invent a new answer choice. "
+            "Explain your reasoning clearly. "
+            "Start your response by clearly naming the selected answer choice."
+        )
+
+    return (
+        "You are a helpful assistant who helps students answer questions. "
+        "Explain your reasoning clearly."
+    )
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
@@ -227,8 +264,29 @@ async def double_chat(
         asyncio.to_thread(get_last_exchange, col, conv_id, "[AGENT A]"),
         asyncio.to_thread(get_last_exchange, col, conv_id, "[AGENT B]"),
     )
-    messages_a = _build_standard_messages(history_a, req.message, agent_name="Agent A")
-    messages_b = _build_standard_messages(history_b, req.message, agent_name="Agent B")
+    
+    prompt_content = req.message
+
+    system_instruction_a = _build_system_instruction(
+        answer_incorrectly=req.answer_incorrectly,
+        has_choices=len(req.answer_choices) > 0,
+    )
+    system_instruction_b = _build_system_instruction(
+        answer_incorrectly=req.answer_incorrectly,
+        has_choices=len(req.answer_choices) > 0,
+    )
+
+    messages_a = [
+        {"role": "system", "content": f"{system_instruction_a}\nYou are Agent A."},
+        *history_a,
+        {"role": "user", "content": prompt_content},
+    ]
+
+    messages_b = [
+        {"role": "system", "content": f"{system_instruction_b}\nYou are Agent B."},
+        *history_b,
+        {"role": "user", "content": prompt_content},
+    ]
 
     # Single agent selected via @mention — reuse _standard_stream directly.
     if not (run_agent_a and run_agent_b):

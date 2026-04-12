@@ -1,14 +1,18 @@
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .message import AIMessageMetadata
+from .question import QuestionChoice
 
 
 # Sent by the client to any chat endpoint.
 class ChatRequest(BaseModel):
     message: str
-    conversation_id: str | None = None  # omit to start a new conversation
-    agents: list[str] = []             # e.g. ["agentA", "agentB"] for double-agent mode
+    conversation_id: str | None = None
+    agents: list[str] = Field(default_factory=list)
+    answer_incorrectly: bool = False
+    question_text: str | None = None
+    answer_choices: list[QuestionChoice] = Field(default_factory=list)
 
 
 # Returned by non-streaming chat endpoints (e.g. legacy or search-based).

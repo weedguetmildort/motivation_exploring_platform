@@ -50,6 +50,9 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
 
     ids = ids[:MAX_QUIZ_QUESTIONS]
 
+    incorrect_count = random.randint(3, min(5,len(ids)))
+    incorrect_question_ids = random.sample(ids, incorrect_count)
+
     now = datetime.utcnow()
     doc = {
         "user_id": user_id,
@@ -159,6 +162,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             status=doc["status"],
             total_questions=total,
             answered_count=answered,
+            incorrect_question_ids=doc.get("incorrect_question_ids", [])
         )
         return QuizStateResponse(
             conversation_id=conv_id,
@@ -185,6 +189,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         status=doc["status"],
         total_questions=total,
         answered_count=answered,
+        incorrect_question_ids=doc.get("incorrect_question_ids", [])
     )
 
     next_qid = _find_next_unanswered(doc, qcol)
@@ -195,6 +200,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             status="completed",
             total_questions=total,
             answered_count=answered,
+            incorrect_question_ids=doc.get("incorrect_question_ids", [])
         )
         return QuizStateResponse(
             conversation_id=conv_id,
@@ -211,6 +217,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             status="completed",
             total_questions=total,
             answered_count=answered,
+            incorrect_question_ids=doc.get("incorrect_question_ids", [])
         )
         return QuizStateResponse(
             conversation_id=conv_id,
