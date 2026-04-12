@@ -14,7 +14,6 @@ export type QuizAttemptPublic = {
   status: "in_progress" | "completed" | string;
   total_questions: number;
   answered_count: number;
-  incorrect_question_ids: string[];
 };
 
 export type QuizStateResponse = {
