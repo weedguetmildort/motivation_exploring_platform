@@ -1,3 +1,4 @@
+# backend/app/api/demographics.py
 from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel, Field
 from bson.objectid import ObjectId
@@ -8,27 +9,17 @@ from .auth import get_current_user
 
 router = APIRouter(prefix="/demographics", tags=["demographics"])
 
+
 class DemographicsPayload(BaseModel):
     gender: str
-    otherGender: Optional[str] = None
+    other_gender: Optional[str] = None
     race_ethnicity: List[str] = Field(default_factory=list)
+    age: str
     year: str
     major: Optional[str] = None
+    other_major: Optional[str] = None
+    class_name: Optional[str] = None
 
-
-
-# @router.post("/me")
-# def save_my_demographics(
-#     data: DemographicsPayload,
-#     request: Request,
-#     user: UserPublic = Depends(get_current_user),
-# ):
-#     db = request.app.state.db
-#     users = db["users"]
-
-#     result = users.update_one(
-#       {"_id": user.id if False else {"$eq": None}},  # placeholder; see below
-#     )
 
 @router.post("/me")
 def save_my_demographics(

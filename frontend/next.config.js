@@ -4,6 +4,7 @@
 const nextConfig = {
   output: "standalone", // creates a minimal server runtime in .next/standalone (optional but recommended)
   reactStrictMode: true,
+  compress: false, // Disable gzip so SSE chunks are forwarded immediately without buffering
 
   async rewrites() {
     // If we don't have a BACKEND_URL in prod, return no rewrites to avoid bad routes.
@@ -14,16 +15,16 @@ const nextConfig = {
     }
     return [
       {
-        source: "/api/chat",
-        destination: `${backend}/chat`
+        source: "/api/chat/:path*",
+        destination: `${backend}/chat/:path*`,
       },
       {
-        source: "/auth/:path*", 
-        destination: `${backend}/auth/:path*`
+        source: "/auth/:path*",
+        destination: `${backend}/auth/:path*`,
       },
-      { 
+      {
         source: "/api/questions/:path*",
-        destination: `${backend}/questions/:path*` 
+        destination: `${backend}/questions/:path*`,
       },
       {
         source: "/api/quiz/:path*",
@@ -36,6 +37,14 @@ const nextConfig = {
       {
         source: "/api/surveys/:path*",
         destination: `${backend}/surveys/:path*`,
+      },
+      {
+        source: "/api/knowledge-links/:path*",
+        destination: `${backend}/knowledge-links/:path*`,
+      },
+      {
+        source: "/api/:path*",
+        destination: `${backend}/api/:path*`,
       },
     ];
   },

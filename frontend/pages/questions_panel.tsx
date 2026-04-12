@@ -11,6 +11,7 @@ export default function QuestionPanelPage() {
     stem: string;
     subtitle?: string | null;
     choices: { id: string; label: string }[];
+    correct_choice_id: string;
   };
 
   const router = useRouter();
@@ -39,12 +40,15 @@ export default function QuestionPanelPage() {
   >([]);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [correctChoiceId, setCorrectChoiceId] = useState("");
+  const [editCorrectChoiceId, setEditCorrectChoiceId] = useState("");
 
   function beginEdit(q: Question) {
     setEditingId(q.id);
     setEditStem(q.stem);
     setEditSubtitle(q.subtitle ?? "");
     setEditChoices(q.choices.map((c) => ({ ...c })));
+    setEditCorrectChoiceId(q.correct_choice_id);
   }
 
   function cancelEdit() {
@@ -52,6 +56,7 @@ export default function QuestionPanelPage() {
     setEditStem("");
     setEditSubtitle("");
     setEditChoices([]);
+    setEditCorrectChoiceId("");
   }
 
   async function saveEdit(questionId: string) {
@@ -63,6 +68,7 @@ export default function QuestionPanelPage() {
           stem: editStem,
           subtitle: editSubtitle || null,
           choices: editChoices,
+          correct_choice_id: editCorrectChoiceId,
         }),
       });
 
@@ -179,7 +185,7 @@ export default function QuestionPanelPage() {
       const created = await apiFetch<Question>("/api/questions/", {
         // [UPDATE]
         method: "POST",
-        body: JSON.stringify({ stem, subtitle, choices }),
+        body: JSON.stringify({ stem, subtitle, choices, correct_choice_id: correctChoiceId }),
       });
 
       setQuestions((prev) => [created, ...prev]);
@@ -192,6 +198,7 @@ export default function QuestionPanelPage() {
         { id: "c", label: "" },
         { id: "d", label: "" },
       ]);
+      setCorrectChoiceId("");
     } catch (err: any) {
       setMessage("Failed to save question.");
     } finally {
@@ -202,26 +209,26 @@ export default function QuestionPanelPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="site-header">
+        <div className="site-header-inner">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">
+            <h1 className="page-title">
               Quiz Questions Panel
             </h1>
-            <p className="text-sm text-gray-600">
+            <p className="page-subtitle">
               Manage quiz questions and answers
             </p>
           </div>
           <div className="flex items-center gap-4">
             <button
               onClick={() => router.push("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="btn-primary"
             >
               Back to Dashboard
             </button>
             <button
               onClick={onLogout}
-              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -230,9 +237,9 @@ export default function QuestionPanelPage() {
       </header>
 
       {/* Main Content */}
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="page-container">
         <div className="bg-white rounded-xl p-8 shadow-sm border text-center">
-          <h2 className="text-xl font-semibold mb-2">Add Question</h2>
+          <h2 className="text-xl 2xl:text-2xl font-semibold mb-2">Add Question</h2>
 
           <form onSubmit={onSubmit} className="space-y-4 text-left">
             <div>
@@ -278,9 +285,30 @@ export default function QuestionPanelPage() {
               ))}
             </div>
 
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Correct answer
+              </label>
+              <div className="flex gap-4">
+                {choices.map((c) => (
+                  <label key={c.id} className="flex items-center gap-1 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="correct_choice"
+                      value={c.id}
+                      checked={correctChoiceId === c.id}
+                      onChange={() => setCorrectChoiceId(c.id)}
+                      required
+                    />
+                    {c.id.toUpperCase()}
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || !correctChoiceId}
               className="mt-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
               {saving ? "Saving…" : "Save question"}
@@ -290,9 +318,9 @@ export default function QuestionPanelPage() {
           </form>
         </div>
       </div>
-      <div className="max-w-6xl mx-auto pt-0 px-6 pb-6">
+      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto pt-0 px-6 pb-6">
         <div className="bg-white rounded-xl p-8 shadow-sm border text-center">
-          <h2 className="text-xl font-semibold mb-2">View Questions</h2>
+          <h2 className="text-xl 2xl:text-2xl font-semibold mb-2">View Questions</h2>
 
           {loadingQuestions && (
             <p className="text-sm text-gray-500 text-center">
@@ -364,9 +392,12 @@ export default function QuestionPanelPage() {
                         {q.choices.map((c) => (
                           <li key={c.id}>
                             <span className="font-medium uppercase mr-1">
-                              {c.id}:
+                              {c.id.toUpperCase()}:
                             </span>
                             {c.label}
+                            {c.id === q.correct_choice_id && (
+                              <span className="ml-2 text-green-600 font-semibold">(correct)</span>
+                            )}
                           </li>
                         ))}
                       </ul>
@@ -421,11 +452,31 @@ export default function QuestionPanelPage() {
                           ))}
                         </div>
 
+                        <div>
+                          <label className="block font-medium mb-1">
+                            Correct answer
+                          </label>
+                          <div className="flex gap-4">
+                            {editChoices.map((c) => (
+                              <label key={c.id} className="flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="edit_correct_choice"
+                                  value={c.id}
+                                  checked={editCorrectChoiceId === c.id}
+                                  onChange={() => setEditCorrectChoiceId(c.id)}
+                                />
+                                {c.id.toUpperCase()}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
                         <div className="flex gap-2">
                           <button
                             type="button"
                             onClick={() => saveEdit(q.id)}
-                            disabled={savingEdit}
+                            disabled={savingEdit || !editCorrectChoiceId}
                             className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
                           >
                             {savingEdit ? "Saving…" : "Save"}

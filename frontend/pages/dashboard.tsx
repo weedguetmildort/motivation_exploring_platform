@@ -45,22 +45,22 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="site-header">
+        <div className="site-header-inner">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
-            <p className="text-sm text-gray-600">Welcome to the dashboard, {user.email}</p>
+            <h1 className="page-title">Dashboard</h1>
+            <p className="page-subtitle">Welcome to the dashboard, {user.email}</p>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => router.push("/profile")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="btn-primary"
             >
               Profile
             </button>
             <button
               onClick={onLogout}
-              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -68,14 +68,14 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="page-container">
         <div className="grid gap-4 sm:grid-cols-2">
           {user?.is_admin && (
             <a
               href="/chat"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Chat</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Chat</h2>
               <p className="text-sm text-gray-600">
                 Ask questions and interact with AI chatbot
               </p>
@@ -87,7 +87,7 @@ export default function DashboardPage() {
               href="/playground"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Playground</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Playground</h2>
               <p className="text-sm text-gray-600">Sandbox to see how the different quiz styles look</p>
             </a>
           )}
@@ -97,18 +97,46 @@ export default function DashboardPage() {
               href="/admin"
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
-              <h2 className="mb-1 text-lg font-semibold">Admin Panel</h2>
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Admin Panel</h2>
               <p className="text-sm text-gray-600">Manage questions and content</p>
             </a>
           )}
-
+          {/*Default quiz */}
           <a
-            href="/quiz"
+            href="/quiz/base"
             className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
           >
-            <h2 className="mb-1 text-lg font-semibold">Quiz</h2>
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Quiz</h2>
             <p className="text-sm text-gray-600">Begin the Quiz</p>
           </a>
+          {/*Additional Quizzes below*/}
+          {user?.is_admin && (
+          <a
+            href="/quiz/double"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Dual Agent Quiz</h2>
+            <p className="text-sm text-gray-600">Begin the Quiz</p>
+          </a>
+          )}
+          {user?.is_admin && (
+          <a
+            href="/quiz/links"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Links Quiz</h2>
+            <p className="text-sm text-gray-600">Begin the Quiz</p>
+          </a>
+          )}
+          {user?.is_admin && (
+          <a
+            href="/quiz/followup"
+            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+          >
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Follow-up Questions Quiz</h2>
+            <p className="text-sm text-gray-600">Begin the Quiz</p>
+          </a>
+          )}
         </div>
       </div>
     </div>

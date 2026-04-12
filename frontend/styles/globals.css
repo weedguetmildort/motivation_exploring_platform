@@ -1,11 +1,59 @@
+/* frontend/styles/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* App-wide base styling (optional) */
-html, body, #__next {
+html,
+body,
+#__next {
   height: 100%;
+  margin: 0;
 }
+
 body {
-  @apply bg-white text-gray-900;
+  @apply bg-gray-50 text-gray-900;
+}
+
+@layer components {
+  /* Sticky page header — used by standard scroll-layout pages */
+  .site-header {
+    @apply sticky top-0 z-10 bg-white border-b px-4 py-3 sm:px-6 sm:py-4;
+  }
+
+  /* Header inner row — title + buttons, wraps on small screens */
+  .site-header-inner {
+    @apply max-w-6xl 2xl:max-w-screen-2xl mx-auto
+           flex flex-wrap items-center justify-between gap-y-2;
+  }
+
+  /* Standard page content container */
+  .page-container {
+    @apply max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-4 sm:px-6 sm:py-6;
+  }
+
+  /* Page-level h1 */
+  .page-title {
+    @apply text-xl sm:text-2xl 2xl:text-3xl font-semibold text-gray-900;
+  }
+
+  /* Page-level subtitle / description */
+  .page-subtitle {
+    @apply text-sm 2xl:text-base text-gray-600;
+  }
+
+  /* Card / section surface */
+  .card {
+    @apply rounded-xl border bg-white shadow-sm;
+  }
+
+  /* Primary action button */
+  .btn-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700 transition
+           rounded-lg px-4 py-2 text-sm font-medium;
+  }
+
+  /* Secondary / ghost button */
+  .btn-secondary {
+    @apply bg-gray-100 hover:bg-gray-200 transition rounded-lg px-4 py-2 text-sm;
+  }
 }

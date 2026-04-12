@@ -1,10 +1,8 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import QuestionBox from "../components/QuestionBox";
-import AnswerBox, { Choice } from "../components/AnswerBox";
+import QuestionBox, { Choice } from "../components/QuestionBox";
 import ChatBox from "../components/ChatBox";
 import { getMe, logout, type User } from "../lib/auth";
-import FollowUpQuestionBox from "../components/FollowUpQuestionBox";
 import { useRouter } from "next/router";
 import { apiFetch } from "../lib/fetcher";
 
@@ -20,22 +18,6 @@ export default function Playground() {
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
-  // Track chat AI message + follow-up selection
-  const [lastAiMessage, setLastAiMessage] = useState<string | null>(null);
-  const [selectedFollowup, setSelectedFollowup] = useState<string | null>(null);
-  const [followupToSend, setFollowupToSend] = useState<string | null>(null);
-
-  function handleFollowupClick(question: string) {
-    setSelectedFollowup(question);
-    setFollowupToSend(question);
-    console.log("Follow-up option clicked:", question);
-  }
-
-  useEffect(() => {
-    if (lastAiMessage) {
-      setFollowupToSend(null);
-    }
-  }, [lastAiMessage]);
 
   useEffect(() => {
     let cancel = false;
@@ -126,7 +108,11 @@ export default function Playground() {
   if (!user) return null;
 
   async function onLogout() {
-    try { await logout(); } finally { router.replace("/login"); }
+    try {
+      await logout();
+    } finally {
+      router.replace("/login");
+    }
   }
 
   const hasQuestions = questions.length > 0;
@@ -135,23 +121,24 @@ export default function Playground() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-
-      <header className="bg-white border-b px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="site-header">
+        <div className="site-header-inner">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Playground</h1>
-            <p className="text-sm text-gray-600">Sandbox to see how the different quiz styles look</p>
+            <h1 className="page-title">Playground</h1>
+            <p className="page-subtitle">
+              Sandbox to see how the different quiz styles look
+            </p>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => router.push("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="btn-primary"
             >
               Back to Dashboard
             </button>
             <button
               onClick={onLogout}
-              className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -159,122 +146,148 @@ export default function Playground() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto p-6">
-        
-          <section className="rounded-xl bg-white p-4 shadow-sm border">
-            <h2 className="text-lg font-medium mb-3">Case Selection</h2>
-            <div className="space-y-4 max-w-3xl mx-auto">
-              <div className="flex justify-center gap-4 mt-8">
-                <button
-                  onClick={() => setActive("base")}
-                  aria-pressed={active === "base"}
-                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                    active === "base"
-                      ? "bg-blue-600 text-white shadow-lg scale-105"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  Base Case
-                </button>
-                <button
-                  onClick={() => setActive("followup")}
-                  aria-pressed={active === "followup"}
-                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                    active === "followup"
-                      ? "bg-blue-600 text-white shadow-lg scale-105"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  Follow-up Question Case
-                </button>
-              </div>
-              <div className="p-6 bg-white rounded-xl shadow-inner">
-                {active === "base" ? (
-                  <p className="text-lg text-gray-800">
-                    This should be the <strong>Base Case</strong> content. Chat works, but no follow-up suggestions are shown.
-                  </p>
-                ) : (
-                  <p className="text-lg text-gray-800">
-                    This is <strong>Follow-up Question Case</strong> content. Chat works and FollowUpQuestionBox renders under the last answer.
-                  </p>
-                )}
-              </div>
+      <div className="page-container">
+        <section className="rounded-xl bg-white p-4 shadow-sm border">
+          <h2 className="text-lg 2xl:text-xl font-medium mb-3">Case Selection</h2>
+          <div className="space-y-4 max-w-3xl 2xl:max-w-none mx-auto">
+            <div className="flex flex-wrap justify-center gap-3 mt-8">
+              <button
+                onClick={() => setActive("base")}
+                aria-pressed={active === "base"}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                  active === "base"
+                    ? "bg-blue-600 text-white shadow-lg scale-105"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Base Case
+              </button>
+              <button
+                onClick={() => setActive("followup")}
+                aria-pressed={active === "followup"}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                  active === "followup"
+                    ? "bg-blue-600 text-white shadow-lg scale-105"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Follow-up Question Case
+              </button>
+              <button
+                onClick={() => setActive("double")}
+                aria-pressed={active === "double"}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                  active === "double"
+                    ? "bg-blue-600 text-white shadow-lg scale-105"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Double Agent Case
+              </button>
+              <button
+                onClick={() => setActive("links")}
+                aria-pressed={active === "links"}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                  active === "links"
+                    ? "bg-blue-600 text-white shadow-lg scale-105"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Embedded Links Case
+              </button>
             </div>
-          </section>
-        
+            <div className="p-6 bg-white rounded-xl shadow-inner">
+              {active === "base" && (
+                <p className="text-lg text-gray-800">
+                  This should be the <strong>Base Case</strong> content. Chat
+                  works, but no follow-up suggestions are shown.
+                </p>
+              )}
+              {active === "followup" && (
+                <p className="text-lg text-gray-800">
+                  This is <strong>Follow-up Question Case</strong> content. Chat
+                  works and FollowUpQuestionBox renders under the last answer.
+                </p>
+              )}
+              {active === "double" && (
+                <p className="text-lg text-gray-800">
+                  This is <strong>Double Agent Case</strong> content. Two bots
+                  independently respond to the user’s question below. Each bot
+                  uses the same model but acts as a separate entity.
+                </p>
+              )}
+              {active === "links" && (
+                <p className="text-lg text-gray-800">
+                  This is the <strong>Embedded Links Case</strong>. The assistant
+                  searches the web and responds with inline citation links embedded
+                  directly in the text.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
 
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] pt-6 px-0 pb-6">
+        <div className="grid gap-6 grid-cols-1 md:grid-cols-[1fr_1.618fr] pt-6 pb-6">
           {/* Left column */}
-          <div className="grid gap-6 lg:grid-rows-[1fr_1fr] lg:h-full">
-
-            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
-              <h2 className="text-lg font-medium mb-3">Question</h2>
-
+          <div className="flex flex-col gap-6">
+            <section className="rounded-xl border bg-white shadow-sm">
               {loadingQuestions && (
-                <div className="text-sm text-gray-500">Loading questions…</div>
+                <div className="p-4 text-sm text-gray-500">Loading questions…</div>
               )}
 
               {questionsError && (
-                <div className="text-sm text-red-600">{questionsError}</div>
+                <div className="p-4 text-sm text-red-600">{questionsError}</div>
               )}
 
               {!loadingQuestions && !questionsError && !hasQuestions && (
-                <div className="text-sm text-gray-500">
+                <div className="p-4 text-sm text-gray-500">
                   No questions available. Add some in the admin panel.
                 </div>
               )}
 
               {hasQuestions && (
-                <div className="space-y-4">
-                  <QuestionBox
-                    question={question}
-                    subtitle={subtitle || undefined}
-                    className="max-w-3xl mx-auto"
-                  />
-                </div>
-              )}
-            </section>
-
-            <section className="rounded-xl bg-white p-4 shadow-sm border overflow-y-auto">
-              <h2 className="text-lg font-medium mb-3">Options</h2>
-              
-              {!hasQuestions ? (
-                <div className="text-sm text-gray-500">
-                  Options will appear once there is at least one question.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <AnswerBox
-                    choices={choices}
-                    value={selected}
-                    onChange={setSelected}
-                    className="max-w-3xl mx-auto"
-                  />
-                  <div className="text-sm text-gray-600">
-                    Selected:{" "}
-                    <span className="font-medium">{selected ?? "(none)"}</span>
+                <>
+                  <div className="p-4">
+                    <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">{question}</h2>
                   </div>
-                </div>
+
+                  {subtitle && (
+                    <div className="px-4 pb-4">
+                      <p className="text-lg 2xl:text-xl text-gray-600">{subtitle}</p>
+                    </div>
+                  )}
+
+                  <hr className="border-gray-200" />
+
+                  <div className="p-4 space-y-3">
+                    <QuestionBox
+                      choices={choices}
+                      value={selected}
+                      onChange={setSelected}
+                      className="max-w-3xl 2xl:max-w-none mx-auto"
+                    />
+                    <div className="text-sm text-gray-600">
+                      Selected:{" "}
+                      <span className="font-medium">{selected ?? "(none)"}</span>
+                    </div>
+                  </div>
+                </>
               )}
-
             </section>
-
           </div>
 
           {/* Right column (Chat) */}
-            <ChatBox 
-              onAssistantMessage={setLastAiMessage}
-              externalQuestion={followupToSend}
-              enableFollowups={active === "followup"}
+          <div className="h-[55vh] md:h-auto md:min-h-[500px] overflow-hidden">
+            <ChatBox
+              quizId={active}
             />
+          </div>
         </div>
 
         <div className="flex justify-between max-w-md mx-auto">
           <button
             className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
-            onClick={() =>
-              setCurrentIndex((idx) => (idx > 0 ? idx - 1 : idx))
-            }
+            onClick={() => setCurrentIndex((idx) => (idx > 0 ? idx - 1 : idx))}
             disabled={!hasQuestions || atFirst}
           >
             Previous
@@ -288,7 +301,7 @@ export default function Playground() {
             className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
             onClick={() =>
               setCurrentIndex((idx) =>
-                idx < questions.length - 1 ? idx + 1 : idx
+                idx < questions.length - 1 ? idx + 1 : idx,
               )
             }
             disabled={!hasQuestions || atLast}

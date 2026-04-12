@@ -1,24 +1,42 @@
-// Auth client: talks to backend via relative URLs, relying on Next.js rewrites
-// Endpoints expected:
-//   POST /auth/signup { email, password } -> 200 + sets cookie
-//   POST /auth/login  { email, password } -> 200 + sets cookie
-//   POST /auth/logout {}                 -> 204 (optional, if you add it)
-//   GET  /auth/me                        -> 200 { user } if authenticated
+// frontend/lib/auth.ts
 
 import { apiFetch } from "./fetcher";
+
+type SignupPayload = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+  consent: boolean;
+};
 
 export type User = {
   id: string;
   email: string;
+  first_name?: string;
+  last_name?: string;
+  consent?: boolean;
+  consent_given_at?: string;
   is_admin: boolean;
   demographics_completed?: boolean;
-  quiz_pre_survey_completed?: boolean;
+  survey_pre_base_completed?: boolean;
+  quiz_base_completed?: boolean;
+  survey_post_base_completed?: boolean;
+  quiz_variant_completed?: boolean;
+  survey_post_variant_completed?: boolean;
+  survey_stage?: string;
 };
 
-export async function signup(email: string, password: string) {
+export async function signup(data: SignupPayload) {
   return apiFetch<{ user: User }>("/auth/signup", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({
+      first_name: data.firstName,
+      last_name: data.lastName,
+      email: data.email,
+      password: data.password,
+      consent: data.consent,
+    }),
   });
 }
 
@@ -30,12 +48,10 @@ export async function login(email: string, password: string) {
 }
 
 export async function getMe() {
-  // Throws if not authenticated
   return apiFetch<{ user: User }>("/auth/me");
 }
 
 export async function logout() {
-  // If you implement it on the backend
   return apiFetch<void>("/auth/logout", { method: "POST" });
 }
 

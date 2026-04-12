@@ -1,0 +1,492 @@
+// frontend/pages/survey.tsx
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/router";
+import { getMe, logout, type User } from "../lib/auth";
+import {
+  getSurveyState,
+  submitSurvey,
+  type SurveyItem,
+  type SurveyAnswer,
+} from "../lib/surveys";
+
+type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
+
+type ActiveSurveyStage = Exclude<SurveyStage, "complete">;
+
+type ExtendedUser = User & {
+  assigned_var?: string | null;
+  survey_stage?: SurveyStage | null;
+  survey_pre_base_completed?: boolean;
+  survey_post_base_completed?: boolean;
+  survey_post_variant_completed?: boolean;
+  quiz_base_completed?: boolean;
+  quiz_variant_completed?: boolean;
+};
+
+const STAGE_CONFIG: Record<
+  ActiveSurveyStage,
+  {
+    title: string;
+    description: string;
+    emptyMessage: string;
+    submitLabel: string;
+    loadError: string;
+  }
+> = {
+  pre_quiz: {
+    title: "Pre-Quiz Survey",
+    description:
+      "Before you begin the base quiz, please answer a few quick questions.",
+    emptyMessage:
+      "No survey items found for the pre-quiz survey. Add items in the Surveys Panel.",
+    submitLabel: "Begin Base Quiz",
+    loadError: "Failed to load the pre-quiz survey.",
+  },
+
+  post_base: {
+    title: "Post-Base Quiz Survey",
+    description:
+      "You’ve completed the base quiz. Please answer a few follow-up questions.",
+    emptyMessage:
+      "No survey items found for the post-base survey. Add items in the Surveys Panel.",
+    submitLabel: "Continue to Variant Quiz",
+    loadError: "Failed to load the post-base survey.",
+  },
+
+  post_variant: {
+    title: "Final Survey",
+    description:
+      "You’ve completed the variant quiz. Please answer a few final questions.",
+    emptyMessage:
+      "No survey items found for the post-variant survey. Add items in the Surveys Panel.",
+    submitLabel: "Finish",
+    loadError: "Failed to load the final survey.",
+  },
+};
+
+function isSurveyStage(value: unknown): value is SurveyStage {
+  return (
+    value === "pre_quiz" ||
+    value === "post_base" ||
+    value === "post_variant" ||
+    value === "complete"
+  );
+}
+
+function isActiveSurveyStage(value: unknown): value is ActiveSurveyStage {
+  return (
+    value === "pre_quiz" || value === "post_base" || value === "post_variant"
+  );
+}
+
+/**
+ * Returns the survey stage that should actually be shown right now.
+ * Returns null when the user should not see a survey page and should be routed onward.
+ */
+function resolveCurrentSurveyStage(
+  user: ExtendedUser | null,
+): ActiveSurveyStage | null {
+  if (!user) return null;
+
+  if (!user.survey_pre_base_completed) {
+    return "pre_quiz";
+  }
+
+  if (user.quiz_base_completed && !user.survey_post_base_completed) {
+    return "post_base";
+  }
+
+  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
+    return "post_variant";
+  }
+
+  return null;
+}
+
+/**
+ * Decide which survey definition to load for a given active survey stage.
+ * post_variant reuses the post_base questions.
+ */
+function getLoadStage(activeStage: ActiveSurveyStage): ActiveSurveyStage {
+  if (activeStage === "post_variant") {
+    return "post_base";
+  }
+
+  return activeStage;
+}
+
+/**
+ * When there is no active survey to show, decide where the user should go next.
+ */
+function getNextRouteForResolvedGap(
+  user: ExtendedUser | null,
+  quizId?: string,
+): string {
+  if (!user) return "/dashboard";
+
+  if (!user.survey_pre_base_completed) {
+    return quizId ? `/survey?quiz_id=${quizId}` : "/survey";
+  }
+
+  if (!user.quiz_base_completed) {
+    return "/quiz/base";
+  }
+
+  if (!user.survey_post_base_completed) {
+    return "/survey";
+  }
+
+  if (!user.quiz_variant_completed) {
+    return user.assigned_var ? `/quiz/${user.assigned_var}` : "/dashboard";
+  }
+
+  if (!user.survey_post_variant_completed) {
+    return "/survey";
+  }
+
+  return "/dashboard";
+}
+
+export default function SurveyPage() {
+  const router = useRouter();
+  const { quiz_id, stage } = router.query as {
+    quiz_id?: string;
+    stage?: string;
+  };
+
+  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [checking, setChecking] = useState(true);
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [loadingSurvey, setLoadingSurvey] = useState(true);
+  const [items, setItems] = useState<SurveyItem[]>([]);
+  const [, setStatus] = useState<"not_started" | "in_progress" | "completed">(
+    "not_started",
+  );
+
+  const [values, setValues] = useState<
+    Record<string, number | string | string[]>
+  >({});
+
+  function isUnansweredValue(value: unknown): boolean {
+    if (value === undefined || value === null) return true;
+    if (typeof value === "string") return value.trim() === "";
+    if (typeof value === "number") return !Number.isFinite(value);
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  }
+
+  const rawSurveyStage = isSurveyStage(user?.survey_stage)
+    ? user.survey_stage
+    : null;
+
+  const forcedStage = isActiveSurveyStage(stage) ? stage : null;
+
+  const activeSurveyStage = forcedStage ?? resolveCurrentSurveyStage(user);
+  const loadStage = activeSurveyStage ? getLoadStage(activeSurveyStage) : null;
+  const config = activeSurveyStage ? STAGE_CONFIG[activeSurveyStage] : null;
+
+  useEffect(() => {
+    let cancel = false;
+
+    (async () => {
+      try {
+        const res = await getMe();
+        if (cancel) return;
+
+        setUser(res.user as ExtendedUser);
+      } catch {
+        if (!cancel) router.replace("/login");
+      } finally {
+        if (!cancel) setChecking(false);
+      }
+    })();
+
+    return () => {
+      cancel = true;
+    };
+  }, [router]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    if (!activeSurveyStage || !config || !loadStage) {
+      setLoadingSurvey(false);
+      router.replace(getNextRouteForResolvedGap(user, quiz_id));
+      return;
+    }
+
+    let cancel = false;
+
+    (async () => {
+      setLoadingSurvey(true);
+      setError(null);
+
+      try {
+        // Load question definitions from the mapped load stage.
+        // For post_variant, this pulls the post_base questions.
+        const questionState = await getSurveyState(loadStage);
+        if (cancel) return;
+
+        // Load completion status / saved answers from the actual active stage.
+        // For post_variant, this reads the user's post_variant progress.
+        const responseState =
+          loadStage === activeSurveyStage
+            ? questionState
+            : await getSurveyState(activeSurveyStage);
+
+        if (cancel) return;
+
+        setItems(questionState.items || []);
+        setStatus(responseState.status);
+
+        const initial: Record<string, number | string | string[]> = {};
+        for (const a of responseState.answers || []) {
+          initial[a.item_id] = a.value;
+        }
+        setValues(initial);
+
+        if (responseState.status === "completed") {
+          const refreshed = await getMe();
+          if (cancel) return;
+          router.replace(
+            getNextRouteForResolvedGap(refreshed.user as ExtendedUser, quiz_id),
+          );
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancel) setError(config.loadError);
+      } finally {
+        if (!cancel) setLoadingSurvey(false);
+      }
+    })();
+
+    return () => {
+      cancel = true;
+    };
+  }, [user, activeSurveyStage, loadStage, config, quiz_id, router]);
+
+  const requiredUnanswered = useMemo(() => {
+    return items
+      .filter((i) => i.required)
+      .filter((i) => isUnansweredValue(values[i.id]));
+  }, [items, values]);
+
+  async function onLogout() {
+    try {
+      await logout();
+    } finally {
+      router.replace("/login");
+    }
+  }
+
+  function setLikert(itemId: string, n: number) {
+    setValues((prev) => ({ ...prev, [itemId]: n }));
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!activeSurveyStage || !config) return;
+
+    setError(null);
+
+    if (requiredUnanswered.length > 0) {
+      setError("Please answer all required questions before continuing.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const answers: SurveyAnswer[] = items
+        .map((i) => {
+          const v = values[i.id];
+          if (isUnansweredValue(v)) return null;
+          return { item_id: i.id, value: v };
+        })
+        .filter(Boolean) as SurveyAnswer[];
+
+      // Submit under the actual active stage.
+      // For post_variant, this saves under post_variant.
+      await submitSurvey(activeSurveyStage, answers);
+
+      const optimisticUser: ExtendedUser | null =
+        user &&
+        ({
+          ...user,
+          survey_pre_base_completed:
+            activeSurveyStage === "pre_quiz"
+              ? true
+              : user.survey_pre_base_completed,
+          survey_post_base_completed:
+            activeSurveyStage === "post_base"
+              ? true
+              : user.survey_post_base_completed,
+          survey_post_variant_completed:
+            activeSurveyStage === "post_variant"
+              ? true
+              : user.survey_post_variant_completed,
+        } as ExtendedUser);
+
+      router.replace(getNextRouteForResolvedGap(optimisticUser, quiz_id));
+    } catch (e) {
+      console.error(e);
+      setError("Failed to save your responses.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function renderLikertRow(item: SurveyItem) {
+    const value = (values[item.id] as number | undefined) ?? null;
+    const min = item.scale_min ?? 1;
+    const max = item.scale_max ?? 5;
+    const left = item.scale_left_label ?? "Strongly disagree";
+    const right = item.scale_right_label ?? "Strongly agree";
+
+    return (
+      <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-4">
+        <p className="text-sm font-medium text-gray-900">
+          {item.prompt}
+          {item.required && <span className="text-red-500"> *</span>}
+        </p>
+
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>
+            {min} = {left}
+          </span>
+          <span>
+            {max} = {right}
+          </span>
+        </div>
+
+        <div className="mt-2 flex justify-between gap-2">
+          {Array.from({ length: max - min + 1 }).map((_, idx) => {
+            const n = min + idx;
+            const checked = value === n;
+
+            return (
+              <label
+                key={n}
+                className={[
+                  "flex flex-1 cursor-pointer flex-col items-center rounded-md border px-2 py-2 text-xs transition",
+                  checked
+                    ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm"
+                    : "border-gray-200 bg-gray-50 text-gray-700 hover:border-blue-300 hover:bg-blue-50/60",
+                ].join(" ")}
+              >
+                <input
+                  id={`${item.id}-${n}`}
+                  type="radio"
+                  name={item.id}
+                  value={n}
+                  checked={checked}
+                  onChange={() => setLikert(item.id, n)}
+                  className="sr-only"
+                />
+                <span className="text-sm font-semibold">{n}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (checking) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <div className="text-gray-500">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+  if (!activeSurveyStage || !config) return null;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="border-b bg-white px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
+        <div className="mx-auto flex max-w-6xl items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">
+              {config.title}
+            </h1>
+            <p className="text-sm text-gray-600">{config.description}</p>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => router.push("/dashboard")}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition hover:bg-blue-700"
+            >
+              Back to Dashboard
+            </button>
+            <button
+              onClick={onLogout}
+              className="rounded-lg bg-gray-100 px-4 py-2 text-sm hover:bg-gray-200"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-3xl p-6">
+        <form
+          onSubmit={onSubmit}
+          className="space-y-6 rounded-xl border bg-white p-6 shadow-sm"
+        >
+          {error && (
+            <div className="text-sm text-red-600" role="alert">
+              {error}
+            </div>
+          )}
+
+          {loadingSurvey ? (
+            <div className="text-sm text-gray-500">Loading survey…</div>
+          ) : items.length === 0 ? (
+            <div className="text-sm text-gray-500">{config.emptyMessage}</div>
+          ) : (
+            <>
+              {items.map((item) =>
+                item.type === "likert" ? (
+                  <div key={item.id}>{renderLikertRow(item)}</div>
+                ) : (
+                  <div
+                    key={item.id}
+                    className="rounded-lg border border-gray-200 bg-white p-4"
+                  >
+                    <p className="text-sm font-medium text-gray-900">
+                      {item.prompt}
+                      {item.required && (
+                        <span className="text-red-500"> *</span>
+                      )}
+                    </p>
+                    <p className="mt-2 text-xs text-gray-500">
+                      Unsupported question type:{" "}
+                      <span className="font-medium">{item.type}</span>
+                    </p>
+                  </div>
+                ),
+              )}
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  {saving ? "Saving…" : config.submitLabel}
+                </button>
+              </div>
+            </>
+          )}
+        </form>
+      </main>
+    </div>
+  );
+}
