@@ -216,13 +216,6 @@ async def _standard_stream(
     agent_tag: if set, each token SSE includes an "agent" field (used by double quiz).
     reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
     """
-    # Save the user message first so its created_at timestamp is always earlier
-    # than the assistant message saved after streaming. If both were saved
-    # concurrently after streaming, the assistant could receive an earlier
-    # timestamp (race condition), causing get_last_exchange to pair the wrong
-    # user message with the assistant reply on the next turn.
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
-
     full_reply = ""
     async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag):
         yield sse
@@ -231,7 +224,7 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply]))
+    asyncio.create_task(asyncio.to_thread(_save_exchange, col, user, conv_id, user_message, [stored_reply]))
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -342,10 +335,7 @@ async def double_chat(
             replies[tag] += delta
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
-        # User message is saved before assistant to ensure correct timestamp ordering
-        # (see _standard_stream for full explanation of the race condition).
-        await asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message)
-        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
+        asyncio.create_task(asyncio.to_thread(_save_exchange, col, user, conv_id, req.message, replies_to_store))
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -413,16 +403,12 @@ async def chat_with_embedded_links(
 
         reply = output["reply"]
 
-        # Save user message before streaming so its timestamp is always earlier
-        # than the assistant message saved after (same race condition as _standard_stream).
-        _user_save_task = asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
-
         # Stream the citation-injected reply word-by-word
         words = reply.split(" ")
         for i, word in enumerate(words):
             yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
 
-        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply]))
+        asyncio.create_task(asyncio.to_thread(_save_exchange, request.app.state.messages, user, conv_id, req.message, [reply]))
         
         yield _sse({"type": "done", "conversation_id": conv_id})
 
