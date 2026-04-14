@@ -75,6 +75,73 @@ async def _filter_valid_urls(results: list[dict]) -> list[dict]:
     return [r for r in results if r["url"] in valid_urls]
 
 
+async def prepare_search_messages(
+    messages: list[dict],
+    db_links: list[dict] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Run search, build augmented message list, return (augmented_messages, citations).
+
+    citations format: [{"n": int, "title": str, "url": str}]
+    Returns (original messages, []) if search yields no results — caller should
+    fall back to a plain LLM call in that case.
+    """
+    query = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+
+    results = await _run_search(query)
+    results = await _filter_valid_urls(results)
+
+    curated = [
+        {"title": l["title"], "url": l["url"], "snippet": l["description"]}
+        for l in (db_links or [])
+    ]
+    results = curated + results
+
+    if not results:
+        return messages, []
+
+    NL = chr(10)
+    context_lines = []
+    for i, r in enumerate(results):
+        context_lines.append("[" + str(i + 1) + "] " + r["title"])
+        context_lines.append("URL: " + r["url"])
+        context_lines.append(r["snippet"])
+        context_lines.append("")
+    search_context = NL.join(context_lines)
+
+    citation_instruction = (
+        NL + NL
+        + "Cite sources by wrapping the key phrase that supports each fact in a reference-style link: "
+        "[key phrase][N] where N is the source number. "
+        "Place it immediately around the words the source supports. "
+        "Example: 'Mitosis involves [four distinct phases][1] and requires [spindle fibers][2].' "
+        "Do not write out URLs, do not add a References or Sources section, "
+        "do not add a citations list at the end under any circumstances."
+    )
+
+    system = next((m for m in messages if m["role"] == "system"), None)
+    if system:
+        patched = [
+            {**system, "content": system["content"] + citation_instruction},
+            *[m for m in messages if m["role"] != "system"],
+        ]
+    else:
+        patched = [{"role": "system", "content": citation_instruction.strip()}, *messages]
+
+    augmented = list(patched)
+    last_user_idx = next(
+        i for i in reversed(range(len(augmented))) if augmented[i]["role"] == "user"
+    )
+    augmented[last_user_idx] = {
+        **augmented[last_user_idx],
+        "content": augmented[last_user_idx]["content"] + NL + NL + "Search results:" + NL + search_context,
+    }
+
+    citations = [{"n": i + 1, "title": r["title"], "url": r["url"]} for i, r in enumerate(results)]
+    return augmented, citations
+
+
 def _inject_citation_links(text: str, citations: list[dict]) -> str:
     """Replace citation markers in the model's reply with markdown links.
 
@@ -111,76 +178,14 @@ async def get_chat_response_with_search(
     Returns:
         {"reply": str, "citations": list[{"n": int, "title": str, "url": str}]}
     """
-    query = next(
-        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
-    )
+    augmented, citations = await prepare_search_messages(messages, db_links)
 
-    # Await the new async functions
-    results = await _run_search(query)
-    results = await _filter_valid_urls(results)
-
-    curated = [
-        {"title": l["title"], "url": l["url"], "snippet": l["description"]}
-        for l in (db_links or [])
-    ]
-    results = curated + results
-
-    if not results:
-        resp = await client.chat.completions.create(model=model, messages=messages)
+    if not citations:
+        resp = await client.chat.completions.create(model=model, messages=augmented)
         return {"reply": (resp.choices[0].message.content or "").strip(), "citations": []}
-
-    NL = chr(10)
-
-    context_lines = []
-    for i, r in enumerate(results):
-        context_lines.append("[" + str(i + 1) + "] " + r["title"])
-        context_lines.append("URL: " + r["url"])
-        context_lines.append(r["snippet"])
-        context_lines.append("")
-    search_context = NL.join(context_lines)
-
-    citation_instruction = (
-        NL + NL
-        + "Cite sources by wrapping the key phrase that supports each fact in a reference-style link: "
-        "[key phrase][N] where N is the source number. "
-        "Place it immediately around the words the source supports. "
-        "Example: 'Mitosis involves [four distinct phases][1] and requires [spindle fibers][2].' "
-        "Do not write out URLs, do not add a References or Sources section."
-    )
-
-    system = next((m for m in messages if m["role"] == "system"), None)
-    if system:
-        patched_messages = [
-            {**system, "content": system["content"] + citation_instruction},
-            *[m for m in messages if m["role"] != "system"],
-        ]
-    else:
-        patched_messages = [
-            {"role": "system", "content": citation_instruction.strip()},
-            *messages,
-        ]
-
-    augmented = list(patched_messages)
-    last_user_idx = next(
-        i for i in reversed(range(len(augmented))) if augmented[i]["role"] == "user"
-    )
-    augmented[last_user_idx] = {
-        **augmented[last_user_idx],
-        "content": (
-            augmented[last_user_idx]["content"]
-            + NL + NL + "Search results:" + NL
-            + search_context
-        ),
-    }
 
     resp = await client.chat.completions.create(model=model, messages=augmented)
     reply_text = (resp.choices[0].message.content or "").strip()
-
-    citations = [
-        {"n": i + 1, "title": r["title"], "url": r["url"]}
-        for i, r in enumerate(results)
-    ]
-
     reply_text = _inject_citation_links(reply_text, citations)
 
     return {"reply": reply_text, "citations": citations}

@@ -18,7 +18,7 @@ from ..schemas.chat import (
 )
 from .auth import get_current_user
 from ..services.chat import get_last_exchange, get_conversation_history as fetch_conversation_history
-from ..services.search import get_chat_response_with_search
+from ..services.search import prepare_search_messages, _inject_citation_links
 from ..services.followup import generate_followup_questions
 
 router = APIRouter()
@@ -366,8 +366,8 @@ async def followup_quiz_chat(
     )
 
 
-# Returns chat with inline citation links embedded in the response text.
-# Waits for search + generation + citation injection, then streams the reply word-by-word.
+# Streams tokens in real-time. Sends a citations SSE event before tokens so the
+# frontend can inject [phrase][N] markers into real links once the stream is done.
 @router.post("/chat/links")
 async def chat_with_embedded_links(
     req: ChatRequest,
@@ -378,8 +378,6 @@ async def chat_with_embedded_links(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    
-    # OPTIMIZATION: Non-blocking DB read for history
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
 
     system_instruction = (
@@ -391,25 +389,32 @@ async def chat_with_embedded_links(
 
     async def generate() -> AsyncGenerator[str, None]:
         try:
-            output = await get_chat_response_with_search(
-                client=_client,
-                model=os.getenv("UF_OPENAI_API_MODEL"),
+            augmented_messages, citations = await prepare_search_messages(
                 messages=_build_standard_messages(history, req.message, system_prompt=system_instruction),
                 db_links=getattr(request.app.state, "knowledge_links", []),
             )
         except Exception as e:
-            yield _sse({"type": "error", "detail": f"Upstream AI request failed: {e}"})
+            yield _sse({"type": "error", "detail": f"Search failed: {e}"})
             return
 
-        reply = output["reply"]
+        # Send citation map before tokens so frontend has it ready for injection
+        if citations:
+            yield _sse({"type": "citations", "citations": citations})
 
-        # Stream the citation-injected reply word-by-word
-        words = reply.split(" ")
-        for i, word in enumerate(words):
-            yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
+        # Real token streaming
+        full_reply = ""
+        async for is_error, delta, sse in _stream_agent_tokens(augmented_messages):
+            yield sse
+            if is_error:
+                return
+            full_reply += delta
 
-        asyncio.create_task(asyncio.to_thread(_save_exchange, request.app.state.messages, user, conv_id, req.message, [reply]))
-        
+        # Inject citations into the stored copy so history loads with working links
+        stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
+        asyncio.create_task(asyncio.to_thread(
+            _save_exchange, request.app.state.messages, user, conv_id, req.message, [stored_reply]
+        ))
+
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)

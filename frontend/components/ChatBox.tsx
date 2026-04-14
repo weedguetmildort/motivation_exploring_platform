@@ -289,29 +289,31 @@ export default function ChatBox({
         activeConvId,
         messageForBackend,
         agents,
-        controller.signal,
-        // onToken — streams main text at 60fps
-        (delta, agent) => {
-          const key = agent ?? "default";
-          setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
-        },
-        // onDone — fires when main text is finished.
-        // For the first exchange (disableCancel=true at call time), keep pending=true
-        // so chatLoading stays on until finally, blocking quiz submit during follow-up.
-        // For subsequent exchanges, release pending immediately so the user can re-submit
-        // while follow-up questions stream in.
-        (replies) => {
-          textDoneCommitted.current = true;
-          setMessages(m => [...m, ...buildBotMsgs(replies)]);
-          onAssistantMessage?.(replies[replies.length - 1]);
-          if (!disableCancel) setPending(false);
-          setFollowupActive(true);
-          setStreamingMap({});
-        },
-        // onFollowupToken — streams follow-up question tokens at 60fps
-        (delta) => {
-          followupStreamTextRef.current += delta;
-          setFollowupStreamText(prev => prev + delta);
+        {
+          signal: controller.signal,
+          // onToken — streams main text at 60fps
+          onToken: (delta, agent) => {
+            const key = agent ?? "default";
+            setStreamingMap((prev: Record<string, string>) => ({ ...prev, [key]: (prev[key] ?? "") + delta }));
+          },
+          // onDone — fires when main text is finished.
+          // For the first exchange (disableCancel=true at call time), keep pending=true
+          // so chatLoading stays on until finally, blocking quiz submit during follow-up.
+          // For subsequent exchanges, release pending immediately so the user can re-submit
+          // while follow-up questions stream in.
+          onDone: (replies) => {
+            textDoneCommitted.current = true;
+            setMessages(m => [...m, ...buildBotMsgs(replies)]);
+            onAssistantMessage?.(replies[replies.length - 1]);
+            if (!disableCancel) setPending(false);
+            setFollowupActive(true);
+            setStreamingMap({});
+          },
+          // onFollowupToken — streams follow-up question tokens at 60fps
+          onFollowupToken: (delta) => {
+            followupStreamTextRef.current += delta;
+            setFollowupStreamText(prev => prev + delta);
+          },
         },
       );
 

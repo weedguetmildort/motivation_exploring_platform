@@ -1,5 +1,29 @@
 import { apiFetch } from "./fetcher";
 
+export interface Citation {
+  n: number;
+  title: string;
+  url: string;
+}
+
+export function injectCitationLinks(text: string, citations: Citation[]): string {
+  let result = text;
+  for (const { n, url } of citations) {
+    const N = String(n);
+    // Primary: [key phrase][N] or [key phrase] [N] → [key phrase](url)
+    result = result.replaceAll(
+      new RegExp(String.raw`\[([^\]\[]+)\]\s*\[${N}\]`, "g"),
+      `[$1](${url})`,
+    );
+    // Fallback: bare [N] not already followed by ( → [N](url)
+    result = result.replaceAll(
+      new RegExp(String.raw`\[${N}\](?!\()`, "g"),
+      `[${N}](${url})`,
+    );
+  }
+  return result;
+}
+
 export interface AIMessageMetadata {
   sources?: string[];
   confidence_score?: number;
@@ -25,16 +49,22 @@ export async function loadUserHistory(conversationId: string): Promise<{
   return apiFetch(`/api/chat/load_user_history/${conversationId}`);
 }
 
+export interface SendChatOptions {
+  signal?: AbortSignal;
+  onToken?: (delta: string, agent?: string) => void;
+  onDone?: (replies: string[], convId: string) => void;
+  onFollowupToken?: (delta: string) => void;
+  onCitations?: (citations: Citation[]) => void;
+}
+
 export async function sendChat(
   quizId: string,
   conversationId: string | null,
   message: string,
   agents: string[] = [],
-  signal?: AbortSignal,
-  onToken?: (delta: string, agent?: string) => void,
-  onDone?: (replies: string[], convId: string) => void,
-  onFollowupToken?: (delta: string) => void,
+  options: SendChatOptions = {},
 ): Promise<ChatResponse> {
+  const { signal, onToken, onDone, onFollowupToken, onCitations } = options;
   const resp = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -59,6 +89,7 @@ export async function sendChat(
   const replyMap: Record<string, string> = {};
   let returnedConvId = conversationId ?? "";
   let followupQuestions: string[] | undefined;
+  let citations: Citation[] = [];
 
   // Batch token updates: flush to React at most once per animation frame (~16ms).
   // This avoids one re-render per token while keeping streaming visually smooth.
@@ -109,14 +140,20 @@ export async function sendChat(
             // Batch questions (backwards compat for endpoints that send the full array).
             followupQuestions = [...(followupQuestions ?? []), ...(event.questions as string[])];
           }
+        } else if (event.type === "citations") {
+          citations = (event.citations as Citation[]) ?? [];
+          onCitations?.(citations);
         } else if (event.type === "done") {
           returnedConvId = (event.conversation_id as string) ?? returnedConvId;
           if (onDone) {
             flushTokens();
             const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
-            const replies = agentKeys.length > 0
+            const rawReplies = agentKeys.length > 0
               ? agentKeys.map(k => replyMap[k])
               : [replyMap["default"] ?? ""];
+            const replies = citations.length > 0
+              ? rawReplies.map(r => injectCitationLinks(r, citations))
+              : rawReplies;
             onDone(replies, returnedConvId);
           }
         } else if (event.type === "error") {
@@ -131,9 +168,12 @@ export async function sendChat(
   }
 
   const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
-  const replies = agentKeys.length > 0
+  const rawReplies = agentKeys.length > 0
     ? agentKeys.map(k => replyMap[k])
     : [replyMap["default"] ?? ""];
+  const replies = citations.length > 0
+    ? rawReplies.map(r => injectCitationLinks(r, citations))
+    : rawReplies;
 
   return { replies, conversationId: returnedConvId, followupQuestions };
 }
