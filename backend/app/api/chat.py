@@ -18,7 +18,7 @@ from ..schemas.chat import (
 )
 from .auth import get_current_user
 from ..services.chat import get_last_exchange, get_conversation_history as fetch_conversation_history
-from ..services.search import prepare_search_messages, _inject_citation_links
+from ..services.search import _run_search, _filter_valid_urls, _build_search_context, _inject_citation_links
 from ..services.followup import generate_followup_questions
 
 router = APIRouter()
@@ -397,29 +397,46 @@ async def chat_with_embedded_links(
     )
 
     async def generate() -> AsyncGenerator[str, None]:
+        # Run search first — results are needed to build AI context
         try:
-            augmented_messages, citations = await prepare_search_messages(
-                messages=_build_standard_messages(history, req.message, system_prompt=system_instruction),
-                db_links=getattr(request.app.state, "knowledge_links", []),
-            )
+            raw_web = await _run_search(req.message)
         except Exception as e:
             yield _sse({"type": "error", "detail": f"Search failed: {e}"})
             return
 
-        # Send validated citation map before tokens so frontend has it ready
+        curated = [
+            {"title": l.get("title", ""), "url": l.get("url", ""), "snippet": l.get("description", "")}
+            for l in getattr(request.app.state, "knowledge_links", [])
+            if l.get("url")
+        ]
+        augmented_messages, citations = _build_search_context(
+            _build_standard_messages(history, req.message, system_prompt=system_instruction),
+            curated + raw_web,
+        )
+
+        # Kick off URL validation as a background task so it runs while tokens stream.
+        # The AI already has all results as context; validation only affects which
+        # citation links get injected into the stored reply at the end.
+        validation_task = asyncio.create_task(_filter_valid_urls(raw_web))
+
         if citations:
             yield _sse({"type": "citations", "citations": citations})
 
-        # Real token streaming
         full_reply = ""
         async for is_error, delta, sse in _stream_agent_tokens(augmented_messages):
             yield sse
             if is_error:
+                validation_task.cancel()
                 return
             full_reply += delta
 
-        # Inject citations into the stored copy so history loads with working links
-        stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
+        # Validation has had the full streaming duration to complete.
+        # Only inject links for URLs that are still live.
+        valid_web = await validation_task
+        valid_urls = {r["url"] for r in curated + valid_web}
+        valid_citations = [c for c in citations if c["url"] in valid_urls]
+
+        stored_reply = _inject_citation_links(full_reply, valid_citations) if valid_citations else full_reply
         _schedule_exchange_save(request.app.state.messages, user, conv_id, req.message, [stored_reply])
 
         yield _sse({"type": "done", "conversation_id": conv_id})
