@@ -14,18 +14,24 @@ async def _run_search(query: str, max_results: int = 5) -> list[dict]:
     """Execute a NaviGator AI search asynchronously and return raw results.
 
     Returns [] on any failure so the caller can fall back to answering without search.
+    Sub-page URLs (e.g. khanacademy.com/page) are returned as-is from the search API
+    — this function does not restrict results to root domains.
     """
     try:
-        # Use AsyncClient to prevent blocking the FastAPI event loop
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{_UF_BASE_URL}/v1/search/{_UF_SEARCH_TOOL}",
                 headers={"Authorization": f"Bearer {_UF_API_KEY}", "Content-Type": "application/json"},
                 json={"query": query, "max_results": max_results},
             )
+            if not resp.is_success:
+                print(f"[search] _run_search HTTP {resp.status_code} body: {resp.text[:500]}")
             resp.raise_for_status()
-            return resp.json().get("results", [])
-    except Exception:
+            results = resp.json().get("results", [])
+            print(f"[search] _run_search: query={query!r} returned {len(results)} result(s)")
+            return results
+    except Exception as e:
+        print(f"[search] _run_search failed: {type(e).__name__}: {e}")
         return []
 
 
@@ -36,9 +42,11 @@ async def _check_url(url: str, client: httpx.AsyncClient) -> tuple[str, bool]:
     - HTTP 404 status
     - Redirected to the site homepage (path vanished)
     Keeps the URL on any other response or error.
+
+    Sub-page URLs (e.g. khanacademy.com/algebra) are kept as long as they do not
+    redirect to the root domain — this preserves specific resource pages.
     """
     try:
-        # Stream the GET request asynchronously (no body downloaded)
         async with client.stream(
             "GET", url,
             follow_redirects=True,
@@ -46,8 +54,9 @@ async def _check_url(url: str, client: httpx.AsyncClient) -> tuple[str, bool]:
         ) as r:
             if r.status_code == 404:
                 return url, False
-            
-            # Homepage redirect check
+
+            # Drop URLs that redirect from a specific path to the site root —
+            # this means the specific page no longer exists.
             original_path = urlparse(url).path.rstrip("/")
             final_path = urlparse(str(r.url)).path.rstrip("/")
             if original_path and not final_path:
@@ -58,46 +67,40 @@ async def _check_url(url: str, client: httpx.AsyncClient) -> tuple[str, bool]:
 
 
 async def _filter_valid_urls(results: list[dict]) -> list[dict]:
-    """Remove results whose URL definitively returns 404. Checks run concurrently via asyncio."""
+    """Remove results whose URL definitively returns 404 or redirects to a homepage.
+
+    Runs checks concurrently (15s client timeout) so even slow URLs are validated
+    without serialising the wait. Intended to run as a background asyncio.Task
+    concurrent with token streaming so the full 15s is never felt as blocking latency.
+    """
     if not results:
         return results
 
-    # Share a single AsyncClient for all concurrent checks to save connection overhead
-    async with httpx.AsyncClient(timeout=3.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
-        # Create a list of background tasks for checking URLs
+    async with httpx.AsyncClient(timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
         tasks = [_check_url(r["url"], client) for r in results]
-        
-        # Await them all simultaneously
         checked_urls = await asyncio.gather(*tasks)
 
-    # Filter into a set of valid URLs
     valid_urls = {url for url, is_valid in checked_urls if is_valid}
-    return [r for r in results if r["url"] in valid_urls]
+    filtered = [r for r in results if r["url"] in valid_urls]
+    dropped = len(results) - len(filtered)
+    if dropped:
+        print(f"[search] _filter_valid_urls: dropped {dropped} of {len(results)} URL(s)")
+    return filtered
 
 
-async def prepare_search_messages(
+def _build_search_context(
     messages: list[dict],
-    db_links: list[dict] | None = None,
+    results: list[dict],
 ) -> tuple[list[dict], list[dict]]:
-    """Run search, build augmented message list, return (augmented_messages, citations).
+    """Build the augmented message list and citation map from assembled results.
 
+    Pure function — no I/O. Accepts an already-assembled result list so callers
+    can control validation independently (e.g. run it as a background task concurrent
+    with token streaming).
+
+    Returns (augmented_messages, citations) or (messages, []) if results is empty.
     citations format: [{"n": int, "title": str, "url": str}]
-    Returns (original messages, []) if search yields no results — caller should
-    fall back to a plain LLM call in that case.
     """
-    query = next(
-        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
-    )
-
-    results = await _run_search(query)
-    results = await _filter_valid_urls(results)
-
-    curated = [
-        {"title": l["title"], "url": l["url"], "snippet": l["description"]}
-        for l in (db_links or [])
-    ]
-    results = curated + results
-
     if not results:
         return messages, []
 
@@ -112,7 +115,7 @@ async def prepare_search_messages(
 
     citation_instruction = (
         NL + NL
-        + "Cite sources by wrapping the key phrase that supports each fact in a reference-style link: "
+        + "Cite sources by wrapping the first phrase that supports each fact in a reference-style link: "
         "[key phrase][N] where N is the source number. "
         "Place it immediately around the words the source supports. "
         "Example: 'Mitosis involves [four distinct phases][1] and requires [spindle fibers][2].' "
@@ -164,6 +167,31 @@ def _inject_citation_links(text: str, citations: list[dict]) -> str:
         # Fallback: bare [N] → [N](url)
         text = re.sub(r"\[" + n + r"\](?!\()", f"[{n}]({url})", text)
     return text
+
+
+async def prepare_search_messages(
+    messages: list[dict],
+    db_links: list[dict] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Run search + URL validation, build augmented message list, return (augmented_messages, citations).
+
+    Convenience wrapper used by get_chat_response_with_search. For streaming endpoints
+    that need URL validation to run concurrently with token output, use _run_search,
+    _filter_valid_urls, and _build_search_context directly.
+    """
+    query = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+
+    raw_web = await _run_search(query)
+    valid_web = await _filter_valid_urls(raw_web)
+
+    curated = [
+        {"title": l.get("title", ""), "url": l.get("url", ""), "snippet": l.get("description", "")}
+        for l in (db_links or [])
+        if l.get("url")
+    ]
+    return _build_search_context(messages, curated + valid_web)
 
 
 async def get_chat_response_with_search(

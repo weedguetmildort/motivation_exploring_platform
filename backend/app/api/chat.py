@@ -91,15 +91,24 @@ def _save_message(
         pass
 
 
-def _save_exchange(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list) -> None:
-    """Save a completed user/assistant exchange in order.
+_background_tasks: set = set()
 
-    Always saves the user message first so its created_at timestamp is strictly
-    earlier than the assistant message. Called only after streaming completes
-    successfully, so a failed stream leaves no partial records in the DB.
+
+def _schedule_exchange_save(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list) -> None:
+    """Fire-and-forget: save user then assistant message in a background thread.
+
+    Saves user message first so its timestamp is strictly earlier than the
+    assistant message. Called only after streaming completes successfully, so a
+    failed stream leaves no partial records in the DB. Holds a strong reference
+    to the task until it completes to prevent early GC by the event loop.
     """
-    _save_message(col, "user", user, conv_id, user_message)
-    _save_message(col, "assistant", user, conv_id, assistant_reply)
+    def _save() -> None:
+        _save_message(col, "user", user, conv_id, user_message)
+        _save_message(col, "assistant", user, conv_id, assistant_reply)
+
+    task = asyncio.create_task(asyncio.to_thread(_save))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
     if answer_incorrectly and has_choices:
@@ -224,7 +233,7 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
-    asyncio.create_task(asyncio.to_thread(_save_exchange, col, user, conv_id, user_message, [stored_reply]))
+    _schedule_exchange_save(col, user, conv_id, user_message, [stored_reply])
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -335,7 +344,7 @@ async def double_chat(
             replies[tag] += delta
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
-        asyncio.create_task(asyncio.to_thread(_save_exchange, col, user, conv_id, req.message, replies_to_store))
+        _schedule_exchange_save(col, user, conv_id, req.message, replies_to_store)
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -397,7 +406,7 @@ async def chat_with_embedded_links(
             yield _sse({"type": "error", "detail": f"Search failed: {e}"})
             return
 
-        # Send citation map before tokens so frontend has it ready for injection
+        # Send validated citation map before tokens so frontend has it ready
         if citations:
             yield _sse({"type": "citations", "citations": citations})
 
@@ -411,9 +420,7 @@ async def chat_with_embedded_links(
 
         # Inject citations into the stored copy so history loads with working links
         stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
-        asyncio.create_task(asyncio.to_thread(
-            _save_exchange, request.app.state.messages, user, conv_id, req.message, [stored_reply]
-        ))
+        _schedule_exchange_save(request.app.state.messages, user, conv_id, req.message, [stored_reply])
 
         yield _sse({"type": "done", "conversation_id": conv_id})
 
