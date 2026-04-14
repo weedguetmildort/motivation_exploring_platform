@@ -88,8 +88,9 @@ def _inject_citation_links(text: str, citations: list[dict]) -> str:
         url = c["url"]
         n = str(c["n"])
         # Primary: [key phrase][N] → [key phrase](url)
+        # \s* between the brackets tolerates any whitespace the model may insert
         text = re.sub(
-            r"\[([^\]\[]+)\]\[" + n + r"\]",
+            r"\[([^\]\[]+)\]\s*\[" + n + r"\]",
             lambda m, u=url: f"[{m.group(1)}]({u})",
             text,
         )
@@ -102,6 +103,7 @@ async def get_chat_response_with_search(
     client: AsyncOpenAI,
     model: str,
     messages: list[dict],
+    db_links: list[dict] | None = None,
 ) -> dict[str, str | list]:
     """One-shot search: search once, validate URLs, inject results as context,
     one LLM call, then replace citation markers with real URLs deterministically.
@@ -116,6 +118,12 @@ async def get_chat_response_with_search(
     # Await the new async functions
     results = await _run_search(query)
     results = await _filter_valid_urls(results)
+
+    curated = [
+        {"title": l["title"], "url": l["url"], "snippet": l["description"]}
+        for l in (db_links or [])
+    ]
+    results = curated + results
 
     if not results:
         resp = await client.chat.completions.create(model=model, messages=messages)

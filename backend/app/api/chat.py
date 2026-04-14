@@ -90,6 +90,17 @@ def _save_message(
     except Exception:
         pass
 
+
+def _save_exchange(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list) -> None:
+    """Save a completed user/assistant exchange in order.
+
+    Always saves the user message first so its created_at timestamp is strictly
+    earlier than the assistant message. Called only after streaming completes
+    successfully, so a failed stream leaves no partial records in the DB.
+    """
+    _save_message(col, "user", user, conv_id, user_message)
+    _save_message(col, "assistant", user, conv_id, assistant_reply)
+
 def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
     if answer_incorrectly and has_choices:
         return (
@@ -205,6 +216,13 @@ async def _standard_stream(
     agent_tag: if set, each token SSE includes an "agent" field (used by double quiz).
     reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
     """
+    # Save the user message first so its created_at timestamp is always earlier
+    # than the assistant message saved after streaming. If both were saved
+    # concurrently after streaming, the assistant could receive an earlier
+    # timestamp (race condition), causing get_last_exchange to pair the wrong
+    # user message with the assistant reply on the next turn.
+    asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
+
     full_reply = ""
     async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag):
         yield sse
@@ -213,7 +231,6 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
     asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply]))
     yield _sse({"type": "done", "conversation_id": conv_id})
 
@@ -325,7 +342,9 @@ async def double_chat(
             replies[tag] += delta
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
-        asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
+        # User message is saved before assistant to ensure correct timestamp ordering
+        # (see _standard_stream for full explanation of the race condition).
+        await asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message)
         asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
         yield _sse({"type": "done", "conversation_id": conv_id})
 
@@ -376,21 +395,8 @@ async def chat_with_embedded_links(
     system_instruction = (
         _BASE_SYSTEM_PROMPT +
         " Use web searches to gather information and cite sources inline."
-        "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
-        "Prefer sources with stable, long-lived URLs."
-
-        "Preferred sources:"
-        "- Wikipedia (en.wikipedia.org)"
-        "- Encyclopaedia Britannica (britannica.com)"
-        "- Government sites (.gov such as CDC, NIH, NASA, NIST)"
-        "- University and educational sites (.edu)"
-        "- MIT OpenCourseWare (ocw.mit.edu)"
-        "- PubMed / NCBI (ncbi.nlm.nih.gov) for biomedical topics"
-        "- arXiv (arxiv.org) for physics, mathematics, and computer science preprints"
-        "- Wolfram MathWorld (mathworld.wolfram.com) for mathematics"
-        "- Stanford Encyclopedia of Philosophy (plato.stanford.edu) for philosophy"
-        "- IEEE Xplore (ieeexplore.ieee.org) for engineering and computer science"
-        "- ACM Digital Library (dl.acm.org) for computer science research"
+        " Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
+        " Prefer sources with stable, long-lived URLs."
     )
 
     async def generate() -> AsyncGenerator[str, None]:
@@ -399,6 +405,7 @@ async def chat_with_embedded_links(
                 client=_client,
                 model=os.getenv("UF_OPENAI_API_MODEL"),
                 messages=_build_standard_messages(history, req.message, system_prompt=system_instruction),
+                db_links=getattr(request.app.state, "knowledge_links", []),
             )
         except Exception as e:
             yield _sse({"type": "error", "detail": f"Upstream AI request failed: {e}"})
@@ -406,13 +413,15 @@ async def chat_with_embedded_links(
 
         reply = output["reply"]
 
+        # Save user message before streaming so its timestamp is always earlier
+        # than the assistant message saved after (same race condition as _standard_stream).
+        _user_save_task = asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
+
         # Stream the citation-injected reply word-by-word
         words = reply.split(" ")
         for i, word in enumerate(words):
             yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
 
-        # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
-        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
         asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply]))
         
         yield _sse({"type": "done", "conversation_id": conv_id})
