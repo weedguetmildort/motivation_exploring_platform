@@ -1,7 +1,7 @@
 //
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, logout, type User } from "../lib/auth";
+import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
 import { saveMyDemographics } from "../lib/demographics";
 
 export default function DemographicsPage() {
@@ -56,7 +56,7 @@ export default function DemographicsPage() {
     return () => {
       cancel = true;
     };
-  }, [router]);
+  }, []);
 
   if (checking) {
     return (
@@ -122,6 +122,7 @@ export default function DemographicsPage() {
         class_name: className.trim() || undefined,
         age: String(parsedAge),
       });
+      invalidateMeCache();
       router.replace("/dashboard");
     } catch (e) {
       console.error(e);

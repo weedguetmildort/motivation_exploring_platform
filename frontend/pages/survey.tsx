@@ -1,7 +1,7 @@
 // frontend/pages/survey.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, logout, type User } from "../lib/auth";
+import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
 import {
   getSurveyState,
   submitSurvey,
@@ -207,7 +207,7 @@ export default function SurveyPage() {
     return () => {
       cancel = true;
     };
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -249,6 +249,7 @@ export default function SurveyPage() {
         setValues(initial);
 
         if (responseState.status === "completed") {
+          invalidateMeCache();
           const refreshed = await getMe();
           if (cancel) return;
           router.replace(
@@ -267,7 +268,7 @@ export default function SurveyPage() {
     return () => {
       cancel = true;
     };
-  }, [user, activeSurveyStage, loadStage, config, quiz_id, router]);
+  }, [user, activeSurveyStage, loadStage, config, quiz_id]);
 
   const requiredUnanswered = useMemo(() => {
     return items
@@ -312,6 +313,7 @@ export default function SurveyPage() {
       // Submit under the actual active stage.
       // For post_variant, this saves under post_variant.
       await submitSurvey(activeSurveyStage, answers);
+      invalidateMeCache();
 
       const optimisticUser: ExtendedUser | null =
         user &&

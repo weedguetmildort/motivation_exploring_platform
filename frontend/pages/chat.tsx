@@ -18,14 +18,14 @@ export default function ChatPage() {
         if (!cancel) {
           if (!res.user.is_admin) {
             // Non-admin → block access and redirect
-            window.location.href = "/dashboard";
+            router.replace("/dashboard");
             return;
           }
           setUser(res.user);
         }
       } catch {
         // Not logged in → send to login
-        if (!cancel) window.location.href = "/login";
+        if (!cancel) router.replace("/login");
       } finally {
         if (!cancel) setChecking(false);
       }

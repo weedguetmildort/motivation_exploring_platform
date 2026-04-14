@@ -38,7 +38,7 @@ export default function ProfilePage() {
     return () => {
       cancel = true;
     };
-  }, [router]);
+  }, []);
 
   if (checking) {
     return (
