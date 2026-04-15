@@ -155,8 +155,21 @@ export default function LinkPanelPage() {
       return;
     }
 
+    const duplicate = links.find(
+      (l) => l.url.trim().toLowerCase() === url.trim().toLowerCase(),
+    );
+    if (duplicate) {
+      setMessage(`This URL is already in the database ("${duplicate.title}").`);
+      return;
+    }
+
     if (!description.trim()) {
       setMessage("Description is required.");
+      return;
+    }
+
+    if (tags.length === 0) {
+      setMessage("Please select a tag.");
       return;
     }
 
@@ -224,6 +237,11 @@ export default function LinkPanelPage() {
 
     if (!editDraft.description?.trim()) {
       alert("Description is required.");
+      return;
+    }
+
+    if (!editDraft.tags || editDraft.tags.length === 0) {
+      alert("Please select a tag.");
       return;
     }
 
@@ -374,8 +392,12 @@ export default function LinkPanelPage() {
 
             {message && (
               <div
-                className={`text-sm ${message.toLowerCase().includes("failed") ? "text-red-600" : "text-gray-700"}`}
                 role="status"
+                className={`rounded-lg px-4 py-3 text-sm font-medium border ${
+                  message.toLowerCase().includes("added")
+                    ? "bg-green-50 text-green-800 border-green-300"
+                    : "bg-red-50 text-red-800 border-red-300"
+                }`}
               >
                 {message}
               </div>
