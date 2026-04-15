@@ -4,6 +4,14 @@ import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
 
+const PREDEFINED_TAGS = [
+  "Statistical Inference & Descriptive Statistics",
+  "Conditional Probability",
+  "Combinatorics & Counting",
+  "Basic Probability",
+  "Other",
+] as const;
+
 type KnowledgeLink = {
   id: string;
   title: string;
@@ -25,7 +33,7 @@ export default function LinkPanelPage() {
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
   const [description, setDescription] = useState("");
-  const [tags, setTags] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [active, setActive] = useState(true);
 
   const [saving, setSaving] = useState(false);
@@ -124,17 +132,8 @@ export default function LinkPanelPage() {
     }
   }
 
-  function normalizeTags(value: string): string[] {
-    return [...new Set(
-      value
-        .split(",")
-        .map((tag) => tag.trim().toLowerCase())
-        .filter(Boolean),
-    )];
-  }
-
-  function tagsToInputValue(tagList?: string[]) {
-    return (tagList ?? []).join(", ");
+  function selectTag(tag: string, current: string[], set: (v: string[]) => void) {
+    set(current.includes(tag) ? [] : [tag]);
   }
 
   async function onCreate(e: React.FormEvent) {
@@ -168,7 +167,7 @@ export default function LinkPanelPage() {
         title: title.trim(),
         url: url.trim(),
         description: description.trim(),
-        tags: normalizeTags(tags),
+        tags,
         active,
       };
 
@@ -183,7 +182,7 @@ export default function LinkPanelPage() {
       setTitle("");
       setUrl("");
       setDescription("");
-      setTags("");
+      setTags([]);
       setActive(true);
       setMessage("Knowledge link added.");
     } catch (e) {
@@ -346,15 +345,22 @@ export default function LinkPanelPage() {
 
             <div>
               <label className="block text-sm font-medium mb-1">Tags</label>
-              <input
-                value={tags}
-                onChange={(e) => setTags(e.target.value)}
-                className="w-full rounded-lg border px-3 py-2 text-sm"
-                placeholder="financial aid, tuition, refund, policy"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Enter comma-separated tags. They will be trimmed, lowercased, and deduplicated.
-              </p>
+              <div className="flex flex-wrap gap-2">
+                {PREDEFINED_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => selectTag(tag, tags, setTags)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
+                      tags.includes(tag)
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-gray-600 border-gray-300 hover:border-blue-400"
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <label className="flex items-center gap-2 text-sm">
@@ -512,17 +518,30 @@ export default function LinkPanelPage() {
                               <label className="block text-xs font-medium mb-1">
                                 Tags
                               </label>
-                              <input
-                                value={tagsToInputValue(editDraft.tags)}
-                                onChange={(e) =>
-                                  setEditDraft((d) => ({
-                                    ...d,
-                                    tags: normalizeTags(e.target.value),
-                                  }))
-                                }
-                                className="w-full rounded border px-2 py-1 text-sm"
-                                placeholder="financial aid, tuition, refund"
-                              />
+                              <div className="flex flex-wrap gap-2">
+                                {PREDEFINED_TAGS.map((tag) => {
+                                  const selected = (editDraft.tags ?? []).includes(tag);
+                                  return (
+                                    <button
+                                      key={tag}
+                                      type="button"
+                                      onClick={() =>
+                                        setEditDraft((d) => ({
+                                          ...d,
+                                          tags: selected ? [] : [tag],
+                                        }))
+                                      }
+                                      className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
+                                        selected
+                                          ? "bg-blue-600 text-white border-blue-600"
+                                          : "bg-white text-gray-600 border-gray-300 hover:border-blue-400"
+                                      }`}
+                                    >
+                                      {tag}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </div>
 
                             <label className="flex items-center gap-2 text-sm">
