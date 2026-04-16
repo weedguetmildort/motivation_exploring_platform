@@ -338,13 +338,35 @@ export default function LinkPanelPage() {
 
             <div>
               <label className="block text-sm font-medium mb-1">URL</label>
-              <input
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                className="w-full rounded-lg border px-3 py-2 text-sm"
-                placeholder="https://example.com/refund-policy"
-                required
-              />
+              {(() => {
+                const trimmed = url.trim();
+                const isDuplicate = trimmed.length > 0 && isValidUrl(trimmed) &&
+                  links.some((l) => l.url.trim().toLowerCase() === trimmed.toLowerCase());
+                const isUnique = trimmed.length > 0 && isValidUrl(trimmed) && !isDuplicate;
+                return (
+                  <>
+                    <input
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      className={`w-full rounded-lg border px-3 py-2 text-sm ${
+                        isDuplicate
+                          ? "border-red-500 bg-red-50 focus:outline-none focus:ring-1 focus:ring-red-500"
+                          : isUnique
+                          ? "border-green-500 bg-green-50 focus:outline-none focus:ring-1 focus:ring-green-500"
+                          : ""
+                      }`}
+                      placeholder="https://example.com/refund-policy"
+                      required
+                    />
+                    {isDuplicate && (
+                      <p className="mt-1 text-xs font-medium text-red-600">Link already in the database</p>
+                    )}
+                    {isUnique && (
+                      <p className="mt-1 text-xs font-medium text-green-600">New link</p>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             <div>
@@ -403,13 +425,30 @@ export default function LinkPanelPage() {
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-            >
-              {saving ? "Saving…" : "Save knowledge link"}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {saving ? "Saving…" : "Save knowledge link"}
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setTitle("");
+                  setUrl("");
+                  setDescription("");
+                  setTags([]);
+                  setActive(true);
+                  setMessage(null);
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+              >
+                Clear form
+              </button>
+            </div>
           </form>
         </div>
       </div>
