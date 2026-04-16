@@ -232,7 +232,7 @@ const inlineComponents = {
   p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 };
 
-export default function MarkdownMessage({ content, inline = false }: { content: string; inline?: boolean }) {
+export default function MarkdownMessage({ content, inline = false, isFollowUp = false }: { content: string; inline?: boolean; isFollowUp?: boolean }) {
   const wrapped_content = wrapExpressions(content);
   const containerRef = useRef<HTMLDivElement>(null);
 
