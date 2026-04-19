@@ -393,8 +393,8 @@ async def chat_with_embedded_links(
     system_instruction = (
         _BASE_SYSTEM_PROMPT +
         " Use web searches to gather information and cite sources inline."
-        " Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
-        " Prefer sources with stable, long-lived URLs."
+        #" Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
+        #" Prefer sources with stable, long-lived URLs."
     )
 
     async def generate() -> AsyncGenerator[str, None]:
@@ -436,7 +436,7 @@ async def chat_with_embedded_links(
         stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
         _schedule_exchange_save(request.app.state.messages, user, conv_id, req.message, [stored_reply])
 
-        yield _sse({"type": "done", "conversation_id": conv_id})
+        yield _sse({"type": "done", "conversation_id": conv_id, "reply": stored_reply})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 

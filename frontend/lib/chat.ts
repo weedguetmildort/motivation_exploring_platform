@@ -147,13 +147,19 @@ export async function sendChat(
           returnedConvId = (event.conversation_id as string) ?? returnedConvId;
           if (onDone) {
             flushTokens();
-            const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
-            const rawReplies = agentKeys.length > 0
-              ? agentKeys.map(k => replyMap[k])
-              : [replyMap["default"] ?? ""];
-            const replies = citations.length > 0
-              ? rawReplies.map(r => injectCitationLinks(r, citations))
-              : rawReplies;
+            const backendReply = event.reply as string | undefined;
+            let replies: string[];
+            if (backendReply === undefined) {
+              const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort((a, b) => a.localeCompare(b));
+              const rawReplies = agentKeys.length > 0
+                ? agentKeys.map(k => replyMap[k])
+                : [replyMap["default"] ?? ""];
+              replies = citations.length > 0
+                ? rawReplies.map(r => injectCitationLinks(r, citations))
+                : rawReplies;
+            } else {
+              replies = [backendReply];
+            }
             onDone(replies, returnedConvId);
           }
         } else if (event.type === "error") {

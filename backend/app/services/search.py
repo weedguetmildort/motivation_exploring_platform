@@ -175,7 +175,7 @@ _STOP_WORDS = frozenset({
     "about", "into", "than", "more", "also", "has", "have", "had",
 })
 
-_RE_UNLINKED_PREFIX = r"(?<!\[)(?<!\()\b"
+_RE_UNLINKED_PREFIX = r"(?<!\[)\b"
 _RE_UNLINKED_SUFFIX = r"\b(?!\])"
 _RE_FORMULA_CHARS = re.compile(r"[=÷×≥≤≠→←+\-*/\\|^]")
 
@@ -261,6 +261,11 @@ def _inject_citation_links(text: str, citations: list[dict]) -> str:
                 word = text[kw_match.start():kw_match.end()]
                 text = text[:kw_match.start()] + f"[{word}]({url})" + text[kw_match.end():]
                 break
+
+    # Strip any leftover [phrase][N] or bare [N] markers the model wrote for
+    # non-existent citation numbers (model hallucinated a source that wasn't provided).
+    text = re.sub(r"\[([^\]\[]+)\]\s*\[\d+\]", r"\1", text)
+    text = re.sub(r"\[(\d+)\](?!\()", "", text)
 
     return text
 
