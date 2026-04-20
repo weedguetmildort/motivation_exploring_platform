@@ -41,7 +41,15 @@ def create_new_knowledge_link(
 ):
     links = get_knowledge_links_collection(request.app.state.db)
     ensure_indexes(links)
-    return create_knowledge_link(links, data)
+    created = create_knowledge_link(links, data)
+    if created.active:
+        request.app.state.knowledge_links.append({
+            "id": created.id,
+            "title": created.title,
+            "url": str(created.url),
+            "description": created.description,
+        })
+    return created
 
 @router.put("/{link_id}", response_model=KnowledgeLinkPublic)
 def update_existing_knowledge_link(
@@ -57,6 +65,16 @@ def update_existing_knowledge_link(
     if not updated:
         raise HTTPException(status_code=404, detail="Knowledge link not found")
 
+    request.app.state.knowledge_links = [
+        l for l in request.app.state.knowledge_links if l["id"] != link_id
+    ]
+    if updated.active:
+        request.app.state.knowledge_links.append({
+            "id": updated.id,
+            "title": updated.title,
+            "url": str(updated.url),
+            "description": updated.description,
+        })
     return updated
 
 @router.delete("/{link_id}", response_model=KnowledgeLinkPublic)
@@ -72,4 +90,7 @@ def delete_existing_knowledge_link(
     if not deleted:
         raise HTTPException(status_code=404, detail="Knowledge link not found")
 
+    request.app.state.knowledge_links = [
+        l for l in request.app.state.knowledge_links if l["id"] != link_id
+    ]
     return deleted

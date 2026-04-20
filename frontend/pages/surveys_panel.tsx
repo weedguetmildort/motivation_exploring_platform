@@ -102,12 +102,12 @@ export default function SurveyPanelPage() {
         if (cancel) return;
 
         if (!res.user.is_admin) {
-          window.location.href = "/dashboard";
+          router.replace("/dashboard");
           return;
         }
         setUser(res.user);
       } catch {
-        if (!cancel) window.location.href = "/login";
+        if (!cancel) router.replace("/login");
       } finally {
         if (!cancel) setChecking(false);
       }

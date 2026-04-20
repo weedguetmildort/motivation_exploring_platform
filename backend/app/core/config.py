@@ -9,7 +9,7 @@ class Settings:
     # JWT / Auth
     JWT_SECRET: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
     JWT_ALG: str = os.getenv("JWT_ALG", "HS256")
-    JWT_EXPIRES_MIN: int = int(os.getenv("JWT_EXPIRES_MIN", "60"))  # 60 minutes
+    JWT_EXPIRES_MIN: int = int(os.getenv("JWT_EXPIRES_MIN", "180"))  # 3 hours
 
     COOKIE_NAME: str = os.getenv("COOKIE_NAME", "session")
     COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "").lower() in {"1","true","yes"}  # True in prod

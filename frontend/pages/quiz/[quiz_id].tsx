@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import QuestionBox, { Choice } from "../../components/QuestionBox";
-import { getMe, logout, type User } from "../../lib/auth";
+import { getMe, invalidateMeCache, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
   submitQuizAnswer,
@@ -21,7 +21,7 @@ type VariantQuizId = (typeof VARIANT_QUIZ_IDS)[number];
 type QuizId = "base" | VariantQuizId;
 
 type ExtendedUser = User & {
-  assigned_var?: VariantQuizId | string | null;
+  assigned_var?: string | null;
   survey_stage?: SurveyStage | null;
   survey_pre_base_completed?: boolean;
   quiz_base_completed?: boolean;
@@ -165,7 +165,7 @@ export default function QuizPage() {
     return () => {
       cancel = true;
     };
-  }, [router, router.isReady, rawQuizId, quizId]);
+  }, [router.isReady, rawQuizId, quizId]);
 
   useEffect(() => {
     if (!user) return;
@@ -219,6 +219,7 @@ export default function QuizPage() {
   async function redirectAfterCompletion() {
     if (!quizId) return;
     try {
+      invalidateMeCache();
       const res = await getMe();
       const refreshedUser = res.user as ExtendedUser;
 
@@ -382,6 +383,7 @@ export default function QuizPage() {
                 onReset={user.is_admin ? async () => {
                   if (!quizId) return;
                   await resetQuiz(quizId);
+                  invalidateMeCache();
                   const state = await getQuizState(quizId);
                   setQuizState(state);
                   setSelectedChoice(null);

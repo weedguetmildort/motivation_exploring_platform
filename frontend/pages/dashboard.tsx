@@ -27,7 +27,7 @@ export default function DashboardPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [router]);
+  }, []);
 
   if (checking) {
     return (

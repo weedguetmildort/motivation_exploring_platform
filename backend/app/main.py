@@ -54,9 +54,17 @@ def _startup():
         from .services.surveys import ensure_survey_indexes
         ensure_survey_indexes(db)
 
+        from .services.knowledge_links import get_knowledge_links_collection, ensure_indexes as ensure_links_indexes
+        links_col = get_knowledge_links_collection(db)
+        ensure_links_indexes(links_col)
+
         app.state.mongo_client = client
         app.state.db = db
         app.state.messages = messages
+        app.state.knowledge_links = [
+            {"id": str(doc["_id"]), "title": doc["title"], "url": doc["url"], "description": doc["description"]}
+            for doc in links_col.find({"active": True})
+        ]
 
     except ServerSelectionTimeoutError as e:
         # Optional: log & re-raise to crash on bad config in prod

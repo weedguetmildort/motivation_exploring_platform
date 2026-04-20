@@ -18,7 +18,8 @@ from ..schemas.chat import (
 )
 from .auth import get_current_user
 from ..services.chat import get_last_exchange, get_conversation_history as fetch_conversation_history
-from ..services.search import get_chat_response_with_search
+from ..services.search import _build_search_context, _inject_citation_links
+# from ..services.search import _run_search, _filter_valid_urls  # external search disabled
 from ..services.followup import generate_followup_questions
 
 router = APIRouter()
@@ -89,6 +90,26 @@ def _save_message(
         col.insert_one(doc)
     except Exception:
         pass
+
+
+_background_tasks: set = set()
+
+
+def _schedule_exchange_save(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list) -> None:
+    """Fire-and-forget: save user then assistant message in a background thread.
+
+    Saves user message first so its timestamp is strictly earlier than the
+    assistant message. Called only after streaming completes successfully, so a
+    failed stream leaves no partial records in the DB. Holds a strong reference
+    to the task until it completes to prevent early GC by the event loop.
+    """
+    def _save() -> None:
+        _save_message(col, "user", user, conv_id, user_message)
+        _save_message(col, "assistant", user, conv_id, assistant_reply)
+
+    task = asyncio.create_task(asyncio.to_thread(_save))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
     if answer_incorrectly and has_choices:
@@ -213,8 +234,7 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply]))
+    _schedule_exchange_save(col, user, conv_id, user_message, [stored_reply])
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -325,8 +345,7 @@ async def double_chat(
             replies[tag] += delta
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
-        asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
-        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
+        _schedule_exchange_save(col, user, conv_id, req.message, replies_to_store)
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -357,8 +376,8 @@ async def followup_quiz_chat(
     )
 
 
-# Returns chat with inline citation links embedded in the response text.
-# Waits for search + generation + citation injection, then streams the reply word-by-word.
+# Streams tokens in real-time. Sends a citations SSE event before tokens so the
+# frontend can inject [phrase][N] markers into real links once the stream is done.
 @router.post("/chat/links")
 async def chat_with_embedded_links(
     req: ChatRequest,
@@ -369,53 +388,55 @@ async def chat_with_embedded_links(
         raise HTTPException(status_code=500, detail="Backend missing UF_OPENAI_API_KEY")
 
     conv_id = req.conversation_id or str(uuid.uuid4())
-    
-    # OPTIMIZATION: Non-blocking DB read for history
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
 
     system_instruction = (
         _BASE_SYSTEM_PROMPT +
         " Use web searches to gather information and cite sources inline."
-        "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
-        "Prefer sources with stable, long-lived URLs."
-
-        "Preferred sources:"
-        "- Wikipedia (en.wikipedia.org)"
-        "- Encyclopaedia Britannica (britannica.com)"
-        "- Government sites (.gov such as CDC, NIH, NASA, NIST)"
-        "- University and educational sites (.edu)"
-        "- MIT OpenCourseWare (ocw.mit.edu)"
-        "- PubMed / NCBI (ncbi.nlm.nih.gov) for biomedical topics"
-        "- arXiv (arxiv.org) for physics, mathematics, and computer science preprints"
-        "- Wolfram MathWorld (mathworld.wolfram.com) for mathematics"
-        "- Stanford Encyclopedia of Philosophy (plato.stanford.edu) for philosophy"
-        "- IEEE Xplore (ieeexplore.ieee.org) for engineering and computer science"
-        "- ACM Digital Library (dl.acm.org) for computer science research"
+        #" Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
+        #" Prefer sources with stable, long-lived URLs."
     )
 
     async def generate() -> AsyncGenerator[str, None]:
-        try:
-            output = await get_chat_response_with_search(
-                client=_client,
-                model=os.getenv("UF_OPENAI_API_MODEL"),
-                messages=_build_standard_messages(history, req.message, system_prompt=system_instruction),
-            )
-        except Exception as e:
-            yield _sse({"type": "error", "detail": f"Upstream AI request failed: {e}"})
-            return
+        # External web search disabled — citations come from DB links only.
+        # To re-enable: uncomment _run_search/_filter_valid_urls imports and restore lines below.
+        # try:
+        #     raw_web = await _run_search(req.message)
+        # except Exception as e:
+        #     yield _sse({"type": "error", "detail": f"Search failed: {e}"})
+        #     return
 
-        reply = output["reply"]
+        curated = [
+            {"title": l.get("title", ""), "url": l.get("url", ""), "snippet": l.get("description", "")}
+            for l in getattr(request.app.state, "knowledge_links", [])
+            if l.get("url")
+        ]
+        augmented_messages, citations = _build_search_context(
+            _build_standard_messages(history, req.message, system_prompt=system_instruction),
+            curated,  # was: curated + raw_web
+        )
 
-        # Stream the citation-injected reply word-by-word
-        words = reply.split(" ")
-        for i, word in enumerate(words):
-            yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
+        # validation_task = asyncio.create_task(_filter_valid_urls(raw_web))  # disabled with search
 
-        # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
-        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
-        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply]))
-        
-        yield _sse({"type": "done", "conversation_id": conv_id})
+        if citations:
+            yield _sse({"type": "citations", "citations": citations})
+
+        full_reply = ""
+        async for is_error, delta, sse in _stream_agent_tokens(augmented_messages):
+            yield sse
+            if is_error:
+                # validation_task.cancel()  # disabled with search
+                return
+            full_reply += delta
+
+        # valid_web = await validation_task        # disabled with search
+        # valid_urls = {r["url"] for r in curated + valid_web}  # disabled with search
+        # valid_citations = [c for c in citations if c["url"] in valid_urls]  # disabled with search
+
+        stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
+        _schedule_exchange_save(request.app.state.messages, user, conv_id, req.message, [stored_reply])
+
+        yield _sse({"type": "done", "conversation_id": conv_id, "reply": stored_reply})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
