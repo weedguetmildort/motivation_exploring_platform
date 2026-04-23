@@ -21,7 +21,6 @@ type Msg = {
   content: string;
   ts: number;
   bot?: Bot;
-  isFollowUp?: boolean;
 };
 
 const BOT_COLORS: Record<Bot, string> = {
@@ -36,12 +35,10 @@ const MessageBubble = memo(function MessageBubble({
   role,
   content,
   bot,
-  isFollowUp
 }: {
   role: "user" | "assistant";
   content: string;
   bot?: Bot;
-  isFollowUp?: boolean;
 }) {
   const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
   const bubbleClass =
@@ -58,14 +55,7 @@ const MessageBubble = memo(function MessageBubble({
       </div>
       <div className={`flex ${role === "user" ? "justify-end" : "justify-start"}`}>
         <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
-        {role === "assistant" ? (
-          <MarkdownMessage content={content} />
-        ) : isFollowUp ? (
-          <MarkdownMessage content={content} />
-        ) : (
-          <div className="text-[0.8125rem] whitespace-pre-wrap">{content}</div>
-        )}
-
+          <MarkdownMessage content={content} dark={role === "user"} />
         </div>
       </div>
     </div>
@@ -210,7 +200,7 @@ export default function ChatBox({
     processedNewlinesRef.current = completedCount;
   }, [followupStreamText]);
 
-  async function sendMessage(content: string, opts?: { isFollowUp?: boolean }) {
+  async function sendMessage(content: string) {
     const trimmed = content.trim();
     if (!trimmed) return;
 
@@ -241,7 +231,6 @@ export default function ChatBox({
       role: "user",
       content: trimmed,
       ts: Date.now(),
-      isFollowUp: opts?.isFollowUp ?? false,
     };
     setMessages((m) => [...m, userMsg]);
 
@@ -438,7 +427,7 @@ export default function ChatBox({
   }, [externalQuestion]);
 
   function handleFollowupClick(question: string) {
-    void sendMessage(question, { isFollowUp: true });
+    void sendMessage(question);
   }
 
   // Current in-progress follow-up question text (the incomplete last line).
@@ -492,8 +481,7 @@ export default function ChatBox({
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-3"
       >
         {messages.map((m) => (
-          <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} isFollowUp={m.isFollowUp}
- />
+          <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
         ))}
 
         {(followupActive || followupStreamText !== "" || followupQuestions || followupInProgress) && (

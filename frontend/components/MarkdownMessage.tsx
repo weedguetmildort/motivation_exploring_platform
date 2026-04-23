@@ -162,77 +162,79 @@ const schema = {
   },
 };
 
-const components = {
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="text-blue-600 underline hover:text-blue-800"
-    >
-      {children}
-    </a>
-  ),
-  // Apply blockquote-style border to KaTeX display math blocks so all display
-  // math uses the same visual container. Inner KaTeX divs pass through unchanged.
-  div: ({ className, children, style }: { className?: string; children?: React.ReactNode; style?: React.CSSProperties }) => {
-    if (className?.includes("katex-display")) {
-      return (
-        <div
-          className={`${className} relative border-2 border-gray-800 rounded px-3 py-2 my-2 overflow-x-auto max-w-full`}
-          style={style}
-        >
-          {children}
-        </div>
-      );
-    }
-    return <div className={className} style={style}>{children}</div>;
-  },
-  table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="overflow-x-auto my-3">
-      <table className="w-full border-collapse text-sm">{children}</table>
-    </div>
-  ),
-  th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="border border-gray-300 bg-gray-50 px-3 py-2 text-left font-semibold whitespace-nowrap">
-      {children}
-    </th>
-  ),
-  td: ({ children }: { children?: React.ReactNode }) => (
-    <td className="border border-gray-300 px-3 py-2 align-top">{children}</td>
-  ),
-  hr: () => <hr className="!mt-3 !mb-1 border-gray-300" />,
-  ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
-  ),
-  ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
-  ),
-  li: ({ children }: { children?: React.ReactNode }) => (
-    <li className="leading-normal">{children}</li>
-  ),
-  blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote className="inline-block border-2 border-gray-800 rounded px-3 py-2 my-2 break-words overflow-wrap-anywhere text-[1.15em] max-w-full">
-      {children}
-    </blockquote>
-  ),
-  // Prevent code blocks from overflowing the bubble — scroll horizontally instead.
-  pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="overflow-x-auto max-w-full rounded bg-gray-100 p-2 text-sm">
-      {children}
-    </pre>
-  ),
-  code: ({ className, children }: { className?: string; children?: React.ReactNode }) => (
-    <code className={`${className ?? ""} break-all`}>{children}</code>
-  ),
-};
+function makeComponents(dark: boolean) {
+  return {
+    a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className={dark ? "text-white underline opacity-90 hover:opacity-100" : "text-blue-600 underline hover:text-blue-800"}
+      >
+        {children}
+      </a>
+    ),
+    div: ({ className, children, style }: { className?: string; children?: React.ReactNode; style?: React.CSSProperties }) => {
+      if (className?.includes("katex-display")) {
+        return (
+          <div
+            className={`${className} relative border-2 rounded px-3 py-2 my-2 overflow-x-auto max-w-full ${dark ? "border-white/60" : "border-gray-800"}`}
+            style={style}
+          >
+            {children}
+          </div>
+        );
+      }
+      return <div className={className} style={style}>{children}</div>;
+    },
+    table: ({ children }: { children?: React.ReactNode }) => (
+      <div className="overflow-x-auto my-3">
+        <table className="w-full border-collapse text-sm">{children}</table>
+      </div>
+    ),
+    th: ({ children }: { children?: React.ReactNode }) => (
+      <th className={`border px-3 py-2 text-left font-semibold whitespace-nowrap ${dark ? "border-white/40 bg-white/10" : "border-gray-300 bg-gray-50"}`}>
+        {children}
+      </th>
+    ),
+    td: ({ children }: { children?: React.ReactNode }) => (
+      <td className={`border px-3 py-2 align-top ${dark ? "border-white/40" : "border-gray-300"}`}>{children}</td>
+    ),
+    hr: () => <hr className={`!mt-3 !mb-1 ${dark ? "border-white/40" : "border-gray-300"}`} />,
+    ul: ({ children }: { children?: React.ReactNode }) => (
+      <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
+    ),
+    ol: ({ children }: { children?: React.ReactNode }) => (
+      <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
+    ),
+    li: ({ children }: { children?: React.ReactNode }) => (
+      <li className="leading-normal">{children}</li>
+    ),
+    blockquote: ({ children }: { children?: React.ReactNode }) => (
+      <blockquote className={`inline-block border-2 rounded px-3 py-2 my-2 break-words overflow-wrap-anywhere text-[1.15em] max-w-full ${dark ? "border-white/60" : "border-gray-800"}`}>
+        {children}
+      </blockquote>
+    ),
+    pre: ({ children }: { children?: React.ReactNode }) => (
+      <pre className={`overflow-x-auto max-w-full rounded p-2 text-sm ${dark ? "bg-white/15 text-white" : "bg-gray-100 text-gray-900"}`}>
+        {children}
+      </pre>
+    ),
+    code: ({ className, children }: { className?: string; children?: React.ReactNode }) => (
+      <code className={`${className ?? ""} break-all`}>{children}</code>
+    ),
+  };
+}
+
+const components = makeComponents(false);
+const darkComponents = makeComponents(true);
 
 const inlineComponents = {
   ...components,
   p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 };
 
-export default function MarkdownMessage({ content, inline = false }: { content: string; inline?: boolean }) {
+export default function MarkdownMessage({ content, inline = false, dark = false }: Readonly<{ content: string; inline?: boolean; dark?: boolean }>) {
   const wrapped_content = wrapExpressions(content);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -269,6 +271,9 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
     return () => ro.disconnect();
   }, [wrapped_content, inline]);
 
+  let activeComponents = dark ? darkComponents : components;
+  if (inline) activeComponents = inlineComponents;
+
   const rendered = (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -276,7 +281,7 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
         [rehypeSanitize, schema],
         [rehypeKatex, { output: "html" }],
       ]}
-      components={inline ? inlineComponents : components}
+      components={activeComponents}
     >
       {wrapped_content}
     </ReactMarkdown>
