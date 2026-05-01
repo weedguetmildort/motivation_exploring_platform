@@ -66,11 +66,7 @@ const MessageBubble = memo(function MessageBubble({
       )}
       <div className={`flex ${isRightAligned ? "justify-end" : "justify-start"}`}>
         <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
-          {role === "assistant" ? (
-            <MarkdownMessage content={content} />
-          ) : (
-            <div className="text-[0.8125rem] whitespace-pre-wrap">{content}</div>
-          )}
+          <MarkdownMessage content={content} dark={role === "user"} />
         </div>
       </div>
     </div>
