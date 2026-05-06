@@ -13,6 +13,7 @@ import {
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 import QuizCompletionCard from "../../components/QuizCompletionCard";
+// ProgressBar is used on dashboard/survey; quiz page shows inline step count
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
 
@@ -324,39 +325,39 @@ export default function QuizPage() {
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
-      <header className="shrink-0 bg-white border-b px-4 py-3 sm:px-6 sm:py-4">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">
-              Quiz {quizId ?? rawQuizId}
-              {attempt && (
-                <span className="ml-3 text-base 2xl:text-lg font-normal text-gray-500">
-                  {attempt.answered_count} of {attempt.total_questions} answered
-                  {quizCompleted && (
-                    <span className="ml-2 font-semibold text-green-700">(Completed)</span>
-                  )}
+    <div data-quiz-theme={quizId ?? "base"} className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
+      <header className="shrink-0 bg-white border-b px-4 py-2 sm:px-6 sm:py-3">
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="page-title leading-tight">
+              {quizId ? quizId.charAt(0).toUpperCase() + quizId.slice(1) : ""} Quiz
+              {quizCompleted ? (
+                <span className="ml-2 text-sm font-semibold text-green-700">(Done)</span>
+              ) : (
+                <span className="ml-2 text-sm md:text-base font-normal text-gray-400">
+                  Step {quizId === "base" ? 2 : 4} of 5
                 </span>
               )}
             </h1>
-            {!quizCompleted && (
+              {!quizCompleted && (
               <p className="page-subtitle">
-                Answer each question once. Your progress is saved automatically.
+                Progress saved automatically.
               </p>
             )}
           </div>
-
-          <div className="flex items-center gap-3">
+          
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => router.replace("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="text-sm px-3 py-1.5 rounded-lg bg-accent-600 text-white hover:bg-accent-700 transition"
             >
-              Back to Dashboard
+              <span className="hidden md:inline">Dashboard</span>
+              <span className="md:hidden">Back</span>
             </button>
 
             <button
               onClick={onLogout}
-              className="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
+              className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
             >
               Logout
             </button>
@@ -408,9 +409,16 @@ export default function QuizPage() {
                     {quizState && current && (
                       <>
                         <div className="p-4">
-                          <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
-                            Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
-                          </h2>
+                          <div className="flex items-baseline justify-between gap-3 mb-1">
+                            <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
+                              Question {(attempt?.answered_count ?? 0) + 1} - {current.stem}
+                            </h2>
+                            {attempt && (
+                              <span className="text-sm text-gray-400 whitespace-nowrap">
+                                {attempt.answered_count + 1} of {attempt.total_questions}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {current.subtitle && (
@@ -449,7 +457,7 @@ export default function QuizPage() {
                                   disabled={
                                     !selectedChoice || submitting || chatLoading
                                   }
-                                  className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
+                                  className="rounded-lg px-4 py-2 bg-accent-600 text-white text-sm font-medium disabled:opacity-60"
                                 >
                                   {submitting ? "Submitting…" : "Submit answer"}
                                 </button>
@@ -466,7 +474,7 @@ export default function QuizPage() {
                                   <button
                                     type="button"
                                     onClick={onAskAssistantAboutQuestion}
-                                    className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
+                                    className="inline-flex items-center justify-center rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 transition"
                                   >
                                     Ask the assistant about this question
                                   </button>

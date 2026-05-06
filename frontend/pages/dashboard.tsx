@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
+import ProgressBar from "../components/ProgressBar";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -46,12 +47,12 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="site-header">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">Dashboard</h1>
-            <p className="page-subtitle">Welcome to the dashboard, {user.email}</p>
+        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="page-title leading-tight">Dashboard</h1>
           </div>
-          <div className="flex items-center gap-4">
+
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => router.push("/profile")}
               className="btn-primary"
@@ -69,6 +70,10 @@ export default function DashboardPage() {
       </header>
 
       <div className="page-container">
+        <div className="mb-4">
+          <ProgressBar user={user} />
+        </div>
+
         <div className="grid gap-4 sm:grid-cols-2">
           {user?.is_admin && (
             <a

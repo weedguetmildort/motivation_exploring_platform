@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
+import ProgressBar, { type StepId } from "../components/ProgressBar";
 import {
   getSurveyState,
   submitSurvey,
@@ -409,27 +410,36 @@ export default function SurveyPage() {
   if (!user) return null;
   if (!activeSurveyStage || !config) return null;
 
+  const surveyStepId: StepId | undefined = (() => {
+    if (activeSurveyStage === "pre_quiz") return "survey_pre";
+    if (activeSurveyStage === "post_base") return "survey_post_base";
+    if (activeSurveyStage === "post_variant") return "survey_final";
+    return undefined;
+  })();
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="border-b bg-white px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">
-              {config.title}
-            </h1>
-            <p className="text-sm text-gray-600">{config.description}</p>
+      <header className="border-b bg-white px-4 py-2 sm:px-6 sm:py-3">
+        <div className="mx-auto flex max-w-6xl 2xl:max-w-screen-2xl items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="page-title leading-tight">{config.title}</h1>
+            <p className="text-xs md:text-sm text-gray-500 leading-tight">
+              <span className="hidden md:inline">{config.description}</span>
+              <span className="md:hidden">Complete all required questions.</span>
+            </p>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => router.push("/dashboard")}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition hover:bg-blue-700"
+              className="text-sm px-3 py-1.5 rounded-lg bg-blue-600 text-white transition hover:bg-blue-700"
             >
-              Back to Dashboard
+              <span className="hidden md:inline">Dashboard</span>
+              <span className="md:hidden">Back</span>
             </button>
             <button
               onClick={onLogout}
-              className="rounded-lg bg-gray-100 px-4 py-2 text-sm hover:bg-gray-200"
+              className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
             >
               Logout
             </button>
@@ -438,6 +448,9 @@ export default function SurveyPage() {
       </header>
 
       <main className="mx-auto max-w-3xl p-6">
+        <div className="mb-6">
+          <ProgressBar user={user} activeStep={surveyStepId} />
+        </div>
         <form
           onSubmit={onSubmit}
           className="space-y-6 rounded-xl border bg-white p-6 shadow-sm"
