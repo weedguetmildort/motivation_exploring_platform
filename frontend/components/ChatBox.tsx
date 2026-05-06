@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { sendChat, loadUserHistory } from "../lib/chat";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
+import ChatHeader from "./ChatHeader";
 import {
   getFilteredAgents,
   getPartialMention,
@@ -49,7 +50,7 @@ const MessageBubble = memo(function MessageBubble({
   const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
   const bubbleClass =
     role === "user"
-      ? "bg-blue-600 text-white"
+      ? "bg-accent-600 text-white"
       : bot
         ? BOT_COLORS[bot]
         : "bg-gray-100 text-gray-900";
@@ -563,41 +564,12 @@ export default function ChatBox({
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b sticky top-0 bg-white/90 backdrop-blur rounded-t-2xl flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600">
-            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-            </svg>
-          </div>
-          <h2 className="text-xl font-semibold text-gray-900 2xl:text-2xl">AI Assistant</h2>
-        </div>
-        {onToggleQuestion && (
-          <button
-            type="button"
-            className="md:hidden inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 hover:text-gray-900 active:scale-95"
-            onClick={onToggleQuestion}
-            aria-label={questionCollapsed ? "Minimize question" : "Maximize question"}
-          >
-            {questionCollapsed ? (
-              <>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-                Minimize
-              </>
-            ) : (
-              <>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-                </svg>
-                Maximize
-              </>
-            )}
-          </button>
-        )}
-      </div>
+    <div data-quiz-theme={quizId} className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
+      <ChatHeader
+        quizId={quizId}
+        questionCollapsed={questionCollapsed}
+        onToggleQuestion={onToggleQuestion}
+      />
 
       <div
         ref={scrollerRef}
@@ -664,7 +636,7 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-accent-600 disabled:opacity-60"}`}
             onClick={pending && !disableCancel ? handleCancel : onSend}
             disabled={disableCancel || (!pending && !input.trim())}
           >

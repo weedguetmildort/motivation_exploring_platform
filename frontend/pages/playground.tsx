@@ -120,7 +120,7 @@ export default function Playground() {
   const atLast = currentIndex === questions.length - 1;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div data-quiz-theme={active} className="min-h-screen bg-gray-50">
       <header className="site-header">
         <div className="site-header-inner">
           <div>
@@ -151,50 +151,25 @@ export default function Playground() {
           <h2 className="text-lg 2xl:text-xl font-medium mb-3">Case Selection</h2>
           <div className="space-y-4 max-w-3xl 2xl:max-w-none mx-auto">
             <div className="flex flex-wrap justify-center gap-3 mt-8">
-              <button
-                onClick={() => setActive("base")}
-                aria-pressed={active === "base"}
-                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                  active === "base"
-                    ? "bg-blue-600 text-white shadow-lg scale-105"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Base Case
-              </button>
-              <button
-                onClick={() => setActive("followup")}
-                aria-pressed={active === "followup"}
-                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                  active === "followup"
-                    ? "bg-blue-600 text-white shadow-lg scale-105"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Follow-up Question Case
-              </button>
-              <button
-                onClick={() => setActive("double")}
-                aria-pressed={active === "double"}
-                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                  active === "double"
-                    ? "bg-blue-600 text-white shadow-lg scale-105"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Double Agent Case
-              </button>
-              <button
-                onClick={() => setActive("links")}
-                aria-pressed={active === "links"}
-                className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                  active === "links"
-                    ? "bg-blue-600 text-white shadow-lg scale-105"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Embedded Links Case
-              </button>
+              {([
+                { id: "base",     activeClass: "bg-blue-600 text-white shadow-lg scale-105",   label: "Base Case" },
+                { id: "followup", activeClass: "bg-teal-600 text-white shadow-lg scale-105",   label: "Follow-up Question Case" },
+                { id: "double",   activeClass: "bg-violet-600 text-white shadow-lg scale-105", label: "Double Agent Case" },
+                { id: "links",    activeClass: "bg-amber-600 text-white shadow-lg scale-105",  label: "Embedded Links Case" },
+              ] as const).map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setActive(c.id)}
+                  aria-pressed={active === c.id}
+                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                    active === c.id
+                      ? c.activeClass
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
             </div>
             <div className="p-6 bg-white rounded-xl shadow-inner">
               {active === "base" && (
@@ -279,6 +254,7 @@ export default function Playground() {
           {/* Right column (Chat) */}
           <div className="h-[55vh] md:h-auto md:min-h-[500px] overflow-hidden">
             <ChatBox
+              key={active}
               quizId={active}
             />
           </div>
@@ -286,7 +262,7 @@ export default function Playground() {
 
         <div className="flex justify-between max-w-md mx-auto">
           <button
-            className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
+            className="rounded-xl px-4 py-2 font-medium bg-accent-600 text-white disabled:opacity-60"
             onClick={() => setCurrentIndex((idx) => (idx > 0 ? idx - 1 : idx))}
             disabled={!hasQuestions || atFirst}
           >
@@ -298,7 +274,7 @@ export default function Playground() {
               : "No questions"}
           </span>
           <button
-            className="rounded-xl px-4 py-2 font-medium bg-blue-600 text-white disabled:opacity-60"
+            className="rounded-xl px-4 py-2 font-medium bg-accent-600 text-white disabled:opacity-60"
             onClick={() =>
               setCurrentIndex((idx) =>
                 idx < questions.length - 1 ? idx + 1 : idx,
