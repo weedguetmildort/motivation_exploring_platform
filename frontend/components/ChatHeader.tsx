@@ -66,7 +66,7 @@ export default function ChatHeader({
   }, [showInfo]);
 
   return (
-    <div className="px-4 py-3 border-b sticky top-0 bg-white/90 backdrop-blur rounded-t-2xl flex items-center justify-between gap-3">
+    <div className="px-4 py-4 border-b sticky top-0 bg-white/90 backdrop-blur rounded-t-2xl flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-600">
           <svg
@@ -82,7 +82,7 @@ export default function ChatHeader({
           </svg>
         </div>
 
-        <h2 className="text-xl font-semibold text-gray-900 2xl:text-2xl">
+        <h2 className="text-2xl font-semibold text-gray-900 2xl:text-3xl">
           AI Assistant
           {theme.id !== "base" && (
             <span className="font-normal text-gray-500">
@@ -111,12 +111,12 @@ export default function ChatHeader({
                   ? { position: "fixed", top: popoverPos.top, left: popoverPos.left }
                   : { position: "fixed", visibility: "hidden", top: 0, left: 0 }
               }
-              className="z-50 w-72 max-w-[calc(100vw-1rem)] rounded-xl border bg-white p-4 shadow-lg"
+              className="z-50 w-96 max-w-[calc(100vw-2rem)] rounded-xl border bg-white p-5 shadow-lg"
             >
-              <div className="flex items-center gap-2 mb-2">
-                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-600">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-600">
                   <svg
-                    className="h-3.5 w-3.5 text-white"
+                    className="h-5 w-5 text-white"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -127,12 +127,12 @@ export default function ChatHeader({
                     <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                   </svg>
                 </div>
-                <span className="font-semibold text-gray-900">{theme.subtitle}</span>
+                <span className="text-lg font-semibold text-gray-900">{theme.subtitle}</span>
               </div>
-              <p className="text-sm text-gray-600 leading-relaxed">
+              <p className="text-base text-gray-600 leading-relaxed">
                 {theme.description}
               </p>
-              <p className="mt-3 text-xs text-gray-400 leading-relaxed border-t border-gray-100 pt-2">
+              <p className="mt-3 text-sm text-gray-400 leading-relaxed border-t border-gray-100 pt-3">
                 AI can make mistakes. Always verify important information and use your own judgment when answering.
               </p>
             </div>,

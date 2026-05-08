@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import Link from "next/link";
+import PageHeader from "../components/PageHeader";
 
 
 export default function AdminPage() {
@@ -57,28 +58,12 @@ useEffect(() => {
     
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="site-header">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">Admin Panel</h1>
-            <p className="page-subtitle">Manage quiz questions and survey questions</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
-            >
-              Back to Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Admin Panel"
+        subtitle="Manage quiz questions and survey questions"
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
       <div className="page-container">
         <div className="grid gap-4 sm:grid-cols-2">

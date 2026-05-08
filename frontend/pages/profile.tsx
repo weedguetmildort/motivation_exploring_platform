@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { getMe, logout, changePassword, type User } from "../lib/auth";
+import PageHeader from "../components/PageHeader";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -100,29 +101,12 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="site-header">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="page-title">Profile</h1>
-            <p className="page-subtitle hidden md:block">Edit your user password</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
-            >
-              Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Profile"
+        subtitle="Edit your user password"
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
       {/* Main content */}
       <main className="max-w-xl mx-auto p-6">

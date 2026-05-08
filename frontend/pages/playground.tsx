@@ -5,6 +5,7 @@ import ChatBox from "../components/ChatBox";
 import { getMe, logout, type User } from "../lib/auth";
 import { useRouter } from "next/router";
 import { apiFetch } from "../lib/fetcher";
+import PageHeader from "../components/PageHeader";
 
 export default function Playground() {
   const router = useRouter();
@@ -121,30 +122,12 @@ export default function Playground() {
 
   return (
     <div data-quiz-theme={active} className="min-h-screen bg-gray-50">
-      <header className="site-header">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">Playground</h1>
-            <p className="page-subtitle">
-              Sandbox to see how the different quiz styles look
-            </p>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
-            >
-              Back to Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Playground"
+        subtitle="Sandbox to see how the different quiz styles look"
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
       <div className="page-container">
         <section className="rounded-xl bg-white p-4 shadow-sm border">
@@ -155,7 +138,7 @@ export default function Playground() {
                 { id: "base",     activeClass: "bg-blue-600 text-white shadow-lg scale-105",   label: "Base Case" },
                 { id: "followup", activeClass: "bg-teal-600 text-white shadow-lg scale-105",   label: "Follow-up Question Case" },
                 { id: "double",   activeClass: "bg-violet-600 text-white shadow-lg scale-105", label: "Double Agent Case" },
-                { id: "links",    activeClass: "bg-amber-600 text-white shadow-lg scale-105",  label: "Embedded Links Case" },
+                { id: "links",    activeClass: "bg-red-600 text-white shadow-lg scale-105",  label: "Embedded Links Case" },
               ] as const).map((c) => (
                 <button
                   key={c.id}

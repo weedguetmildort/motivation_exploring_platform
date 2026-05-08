@@ -66,9 +66,9 @@ export default function QuestionBox({
                 ${active ? "border-accent-600 bg-accent-50" : "border-gray-200 bg-white"}
               `}
               >
-                <div className="font-medium text-gray-900"><span className="uppercase font-bold mr-2">{c.id}.</span>{c.label}</div>
+                <div className="text-lg font-medium text-gray-900"><span className="uppercase font-bold mr-2">{c.id}.</span>{c.label}</div>
                 {c.description && (
-                  <div className="text-sm text-gray-600 mt-0.5">{c.description}</div>
+                  <div className="text-base text-gray-600 mt-0.5">{c.description}</div>
                 )}
               </div>
             </label>

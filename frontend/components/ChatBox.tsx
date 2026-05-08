@@ -61,7 +61,7 @@ const MessageBubble = memo(function MessageBubble({
   return (
     <div>
       {showLabel && (
-        <div className={`text-xs text-gray-600 px-1 mb-1 ${computedLabelAlign === "center" ? "text-center" : computedLabelAlign === "right" ? "text-right" : "text-left"}`}>
+        <div className={`text-sm text-gray-600 px-1 mb-1 ${computedLabelAlign === "center" ? "text-center" : computedLabelAlign === "right" ? "text-right" : "text-left"}`}>
           {label}
         </div>
       )}
@@ -523,7 +523,7 @@ export default function ChatBox({
         const bubbleClass = bot ? BOT_COLORS[bot] : "bg-gray-100 text-gray-900";
         return (
           <div key={`streaming-${agentKey}`}>
-            <div className="text-xs text-gray-600 px-1 mb-1 text-left">{label}</div>
+            <div className="text-sm text-gray-600 px-1 mb-1 text-left">{label}</div>
             <div className="flex justify-start">
               <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
                 <MarkdownMessage content={content} />
@@ -581,21 +581,21 @@ export default function ChatBox({
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
             {(followupActive || followupStreamText !== "") && !followupQuestions?.length && !followupInProgress ? (
-              <div className="text-sm text-gray-500">Loading follow-up questions…</div>
+              <div className="text-base text-gray-500">Loading follow-up questions…</div>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {followupQuestions?.map((q, i) => (
                   <button
                     key={i}
                     type="button"
-                    className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                    className="text-sm px-3 py-1.5 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
                     onClick={() => handleFollowupClick(q)}
                   >
                     <MarkdownMessage content={q} inline />
                   </button>
                 ))}
                 {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
-                  <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
+                  <span className="text-sm px-3 py-1.5 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
                     {followupInProgress}
                   </span>
                 )}
@@ -605,13 +605,13 @@ export default function ChatBox({
         )}
 
         {pending && !followupActive && Object.keys(streamingMap).length === 0 && (
-          <div className="text-sm text-gray-500">Assistant is typing…</div>
+          <div className="text-base text-gray-500">Assistant is typing…</div>
         )}
 
         {renderStreaming()}
 
         {error && (
-          <div role="alert" className="text-sm text-red-600">
+          <div role="alert" className="text-base text-red-600">
             {error}
           </div>
         )}
@@ -628,7 +628,7 @@ export default function ChatBox({
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
-            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-gray-900"
+            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-base text-gray-900"
             placeholder="Type a message…"
             value={input}
             onChange={handleInputChange}
@@ -636,7 +636,7 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-accent-600 disabled:opacity-60"}`}
+            className={`rounded-xl px-4 py-2 text-base font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-accent-600 disabled:opacity-60"}`}
             onClick={pending && !disableCancel ? handleCancel : onSend}
             disabled={disableCancel || (!pending && !input.trim())}
           >

@@ -48,18 +48,18 @@ body {
 }
 
 [data-quiz-theme="links"] {
-  --accent-50:  255 251 235;   /* amber-50  */
-  --accent-100: 254 243 199;   /* amber-100 */
-  --accent-400: 251 191 36;    /* amber-400 */
-  --accent-500: 245 158 11;    /* amber-500 */
-  --accent-600: 217 119 6;     /* amber-600 */
-  --accent-700: 180 83 9;      /* amber-700 */
+--accent-50:  255 253 230;   /* cream yellow */
+--accent-100: 255 247 180;   /* pale lemon */
+--accent-400: 255 215 64;    /* vibrant lemon */
+--accent-500: 245 190 35;    /* golden lemon */
+--accent-600: 214 145 20;    /* warm gold */
+--accent-700: 166 105 10;    /* deep gold */
 }
 
 @layer components {
   /* Sticky page header — used by all study pages */
   .site-header {
-    @apply sticky top-0 z-10 bg-white border-b px-4 py-4 sm:px-8 sm:py-5;
+    @apply sticky top-0 z-10 bg-white border-b px-4 py-3 sm:px-12 sm:py-4;
   }
 
   /* Header inner row — title + buttons, wraps on small screens */
@@ -70,17 +70,17 @@ body {
 
   /* Standard page content container */
   .page-container {
-    @apply px-4 py-6 sm:px-8 sm:py-8;
+    @apply px-4 py-6 sm:px-12 sm:py-8;
   }
 
   /* Page-level h1 */
   .page-title {
-    @apply text-2xl sm:text-3xl 2xl:text-4xl font-semibold text-gray-900;
+    @apply text-xl sm:text-2xl 2xl:text-3xl font-semibold text-gray-900;
   }
 
   /* Page-level subtitle / description */
   .page-subtitle {
-    @apply text-base 2xl:text-lg text-gray-600;
+    @apply text-sm sm:text-base 2xl:text-lg text-gray-600;
   }
 
   /* Card / section surface */

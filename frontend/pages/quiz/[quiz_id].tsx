@@ -13,6 +13,7 @@ import {
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 import QuizCompletionCard from "../../components/QuizCompletionCard";
+import PageHeader from "../../components/PageHeader";
 // ProgressBar is used on dashboard/survey; quiz page shows inline step count
 
 type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
@@ -325,48 +326,29 @@ export default function QuizPage() {
   }
 
   return (
-    <div data-quiz-theme={quizId ?? "base"} className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
-      <header className="site-header shrink-0">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="page-title leading-tight">
-              {quizId ? quizId.charAt(0).toUpperCase() + quizId.slice(1) : ""} Quiz
-              {quizCompleted ? (
-                <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
-              ) : (
-                <span className="ml-3 text-base font-normal text-gray-400">
-                  Step {quizId === "base" ? 2 : 4} of 5
-                </span>
-              )}
-            </h1>
-            {!quizCompleted && (
-              <p className="page-subtitle hidden md:block">
-                Progress saved automatically.
-              </p>
+    <div data-quiz-theme={quizId ?? "base"} className="flex flex-col h-[100dvh] bg-gray-50">
+      <PageHeader
+        className="shrink-0"
+        title={
+          <>
+            {quizId ? quizId.charAt(0).toUpperCase() + quizId.slice(1) : ""} Quiz
+            {quizCompleted ? (
+              <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
+            ) : (
+              <span className="ml-3 text-base font-normal text-gray-400">
+                Step {quizId === "base" ? 2 : 4} of 5
+              </span>
             )}
-          </div>
+          </>
+        }
+        subtitle={!quizCompleted ? "Answer each of the questions using the help of the AI assistant." : undefined}
+        onDashboard={() => router.replace("/dashboard")}
+        onLogout={onLogout}
+      />
 
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => router.replace("/dashboard")}
-              className="btn-primary"
-            >
-              <span className="hidden md:inline">Dashboard</span>
-              <span className="md:hidden">Back</span>
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="flex-1 min-h-0 md:overflow-auto [@media(max-height:700px)]:flex-none">
-        <div className="px-3 py-2 md:px-6 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
-          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto [@media(max-height:700px)]:h-auto">
+      <div className="flex-1 min-h-0 md:overflow-auto">
+        <div className="px-4 pt-2 sm:px-12 md:pt-6 md:pb-6 h-full md:h-auto">
+          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">
                 {error}
@@ -375,24 +357,24 @@ export default function QuizPage() {
 
             {quizCompleted ? (
               <div className="overflow-auto flex-1 min-h-0 md:flex-none">
-              <QuizCompletionCard
-                isAdmin={user.is_admin}
-                quizResults={quizResults}
-                onDashboard={() => router.replace("/dashboard")}
-                onNextStep={redirectAfterCompletion}
-                onReset={user.is_admin ? async () => {
-                  if (!quizId) return;
-                  await resetQuiz(quizId);
-                  invalidateMeCache();
-                  const state = await getQuizState(quizId);
-                  setQuizState(state);
-                  setSelectedChoice(null);
-                  setQuizResults(null);
-                } : undefined}
-              />
+                <QuizCompletionCard
+                  isAdmin={user.is_admin}
+                  quizResults={quizResults}
+                  onDashboard={() => router.replace("/dashboard")}
+                  onNextStep={redirectAfterCompletion}
+                  onReset={user.is_admin ? async () => {
+                    if (!quizId) return;
+                    await resetQuiz(quizId);
+                    invalidateMeCache();
+                    const state = await getQuizState(quizId);
+                    setQuizState(state);
+                    setSelectedChoice(null);
+                    setQuizResults(null);
+                  } : undefined}
+                />
               </div>
             ) : (
-              <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
+              <div className="flex-1 min-h-0 md:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
                   <section className="rounded-xl border bg-white shadow-sm">
                     {!quizState && (
@@ -409,11 +391,11 @@ export default function QuizPage() {
                       <>
                         <div className="p-4">
                           <div className="flex items-baseline justify-between gap-3 mb-1">
-                            <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
-                              Question {(attempt?.answered_count ?? 0) + 1} - {current.stem}
+                            <h2 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
+                              Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
                             </h2>
                             {attempt && (
-                              <span className="text-sm text-gray-400 whitespace-nowrap">
+                              <span className="text-base text-gray-400 whitespace-nowrap">
                                 {attempt.answered_count + 1} of {attempt.total_questions}
                               </span>
                             )}
@@ -421,72 +403,70 @@ export default function QuizPage() {
                         </div>
 
                         {current.subtitle && (
-                            <div className="px-4 pb-4">
-                              <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
+                          <div className="px-4 pb-4">
+                            <p className="text-xl 2xl:text-2xl text-gray-600">{current.subtitle}</p>
+                          </div>
+                        )}
+
+                        <hr className="border-gray-200" />
+
+                        <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
+                          <div
+                            className={`space-y-3 transition ${
+                              !hasAskedChat
+                                ? "pointer-events-none opacity-40 blur-[1px]"
+                                : ""
+                            }`}
+                          >
+                            <QuestionBox
+                              choices={current.choices as Choice[]}
+                              value={selectedChoice}
+                              onChange={setSelectedChoice}
+                              className="max-w-3xl 2xl:max-w-none mx-auto"
+                            />
+
+                            <div className="flex items-center justify-between gap-4 pt-2">
+                              <p className="text-base text-gray-600">
+                                Selected:{" "}
+                                <span className="font-semibold text-gray-900">
+                                  {selectedChoice?.toUpperCase() ?? "(none)"}
+                                </span>
+                              </p>
+
+                              <button
+                                onClick={onSubmit}
+                                disabled={!selectedChoice || submitting || chatLoading}
+                                className="btn-primary disabled:opacity-60 shrink-0"
+                              >
+                                {submitting ? "Submitting…" : "Submit answer"}
+                              </button>
                             </div>
-                          )}
+                          </div>
 
-                          <hr className="border-gray-200" />
-
-                          <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
-                            <div
-                              className={`space-y-3 transition ${
-                                !hasAskedChat
-                                  ? "pointer-events-none opacity-40 blur-[1px]"
-                                  : ""
-                              }`}
-                            >
-                              <QuestionBox
-                                choices={current.choices as Choice[]}
-                                value={selectedChoice}
-                                onChange={setSelectedChoice}
-                                className="max-w-3xl 2xl:max-w-none mx-auto"
-                              />
-
-                              <div className="flex items-center justify-between text-sm text-gray-600 pt-1">
-                                <div>
-                                  Selected:{" "}
-                                  <span className="font-medium">
-                                    {selectedChoice?.toUpperCase() ?? "(none)"}
-                                  </span>
-                                </div>
-
+                          {!hasAskedChat && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
+                                <p className="text-sm text-gray-800 mb-3">
+                                  Before choosing an answer, send this question to
+                                  the assistant and read the explanation.
+                                </p>
                                 <button
-                                  onClick={onSubmit}
-                                  disabled={
-                                    !selectedChoice || submitting || chatLoading
-                                  }
-                                  className="rounded-lg px-4 py-2 bg-accent-600 text-white text-sm font-medium disabled:opacity-60"
+                                  type="button"
+                                  onClick={onAskAssistantAboutQuestion}
+                                  className="inline-flex items-center justify-center rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 transition"
                                 >
-                                  {submitting ? "Submitting…" : "Submit answer"}
+                                  Ask the assistant about this question
                                 </button>
                               </div>
                             </div>
-
-                            {!hasAskedChat && (
-                              <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
-                                  <p className="text-sm text-gray-800 mb-3">
-                                    Before choosing an answer, send this question to
-                                    the assistant and read the explanation.
-                                  </p>
-                                  <button
-                                    type="button"
-                                    onClick={onAskAssistantAboutQuestion}
-                                    className="inline-flex items-center justify-center rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 transition"
-                                  >
-                                    Ask the assistant about this question
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          )}
+                        </div>
                       </>
                     )}
                   </section>
                 </div>
 
-                <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none [@media(max-height:700px)]:min-h-[420px] min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
+                <div className="flex-1 min-h-0 md:flex-none min-w-0 md:self-start md:sticky md:top-0 md:h-[calc(100vh-9rem)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox

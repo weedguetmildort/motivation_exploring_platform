@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
 import ProgressBar, { type StepId } from "../components/ProgressBar";
+import PageHeader from "../components/PageHeader";
 import {
   getSurveyState,
   submitSurvey,
@@ -65,14 +66,6 @@ const STAGE_CONFIG: Record<
   },
 };
 
-function isSurveyStage(value: unknown): value is SurveyStage {
-  return (
-    value === "pre_quiz" ||
-    value === "post_base" ||
-    value === "post_variant" ||
-    value === "complete"
-  );
-}
 
 function isActiveSurveyStage(value: unknown): value is ActiveSurveyStage {
   return (
@@ -178,10 +171,6 @@ export default function SurveyPage() {
     if (Array.isArray(value)) return value.length === 0;
     return false;
   }
-
-  const rawSurveyStage = isSurveyStage(user?.survey_stage)
-    ? user.survey_stage
-    : null;
 
   const forcedStage = isActiveSurveyStage(stage) ? stage : null;
 
@@ -416,37 +405,21 @@ export default function SurveyPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="site-header">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="page-title leading-tight">
-              {config.title}
-              <span className="ml-3 text-base font-normal text-gray-400">
-                Step {surveyStepNum} of 5
-              </span>
-            </h1>
-            <p className="mt-1 page-subtitle hidden md:block">{config.description}</p>
-          </div>
+      <PageHeader
+        title={
+          <>
+            {config.title}
+            <span className="ml-3 text-base font-normal text-gray-400">
+              Step {surveyStepNum} of 5
+            </span>
+          </>
+        }
+        subtitle={config.description}
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
-            >
-              <span className="hidden md:inline">Dashboard</span>
-              <span className="md:hidden">Back</span>
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="px-4 py-8 sm:px-8 sm:py-10">
+      <main className="px-4 py-8 sm:px-12 sm:py-10">
         <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[340px_1fr] lg:items-start lg:gap-12">
 
           {/* Sidebar */}

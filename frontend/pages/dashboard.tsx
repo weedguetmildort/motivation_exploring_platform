@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import ProgressBar from "../components/ProgressBar";
+import PageHeader from "../components/PageHeader";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -46,28 +47,12 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="site-header">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="page-title leading-tight">Dashboard</h1>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => router.push("/profile")}
-              className="btn-primary"
-            >
-              Profile
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Dashboard"
+        subtitle="Study progress overview."
+        onProfile={() => router.push("/profile")}
+        onLogout={onLogout}
+      />
 
       <div className="page-container">
         <div className="mb-4">
