@@ -49,6 +49,10 @@ class AIMessageMetadata(BaseModel):
         default=None,
         description="Tokens generated in the response"
     )
+    answer_incorrectly: Optional[bool] = Field(
+        default=None,
+        description="Whether the AI was instructed to answer incorrectly"
+    )
     custom_metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Flexible field for any additional metadata or analysis data"

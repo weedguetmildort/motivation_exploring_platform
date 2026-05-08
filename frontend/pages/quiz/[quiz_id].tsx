@@ -202,6 +202,9 @@ export default function QuizPage() {
   const attempt = quizState?.attempt;
   const conversationId = quizState?.conversation_id ?? null;
   const quizCompleted = attempt?.status === "completed";
+  const answerIncorrectly = Boolean(
+    current && attempt?.incorrect_question_ids?.includes(current.id),
+  );
 
   useEffect(() => {
     if (!current) return;
@@ -490,6 +493,8 @@ export default function QuizPage() {
                         onAssistantMessage={() => setFirstChatResponded(true)}
                         questionCollapsed={questionCollapsed}
                         onToggleQuestion={() => setQuestionCollapsed((c: boolean) => !c)}
+                        answerIncorrectly={answerIncorrectly}
+                        answerChoices={current?.choices}
                       />
                     </div>
                   )}

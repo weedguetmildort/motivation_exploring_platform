@@ -49,9 +49,7 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
     random.shuffle(ids)
 
     ids = ids[:MAX_QUIZ_QUESTIONS]
-
-    incorrect_count = random.randint(3, min(5,len(ids)))
-    incorrect_question_ids = random.sample(ids, incorrect_count)
+    incorrect_question_ids = random.sample(ids, min(3, len(ids)))
 
     now = datetime.utcnow()
     doc = {
@@ -61,6 +59,7 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
         "conversation_id": str(uuid.uuid4()),
         "status": "in_progress",
         "question_order": ids,
+        "incorrect_question_ids": incorrect_question_ids,
         "answers": [],
         "created_at": now,
         "updated_at": now,

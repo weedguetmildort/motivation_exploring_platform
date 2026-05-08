@@ -199,6 +199,7 @@ async def _standard_stream(
     request: Optional[Request] = None,
     agent_tag: Optional[str] = None,
     reply_prefix: str = "",
+    answer_incorrectly: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done.
 
@@ -213,8 +214,9 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
+    metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly)
     asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, user_message))
-    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply]))
+    asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, [stored_reply], metadata.model_dump(exclude_none=True)))
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -294,7 +296,8 @@ async def double_chat(
         msgs = messages_a if run_agent_a else messages_b
         return StreamingResponse(
             _standard_stream(msgs, col, user, conv_id, req.message,
-                             agent_tag=tag, reply_prefix=f"[AGENT {tag}] "),
+                             agent_tag=tag, reply_prefix=f"[AGENT {tag}] ",
+                             answer_incorrectly=req.answer_incorrectly),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -325,8 +328,9 @@ async def double_chat(
             replies[tag] += delta
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
+        metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
         asyncio.create_task(asyncio.to_thread(_save_message, col, "user", user, conv_id, req.message))
-        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store))
+        asyncio.create_task(asyncio.to_thread(_save_message, col, "assistant", user, conv_id, replies_to_store, metadata))
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -344,14 +348,18 @@ async def followup_quiz_chat(
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
-    messages = _build_standard_messages(history, req.message)
+    system_instruction = _build_system_instruction(
+        answer_incorrectly=req.answer_incorrectly,
+        has_choices=len(req.answer_choices) > 0,
+    )
+    messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
     async def after_done(full_reply: str) -> AsyncGenerator[str, None]:
         async for delta in generate_followup_questions(full_reply, _stream_ai):
             yield _sse({"type": "followup", "token": delta})
 
     return StreamingResponse(
-        _standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request),
+        _standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request, answer_incorrectly=req.answer_incorrectly),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -374,7 +382,10 @@ async def chat_with_embedded_links(
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
 
     system_instruction = (
-        _BASE_SYSTEM_PROMPT +
+        _build_system_instruction(
+            answer_incorrectly=req.answer_incorrectly,
+            has_choices=len(req.answer_choices) > 0,
+        ) +
         " Use web searches to gather information and cite sources inline."
         "Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
         "Prefer sources with stable, long-lived URLs."
@@ -412,8 +423,9 @@ async def chat_with_embedded_links(
             yield _sse({"type": "token", "content": word + ("" if i == len(words) - 1 else " ")})
 
         # OPTIMIZATION: Non-blocking database saves (fire-and-forget)
+        metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
         asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "user", user, conv_id, req.message))
-        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply]))
+        asyncio.create_task(asyncio.to_thread(_save_message, request.app.state.messages, "assistant", user, conv_id, [reply], metadata))
         
         yield _sse({"type": "done", "conversation_id": conv_id})
 
@@ -434,10 +446,14 @@ async def chat(
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
-    messages = _build_standard_messages(history, req.message)
+    system_instruction = _build_system_instruction(
+        answer_incorrectly=req.answer_incorrectly,
+        has_choices=len(req.answer_choices) > 0,
+    )
+    messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
     return StreamingResponse(
-        _standard_stream(messages, col, user, conv_id, req.message),
+        _standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

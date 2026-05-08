@@ -34,13 +34,21 @@ export async function sendChat(
   onToken?: (delta: string, agent?: string) => void,
   onDone?: (replies: string[], convId: string) => void,
   onFollowupToken?: (delta: string) => void,
+  answerIncorrectly?: boolean,
+  answerChoices?: { id: string; label: string }[],
 ): Promise<ChatResponse> {
   const resp = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     signal,
-    body: JSON.stringify({ message, conversation_id: conversationId, agents }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      agents,
+      answer_incorrectly: answerIncorrectly ?? false,
+      answer_choices: (answerChoices ?? []).map((c) => ({ id: c.id, label: c.label })),
+    }),
   });
 
   if (!resp.ok) {
