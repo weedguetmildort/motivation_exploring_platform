@@ -351,22 +351,13 @@ export default function SurveyPage() {
     const right = item.scale_right_label ?? "Strongly agree";
 
     return (
-      <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-4">
-        <p className="text-sm font-medium text-gray-900">
+      <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 sm:p-6">
+        <p className="text-base font-medium text-gray-900 leading-snug">
           {item.prompt}
           {item.required && <span className="text-red-500"> *</span>}
         </p>
 
-        <div className="flex items-center justify-between text-xs text-gray-500">
-          <span>
-            {min} = {left}
-          </span>
-          <span>
-            {max} = {right}
-          </span>
-        </div>
-
-        <div className="mt-2 flex justify-between gap-2">
+        <div className="flex gap-2 sm:gap-3">
           {Array.from({ length: max - min + 1 }).map((_, idx) => {
             const n = min + idx;
             const checked = value === n;
@@ -375,14 +366,13 @@ export default function SurveyPage() {
               <label
                 key={n}
                 className={[
-                  "flex flex-1 cursor-pointer flex-col items-center rounded-md border px-2 py-2 text-xs transition",
+                  "flex flex-1 cursor-pointer flex-col items-center rounded-xl border-2 py-4 transition select-none",
                   checked
-                    ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm"
-                    : "border-gray-200 bg-gray-50 text-gray-700 hover:border-blue-300 hover:bg-blue-50/60",
+                    ? "border-blue-500 bg-blue-50 shadow-sm"
+                    : "border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/50",
                 ].join(" ")}
               >
                 <input
-                  id={`${item.id}-${n}`}
                   type="radio"
                   name={item.id}
                   value={n}
@@ -390,10 +380,15 @@ export default function SurveyPage() {
                   onChange={() => setLikert(item.id, n)}
                   className="sr-only"
                 />
-                <span className="text-sm font-semibold">{n}</span>
+                <span className={`text-lg font-bold leading-none ${checked ? "text-blue-600" : "text-gray-500"}`}>{n}</span>
               </label>
             );
           })}
+        </div>
+
+        <div className="flex items-center justify-between text-sm text-gray-400">
+          <span>{left}</span>
+          <span>{right}</span>
         </div>
       </div>
     );
@@ -417,29 +412,33 @@ export default function SurveyPage() {
     return undefined;
   })();
 
+  const surveyStepNum = activeSurveyStage === "pre_quiz" ? 1 : activeSurveyStage === "post_base" ? 3 : 5;
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="border-b bg-white px-4 py-2 sm:px-6 sm:py-3">
-        <div className="mx-auto flex max-w-6xl 2xl:max-w-screen-2xl items-center justify-between gap-4">
+      <header className="site-header">
+        <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="page-title leading-tight">{config.title}</h1>
-            <p className="text-xs md:text-sm text-gray-500 leading-tight">
-              <span className="hidden md:inline">{config.description}</span>
-              <span className="md:hidden">Complete all required questions.</span>
-            </p>
+            <h1 className="page-title leading-tight">
+              {config.title}
+              <span className="ml-3 text-base font-normal text-gray-400">
+                Step {surveyStepNum} of 5
+              </span>
+            </h1>
+            <p className="mt-1 page-subtitle hidden md:block">{config.description}</p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
             <button
               onClick={() => router.push("/dashboard")}
-              className="text-sm px-3 py-1.5 rounded-lg bg-blue-600 text-white transition hover:bg-blue-700"
+              className="btn-primary"
             >
               <span className="hidden md:inline">Dashboard</span>
               <span className="md:hidden">Back</span>
             </button>
             <button
               onClick={onLogout}
-              className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -447,60 +446,67 @@ export default function SurveyPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl p-6">
-        <div className="mb-6">
-          <ProgressBar user={user} activeStep={surveyStepId} />
-        </div>
-        <form
-          onSubmit={onSubmit}
-          className="space-y-6 rounded-xl border bg-white p-6 shadow-sm"
-        >
-          {error && (
-            <div className="text-sm text-red-600" role="alert">
-              {error}
-            </div>
-          )}
+      <main className="px-4 py-8 sm:px-8 sm:py-10">
+        <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[340px_1fr] lg:items-start lg:gap-12">
 
-          {loadingSurvey ? (
-            <div className="text-sm text-gray-500">Loading survey…</div>
-          ) : items.length === 0 ? (
-            <div className="text-sm text-gray-500">{config.emptyMessage}</div>
-          ) : (
-            <>
-              {items.map((item) =>
-                item.type === "likert" ? (
-                  <div key={item.id}>{renderLikertRow(item)}</div>
-                ) : (
-                  <div
-                    key={item.id}
-                    className="rounded-lg border border-gray-200 bg-white p-4"
-                  >
-                    <p className="text-sm font-medium text-gray-900">
-                      {item.prompt}
-                      {item.required && (
-                        <span className="text-red-500"> *</span>
-                      )}
-                    </p>
-                    <p className="mt-2 text-xs text-gray-500">
-                      Unsupported question type:{" "}
-                      <span className="font-medium">{item.type}</span>
-                    </p>
-                  </div>
-                ),
-              )}
+          {/* Sidebar */}
+          <aside className="lg:sticky lg:top-6">
+            <ProgressBar user={user} activeStep={surveyStepId} collapsible />
+          </aside>
 
-              <div className="flex justify-end pt-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-                >
-                  {saving ? "Saving…" : config.submitLabel}
-                </button>
+          {/* Form */}
+          <form
+            onSubmit={onSubmit}
+            className="space-y-6 rounded-xl border bg-white p-8 shadow-sm"
+          >
+            {error && (
+              <div className="text-sm text-red-600" role="alert">
+                {error}
               </div>
-            </>
-          )}
-        </form>
+            )}
+
+            {loadingSurvey ? (
+              <div className="text-sm text-gray-500">Loading survey…</div>
+            ) : items.length === 0 ? (
+              <div className="text-sm text-gray-500">{config.emptyMessage}</div>
+            ) : (
+              <>
+                {items.map((item) =>
+                  item.type === "likert" ? (
+                    <div key={item.id}>{renderLikertRow(item)}</div>
+                  ) : (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-gray-200 bg-white p-5 sm:p-6"
+                    >
+                      <p className="text-base font-medium text-gray-900 leading-snug">
+                        {item.prompt}
+                        {item.required && (
+                          <span className="text-red-500"> *</span>
+                        )}
+                      </p>
+                      <p className="mt-2 text-sm text-gray-500">
+                        Unsupported question type:{" "}
+                        <span className="font-medium">{item.type}</span>
+                      </p>
+                    </div>
+                  ),
+                )}
+
+                <div className="flex justify-end pt-4">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition"
+                  >
+                    {saving ? "Saving…" : config.submitLabel}
+                  </button>
+                </div>
+              </>
+            )}
+          </form>
+
+        </div>
       </main>
     </div>
   );

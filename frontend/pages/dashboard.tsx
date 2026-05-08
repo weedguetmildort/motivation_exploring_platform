@@ -47,7 +47,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="site-header">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <h1 className="page-title leading-tight">Dashboard</h1>
           </div>
@@ -71,7 +71,7 @@ export default function DashboardPage() {
 
       <div className="page-container">
         <div className="mb-4">
-          <ProgressBar user={user} />
+          <ProgressBar user={user} horizontal />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">

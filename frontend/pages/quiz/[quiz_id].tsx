@@ -326,38 +326,37 @@ export default function QuizPage() {
 
   return (
     <div data-quiz-theme={quizId ?? "base"} className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
-      <header className="shrink-0 bg-white border-b px-4 py-2 sm:px-6 sm:py-3">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
+      <header className="site-header shrink-0">
+        <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <h1 className="page-title leading-tight">
               {quizId ? quizId.charAt(0).toUpperCase() + quizId.slice(1) : ""} Quiz
               {quizCompleted ? (
-                <span className="ml-2 text-sm font-semibold text-green-700">(Done)</span>
+                <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
               ) : (
-                <span className="ml-2 text-sm md:text-base font-normal text-gray-400">
+                <span className="ml-3 text-base font-normal text-gray-400">
                   Step {quizId === "base" ? 2 : 4} of 5
                 </span>
               )}
             </h1>
-              {!quizCompleted && (
-              <p className="page-subtitle">
+            {!quizCompleted && (
+              <p className="page-subtitle hidden md:block">
                 Progress saved automatically.
               </p>
             )}
           </div>
-          
-          <div className="flex items-center gap-2 shrink-0">
+
+          <div className="flex items-center gap-3 shrink-0">
             <button
               onClick={() => router.replace("/dashboard")}
-              className="text-sm px-3 py-1.5 rounded-lg bg-accent-600 text-white hover:bg-accent-700 transition"
+              className="btn-primary"
             >
               <span className="hidden md:inline">Dashboard</span>
               <span className="md:hidden">Back</span>
             </button>
-
             <button
               onClick={onLogout}
-              className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
+              className="btn-secondary"
             >
               Logout
             </button>
@@ -366,7 +365,7 @@ export default function QuizPage() {
       </header>
 
       <div className="flex-1 min-h-0 md:overflow-auto [@media(max-height:700px)]:flex-none">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-2 md:px-6 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
+        <div className="px-3 py-2 md:px-6 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
           <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto [@media(max-height:700px)]:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">

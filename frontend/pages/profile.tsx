@@ -101,22 +101,22 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white border-b px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
-        <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
+      <header className="site-header">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Profile</h1>
-            <p className="text-sm text-gray-600">Edit your user password</p>
+            <h1 className="page-title">Profile</h1>
+            <p className="page-subtitle hidden md:block">Edit your user password</p>
           </div>
           <div className="flex items-center gap-3">
-            <button 
+            <button
               onClick={() => router.push("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+              className="btn-primary"
             >
-              Back to Dashboard
+              Dashboard
             </button>
             <button
               onClick={onLogout}
-              className="text-sm px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
+              className="btn-secondary"
             >
               Logout
             </button>

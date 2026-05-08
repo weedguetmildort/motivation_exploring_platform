@@ -1,5 +1,6 @@
 // frontend/components/ChatHeader.tsx
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { getQuizTheme } from "../lib/quizTheme";
 
 type ChatHeaderProps = {
@@ -15,8 +16,38 @@ export default function ChatHeader({
 }: ChatHeaderProps) {
   const theme = getQuizTheme(quizId);
   const [showInfo, setShowInfo] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!showInfo) {
+      setPopoverPos(null);
+      return;
+    }
+
+    const raf = requestAnimationFrame(() => {
+      if (!buttonRef.current || !popoverRef.current) return;
+      const btn = buttonRef.current.getBoundingClientRect();
+      const pop = popoverRef.current.getBoundingClientRect();
+      const margin = 8;
+
+      let left = btn.left;
+      if (left + pop.width > window.innerWidth - margin) {
+        left = window.innerWidth - margin - pop.width;
+      }
+      left = Math.max(margin, left);
+
+      let top = btn.bottom + 8;
+      if (top + pop.height > window.innerHeight - margin) {
+        top = btn.top - pop.height - 8;
+      }
+
+      setPopoverPos({ top, left });
+    });
+
+    return () => cancelAnimationFrame(raf);
+  }, [showInfo]);
 
   useEffect(() => {
     if (!showInfo) return;
@@ -71,10 +102,16 @@ export default function ChatHeader({
             ?
           </button>
 
-          {showInfo && (
+          {showInfo && createPortal(
             <div
               ref={popoverRef}
-              className="absolute left-0 top-full mt-2 z-50 w-72 rounded-xl border bg-white p-4 shadow-lg"
+              data-quiz-theme={quizId}
+              style={
+                popoverPos
+                  ? { position: "fixed", top: popoverPos.top, left: popoverPos.left }
+                  : { position: "fixed", visibility: "hidden", top: 0, left: 0 }
+              }
+              className="z-50 w-72 max-w-[calc(100vw-1rem)] rounded-xl border bg-white p-4 shadow-lg"
             >
               <div className="flex items-center gap-2 mb-2">
                 <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-600">
@@ -98,7 +135,8 @@ export default function ChatHeader({
               <p className="mt-3 text-xs text-gray-400 leading-relaxed border-t border-gray-100 pt-2">
                 AI can make mistakes. Always verify important information and use your own judgment when answering.
               </p>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       </div>
