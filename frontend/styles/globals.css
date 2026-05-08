@@ -57,9 +57,9 @@ body {
 }
 
 @layer components {
-  /* Sticky page header — used by standard scroll-layout pages */
+  /* Sticky page header — used by all study pages */
   .site-header {
-    @apply sticky top-0 z-10 bg-white border-b px-4 py-3 sm:px-6 sm:py-4;
+    @apply sticky top-0 z-10 bg-white border-b px-4 py-4 sm:px-8 sm:py-5;
   }
 
   /* Header inner row — title + buttons, wraps on small screens */
@@ -70,17 +70,17 @@ body {
 
   /* Standard page content container */
   .page-container {
-    @apply max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-4 sm:px-6 sm:py-6;
+    @apply px-4 py-6 sm:px-8 sm:py-8;
   }
 
   /* Page-level h1 */
   .page-title {
-    @apply text-xl sm:text-2xl 2xl:text-3xl font-semibold text-gray-900;
+    @apply text-2xl sm:text-3xl 2xl:text-4xl font-semibold text-gray-900;
   }
 
   /* Page-level subtitle / description */
   .page-subtitle {
-    @apply text-sm 2xl:text-base text-gray-600;
+    @apply text-base 2xl:text-lg text-gray-600;
   }
 
   /* Card / section surface */
@@ -91,11 +91,11 @@ body {
   /* Primary action button — uses quiz accent color */
   .btn-primary {
     @apply bg-accent-600 text-white hover:bg-accent-700 transition
-           rounded-lg px-4 py-2 text-sm font-medium;
+           rounded-lg px-6 py-3 text-base font-semibold;
   }
 
   /* Secondary / ghost button */
   .btn-secondary {
-    @apply bg-gray-100 hover:bg-gray-200 transition rounded-lg px-4 py-2 text-sm;
+    @apply bg-gray-100 hover:bg-gray-200 transition rounded-lg px-6 py-3 text-base font-medium;
   }
 }
