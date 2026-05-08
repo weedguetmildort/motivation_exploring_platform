@@ -326,7 +326,8 @@ export default function QuizPage() {
   }
 
   return (
-    <div data-quiz-theme={quizId ?? "base"} className="flex flex-col h-[100dvh] bg-gray-50">
+      //Keep at page height on normal zoom levels but overflow and expand on very short viewports or when zoomed in, so the user can always access the whole quiz interface and see the quiz completion card without needing to scroll through the chat.
+    <div data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
       <PageHeader
         className="shrink-0"
         title={
@@ -346,9 +347,9 @@ export default function QuizPage() {
         onLogout={onLogout}
       />
 
-      <div className="flex-1 min-h-0 md:overflow-auto">
-        <div className="px-4 pt-2 sm:px-12 md:pt-6 md:pb-6 h-full md:h-auto">
-          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto">
+      <div className="flex-1 min-h-0 overflow-hidden [@media(max-height:760px)]:flex-none [@media(max-height:760px)]:overflow-visible">
+        <div className="px-page py-2 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
+          <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto [@media(max-height:700px)]:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">
                 {error}
@@ -374,7 +375,7 @@ export default function QuizPage() {
                 />
               </div>
             ) : (
-              <div className="flex-1 min-h-0 md:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
+              <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
                   <section className="rounded-xl border bg-white shadow-sm">
                     {!quizState && (
@@ -466,7 +467,7 @@ export default function QuizPage() {
                   </section>
                 </div>
 
-                <div className="flex-1 min-h-0 md:flex-none min-w-0 md:self-start md:sticky md:top-0 md:h-[calc(100vh-9rem)]">
+                <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none [@media(max-height:700px)]:min-h-[420px] min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
                       <ChatBox

@@ -57,20 +57,25 @@ body {
 }
 
 @layer components {
-  /* Sticky page header — used by all study pages */
+  /* ── Single source of truth for horizontal page padding ──
+     Change px-8 / sm:px-12 here to shift header + body padding everywhere. */
+  .px-page {
+    @apply px-2 sm:px-12;
+  }
+
+  /* page header — used by all pages */
   .site-header {
-    @apply sticky top-0 z-10 bg-white border-b px-4 py-3 sm:px-12 sm:py-4;
+    @apply bg-white border-b py-3 sm:py-4 px-page;
   }
 
   /* Header inner row — title + buttons, wraps on small screens */
   .site-header-inner {
-    @apply max-w-6xl 2xl:max-w-screen-2xl mx-auto
-           flex flex-wrap items-center justify-between gap-y-2;
+    @apply flex flex-wrap items-center justify-between gap-y-2;
   }
 
   /* Standard page content container */
   .page-container {
-    @apply px-4 py-6 sm:px-12 sm:py-8;
+    @apply px-page py-4 sm:py-6;
   }
 
   /* Page-level h1 */
