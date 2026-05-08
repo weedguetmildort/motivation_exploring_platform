@@ -134,24 +134,20 @@ export default function Playground() {
           <h2 className="text-lg 2xl:text-xl font-medium mb-3">Case Selection</h2>
           <div className="space-y-4 max-w-3xl 2xl:max-w-none mx-auto">
             <div className="flex flex-wrap justify-center gap-3 mt-8">
-              {([
-                { id: "base",     activeClass: "bg-blue-600 text-white shadow-lg scale-105",   label: "Base Case" },
-                { id: "followup", activeClass: "bg-teal-600 text-white shadow-lg scale-105",   label: "Follow-up Question Case" },
-                { id: "double",   activeClass: "bg-violet-600 text-white shadow-lg scale-105", label: "Double Agent Case" },
-                { id: "links",    activeClass: "bg-red-600 text-white shadow-lg scale-105",  label: "Embedded Links Case" },
-              ] as const).map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setActive(c.id)}
-                  aria-pressed={active === c.id}
-                  className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
-                    active === c.id
-                      ? c.activeClass
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  {c.label}
-                </button>
+              {(["base", "followup", "double", "links"] as const).map((id) => (
+                <div key={id} data-quiz-theme={id}>
+                  <button
+                    onClick={() => setActive(id)}
+                    aria-pressed={active === id}
+                    className={`px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-md ${
+                      active === id
+                        ? "bg-accent-600 text-white shadow-lg scale-105"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    {{ base: "Base Case", followup: "Follow-up Question Case", double: "Double Agent Case", links: "Embedded Links Case" }[id]}
+                  </button>
+                </div>
               ))}
             </div>
             <div className="p-6 bg-white rounded-xl shadow-inner">

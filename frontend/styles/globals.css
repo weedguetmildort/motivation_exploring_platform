@@ -48,12 +48,12 @@ body {
 }
 
 [data-quiz-theme="links"] {
---accent-50:  255 253 230;   /* cream yellow */
---accent-100: 255 247 180;   /* pale lemon */
---accent-400: 255 215 64;    /* vibrant lemon */
---accent-500: 245 190 35;    /* golden lemon */
---accent-600: 214 145 20;    /* warm gold */
---accent-700: 166 105 10;    /* deep gold */
+--accent-50:  248 250 252;   /* slate-50  */
+--accent-100: 241 245 249;   /* slate-100 */
+--accent-400: 148 163 184;   /* slate-400 */
+--accent-500: 100 116 139;   /* slate-500 */
+--accent-600: 71 85 105;     /* slate-600 */
+--accent-700: 51 65 85;      /* slate-700 */
 }
 
 @layer components {
