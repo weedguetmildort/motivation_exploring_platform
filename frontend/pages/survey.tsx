@@ -2,8 +2,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
-import ProgressBar, { type StepId } from "../components/ProgressBar";
+import ProgressBar from "../components/ProgressBar";
 import PageHeader from "../components/PageHeader";
+import {
+  STAGE_CONFIG,
+  isActiveSurveyStage,
+  type ActiveSurveyStage,
+  type StudyStepId,
+} from "../lib/studySteps";
 import {
   getSurveyState,
   submitSurvey,
@@ -11,74 +17,12 @@ import {
   type SurveyAnswer,
 } from "../lib/surveys";
 
-type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-
-type ActiveSurveyStage = Exclude<SurveyStage, "complete">;
-
-type ExtendedUser = User & {
-  assigned_var?: string | null;
-  survey_stage?: SurveyStage | null;
-  survey_pre_base_completed?: boolean;
-  survey_post_base_completed?: boolean;
-  survey_post_variant_completed?: boolean;
-  quiz_base_completed?: boolean;
-  quiz_variant_completed?: boolean;
-};
-
-const STAGE_CONFIG: Record<
-  ActiveSurveyStage,
-  {
-    title: string;
-    description: string;
-    emptyMessage: string;
-    submitLabel: string;
-    loadError: string;
-  }
-> = {
-  pre_quiz: {
-    title: "Pre-Quiz Survey",
-    description:
-      "Before you begin the base quiz, please answer a few quick questions.",
-    emptyMessage:
-      "No survey items found for the pre-quiz survey. Add items in the Surveys Panel.",
-    submitLabel: "Begin Base Quiz",
-    loadError: "Failed to load the pre-quiz survey.",
-  },
-
-  post_base: {
-    title: "Post-Base Quiz Survey",
-    description:
-      "You’ve completed the base quiz. Please answer a few follow-up questions.",
-    emptyMessage:
-      "No survey items found for the post-base survey. Add items in the Surveys Panel.",
-    submitLabel: "Continue to Variant Quiz",
-    loadError: "Failed to load the post-base survey.",
-  },
-
-  post_variant: {
-    title: "Final Survey",
-    description:
-      "You’ve completed the variant quiz. Please answer a few final questions.",
-    emptyMessage:
-      "No survey items found for the post-variant survey. Add items in the Surveys Panel.",
-    submitLabel: "Finish",
-    loadError: "Failed to load the final survey.",
-  },
-};
-
-
-function isActiveSurveyStage(value: unknown): value is ActiveSurveyStage {
-  return (
-    value === "pre_quiz" || value === "post_base" || value === "post_variant"
-  );
-}
-
 /**
  * Returns the survey stage that should actually be shown right now.
  * Returns null when the user should not see a survey page and should be routed onward.
  */
 function resolveCurrentSurveyStage(
-  user: ExtendedUser | null,
+  user: User | null,
 ): ActiveSurveyStage | null {
   if (!user) return null;
 
@@ -113,7 +57,7 @@ function getLoadStage(activeStage: ActiveSurveyStage): ActiveSurveyStage {
  * When there is no active survey to show, decide where the user should go next.
  */
 function getNextRouteForResolvedGap(
-  user: ExtendedUser | null,
+  user: User | null,
   quizId?: string,
 ): string {
   if (!user) return "/dashboard";
@@ -148,7 +92,7 @@ export default function SurveyPage() {
     stage?: string;
   };
 
-  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
   const [saving, setSaving] = useState(false);
@@ -186,7 +130,7 @@ export default function SurveyPage() {
         const res = await getMe();
         if (cancel) return;
 
-        setUser(res.user as ExtendedUser);
+        setUser(res.user as User);
       } catch {
         if (!cancel) router.replace("/login");
       } finally {
@@ -243,7 +187,7 @@ export default function SurveyPage() {
           const refreshed = await getMe();
           if (cancel) return;
           router.replace(
-            getNextRouteForResolvedGap(refreshed.user as ExtendedUser, quiz_id),
+            getNextRouteForResolvedGap(refreshed.user as User, quiz_id),
           );
           return;
         }
@@ -305,7 +249,7 @@ export default function SurveyPage() {
       await submitSurvey(activeSurveyStage, answers);
       invalidateMeCache();
 
-      const optimisticUser: ExtendedUser | null =
+      const optimisticUser: User | null =
         user &&
         ({
           ...user,
@@ -321,7 +265,7 @@ export default function SurveyPage() {
             activeSurveyStage === "post_variant"
               ? true
               : user.survey_post_variant_completed,
-        } as ExtendedUser);
+        } as User);
 
       router.replace(getNextRouteForResolvedGap(optimisticUser, quiz_id));
     } catch (e) {
@@ -394,7 +338,7 @@ export default function SurveyPage() {
   if (!user) return null;
   if (!activeSurveyStage || !config) return null;
 
-  const surveyStepId: StepId | undefined = (() => {
+  const surveyStepId: StudyStepId | undefined = (() => {
     if (activeSurveyStage === "pre_quiz") return "survey_pre";
     if (activeSurveyStage === "post_base") return "survey_post_base";
     if (activeSurveyStage === "post_variant") return "survey_final";

@@ -14,41 +14,25 @@ import {
 import ChatBox from "../../components/ChatBox";
 import QuizCompletionCard from "../../components/QuizCompletionCard";
 import PageHeader from "../../components/PageHeader";
-// ProgressBar is used on dashboard/survey; quiz page shows inline step count
+import {
+  STEP_SUBTITLES,
+  isVariantQuizId,
+  type QuizId,
+} from "../../lib/studySteps";
 
-type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-
-const VARIANT_QUIZ_IDS = ["followup", "links", "double"] as const;
-type VariantQuizId = (typeof VARIANT_QUIZ_IDS)[number];
-type QuizId = "base" | VariantQuizId;
-
-type ExtendedUser = User & {
-  assigned_var?: string | null;
-  survey_stage?: SurveyStage | null;
-  survey_pre_base_completed?: boolean;
-  quiz_base_completed?: boolean;
-  survey_post_base_completed?: boolean;
-  quiz_variant_completed?: boolean;
-  survey_post_variant_completed?: boolean;
-};
-
-function isVariantQuizId(value: string): value is VariantQuizId {
-  return (VARIANT_QUIZ_IDS as readonly string[]).includes(value);
-}
-
-function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
+function isValidQuizId(value: string, user?: User | null): boolean {
   if (user?.is_admin) return true;
   return value === "base" || isVariantQuizId(value);
 }
 
 function isUsersAssignedVariant(
   quizId: string,
-  user?: ExtendedUser | null,
+  user?: User | null,
 ): boolean {
   return Boolean(user?.assigned_var && quizId === user.assigned_var);
 }
 
-function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
+function canAccessQuiz(quizId: QuizId, user: User): boolean {
   if (user.is_admin) {
     return true;
   }
@@ -64,7 +48,7 @@ function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
   );
 }
 
-function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
+function getBlockedQuizRedirect(quizId: QuizId, user: User): string {
   const assignedVariantPath = user.assigned_var
     ? `/quiz/${user.assigned_var}`
     : "/dashboard";
@@ -100,7 +84,7 @@ export default function QuizPage() {
   const router = useRouter();
   const rawQuizId = [router.query.quiz_id].flat()[0] ?? null;
 
-  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
   const [quizState, setQuizState] = useState<QuizStateResponse | null>(null);
@@ -132,7 +116,7 @@ export default function QuizPage() {
         const res = await getMe();
         if (cancel) return;
 
-        const u = res.user as ExtendedUser;
+        const u = res.user as User;
 
         if (!isValidQuizId(rawQuizId, u)) {
           router.replace("/dashboard");
@@ -223,7 +207,7 @@ export default function QuizPage() {
     try {
       invalidateMeCache();
       const res = await getMe();
-      const refreshedUser = res.user as ExtendedUser;
+      const refreshedUser = res.user as User;
 
       if (quizId === "base") {
         if (!refreshedUser.survey_post_base_completed) {
@@ -342,7 +326,7 @@ export default function QuizPage() {
             )}
           </>
         }
-        subtitle={!quizCompleted ? "Answer each of the questions using the help of the AI assistant." : undefined}
+        subtitle={!quizCompleted ? STEP_SUBTITLES[quizId === "base" ? "quiz_base" : "quiz_variant"] : undefined}
         onDashboard={() => router.replace("/dashboard")}
         onLogout={onLogout}
       />

@@ -1,57 +1,23 @@
 // frontend/components/ProgressBar.tsx
 import { useState } from "react";
+import { buildStudySteps, type StudyStepId, type StudyStep } from "../lib/studySteps";
 import type { User } from "../lib/auth";
 
-/**
- * Step identifiers matching the actual user-visible study flow.
- * Demographics is excluded — always completed before these pages.
- *
- * Flow: Pre-Quiz Survey → Base Quiz → Post-Base Survey → Variant Quiz → Final Survey
- */
-export type StepId =
-  | "survey_pre"
-  | "quiz_base"
-  | "survey_post_base"
-  | "quiz_variant"
-  | "survey_final";
-
-type Step = {
-  id: StepId;
-  label: string;
-  abbr: string;
-  completed: boolean;
-};
+// Re-exported so existing imports of `StepId` from this file keep working.
+export type { StudyStepId as StepId };
 
 type ProgressBarProps = {
   user: User;
   /** Explicitly mark which step the user is currently on. */
-  activeStep?: StepId;
+  activeStep?: StudyStepId;
   /** Show a minimize/maximize toggle in the card header. */
   collapsible?: boolean;
   /** Force horizontal layout at sm+ (instead of going vertical again at lg+). */
   horizontal?: boolean;
 };
 
-function buildSteps(user: User): Step[] {
-  const variantAbbr = (() => {
-    const v = user.assigned_var;
-    if (v === "followup") return "Follow-Up";
-    if (v === "double") return "Dual";
-    if (v === "links") return "Links";
-    return "Variant";
-  })();
-
-  return [
-    { id: "survey_pre",       label: "Pre-Quiz Survey",     abbr: "Survey",    completed: !!user.survey_pre_base_completed },
-    { id: "quiz_base",        label: "Base Quiz",           abbr: "Base Quiz", completed: !!user.quiz_base_completed },
-    { id: "survey_post_base", label: "Mid Survey",          abbr: "Survey",    completed: !!user.survey_post_base_completed },
-    { id: "quiz_variant",     label: `${variantAbbr} Quiz`, abbr: variantAbbr, completed: !!user.quiz_variant_completed },
-    { id: "survey_final",     label: "Final Survey",        abbr: "Survey",    completed: !!user.survey_post_variant_completed },
-  ];
-}
-
 function StepCircle({ step, index, isCurrent, isCompleted }: {
-  step: Step; index: number; isCurrent: boolean; isCompleted: boolean;
+  step: StudyStep; index: number; isCurrent: boolean; isCompleted: boolean;
 }) {
   return (
     <div
@@ -77,7 +43,7 @@ function StepCircle({ step, index, isCurrent, isCompleted }: {
 }
 
 export default function ProgressBar({ user, activeStep, collapsible, horizontal }: ProgressBarProps) {
-  const steps = buildSteps(user);
+  const steps = buildStudySteps(user);
   const completedCount = steps.filter((s) => s.completed).length;
   const [open, setOpen] = useState(true);
 
