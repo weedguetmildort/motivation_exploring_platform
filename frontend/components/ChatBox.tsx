@@ -85,6 +85,8 @@ type ChatBoxProps = {
   disableCancel?: boolean;
   questionCollapsed?: boolean;
   onToggleQuestion?: () => void;
+  answerIncorrectly?: boolean;
+  answerChoices?: { id: string; label: string }[];
 };
 
 export default function ChatBox({
@@ -98,6 +100,8 @@ export default function ChatBox({
   disableCancel = false,
   questionCollapsed,
   onToggleQuestion,
+  answerIncorrectly = false,
+  answerChoices,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -288,6 +292,8 @@ export default function ChatBox({
         agents,
         {
           signal: controller.signal,
+          answerIncorrectly,
+          answerChoices,
           // onToken — streams main text at 60fps
           onToken: (delta, agent) => {
             const key = agent ?? "default";

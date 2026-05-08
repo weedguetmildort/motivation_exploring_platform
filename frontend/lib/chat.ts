@@ -54,7 +54,8 @@ export interface SendChatOptions {
   onToken?: (delta: string, agent?: string) => void;
   onDone?: (replies: string[], convId: string) => void;
   onFollowupToken?: (delta: string) => void;
-  onCitations?: (citations: Citation[]) => void;
+  answerIncorrectly?: boolean;
+  answerChoices?: { id: string; label: string }[];
 }
 
 export async function sendChat(
@@ -64,13 +65,19 @@ export async function sendChat(
   agents: string[] = [],
   options: SendChatOptions = {},
 ): Promise<ChatResponse> {
-  const { signal, onToken, onDone, onFollowupToken, onCitations } = options;
+  const { signal, onToken, onDone, onFollowupToken, answerIncorrectly, answerChoices } = options;
   const resp = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     signal,
-    body: JSON.stringify({ message, conversation_id: conversationId, agents }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      agents,
+      answer_incorrectly: answerIncorrectly ?? false,
+      answer_choices: (answerChoices ?? []).map((c) => ({ id: c.id, label: c.label })),
+    }),
   });
 
   if (!resp.ok) {
@@ -142,7 +149,6 @@ export async function sendChat(
           }
         } else if (event.type === "citations") {
           citations = (event.citations as Citation[]) ?? [];
-          onCitations?.(citations);
         } else if (event.type === "done") {
           returnedConvId = (event.conversation_id as string) ?? returnedConvId;
           if (onDone) {
