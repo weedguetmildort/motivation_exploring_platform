@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { getMe, logout, changePassword, type User } from "../lib/auth";
+import PageHeader from "../components/PageHeader";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -100,29 +101,12 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
-        <div className="max-w-6xl mx-auto flex items-center justify-between h-full">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Profile</h1>
-            <p className="text-sm text-gray-600">Edit your user password</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={() => router.push("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-            >
-              Back to Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="text-sm px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Profile"
+        subtitle="Edit your user password"
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
       {/* Main content */}
       <main className="max-w-xl mx-auto p-6">

@@ -3,6 +3,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { sendChat, loadUserHistory } from "../lib/chat";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
+import ChatHeader from "./ChatHeader";
 import {
   getFilteredAgents,
   getPartialMention,
@@ -49,7 +50,7 @@ const MessageBubble = memo(function MessageBubble({
   const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
   const bubbleClass =
     role === "user"
-      ? "bg-blue-600 text-white"
+      ? "bg-accent-600 text-white"
       : bot
         ? BOT_COLORS[bot]
         : "bg-gray-100 text-gray-900";
@@ -60,7 +61,7 @@ const MessageBubble = memo(function MessageBubble({
   return (
     <div>
       {showLabel && (
-        <div className={`text-xs text-gray-600 px-1 mb-1 ${computedLabelAlign === "center" ? "text-center" : computedLabelAlign === "right" ? "text-right" : "text-left"}`}>
+        <div className={`text-sm text-gray-600 px-1 mb-1 ${computedLabelAlign === "center" ? "text-center" : computedLabelAlign === "right" ? "text-right" : "text-left"}`}>
           {label}
         </div>
       )}
@@ -84,6 +85,8 @@ type ChatBoxProps = {
   disableCancel?: boolean;
   questionCollapsed?: boolean;
   onToggleQuestion?: () => void;
+  answerIncorrectly?: boolean;
+  answerChoices?: { id: string; label: string }[];
 };
 
 export default function ChatBox({
@@ -97,6 +100,8 @@ export default function ChatBox({
   disableCancel = false,
   questionCollapsed,
   onToggleQuestion,
+  answerIncorrectly = false,
+  answerChoices,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -287,6 +292,8 @@ export default function ChatBox({
         agents,
         {
           signal: controller.signal,
+          answerIncorrectly,
+          answerChoices,
           // onToken — streams main text at 60fps
           onToken: (delta, agent) => {
             const key = agent ?? "default";
@@ -522,7 +529,7 @@ export default function ChatBox({
         const bubbleClass = bot ? BOT_COLORS[bot] : "bg-gray-100 text-gray-900";
         return (
           <div key={`streaming-${agentKey}`}>
-            <div className="text-xs text-gray-600 px-1 mb-1 text-left">{label}</div>
+            <div className="text-sm text-gray-600 px-1 mb-1 text-left">{label}</div>
             <div className="flex justify-start">
               <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
                 <MarkdownMessage content={content} />
@@ -563,41 +570,12 @@ export default function ChatBox({
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b sticky top-0 bg-white/90 backdrop-blur rounded-t-2xl flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600">
-            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-            </svg>
-          </div>
-          <h2 className="text-xl font-semibold text-gray-900 2xl:text-2xl">AI Assistant</h2>
-        </div>
-        {onToggleQuestion && (
-          <button
-            type="button"
-            className="md:hidden inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 hover:text-gray-900 active:scale-95"
-            onClick={onToggleQuestion}
-            aria-label={questionCollapsed ? "Minimize question" : "Maximize question"}
-          >
-            {questionCollapsed ? (
-              <>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-                Minimize
-              </>
-            ) : (
-              <>
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-                </svg>
-                Maximize
-              </>
-            )}
-          </button>
-        )}
-      </div>
+    <div data-quiz-theme={quizId} className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
+      <ChatHeader
+        quizId={quizId}
+        questionCollapsed={questionCollapsed}
+        onToggleQuestion={onToggleQuestion}
+      />
 
       <div
         ref={scrollerRef}
@@ -609,21 +587,21 @@ export default function ChatBox({
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
             {(followupActive || followupStreamText !== "") && !followupQuestions?.length && !followupInProgress ? (
-              <div className="text-sm text-gray-500">Loading follow-up questions…</div>
+              <div className="text-base text-gray-500">Loading follow-up questions…</div>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {followupQuestions?.map((q, i) => (
                   <button
                     key={i}
                     type="button"
-                    className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
+                    className="text-sm px-3 py-1.5 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
                     onClick={() => handleFollowupClick(q)}
                   >
                     <MarkdownMessage content={q} inline />
                   </button>
                 ))}
                 {followupInProgress && !followupQuestions?.includes(followupInProgress) && (
-                  <span className="text-[0.8125rem] px-3 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
+                  <span className="text-sm px-3 py-1.5 rounded-full border border-gray-200 bg-gray-50 text-gray-400 italic">
                     {followupInProgress}
                   </span>
                 )}
@@ -633,13 +611,13 @@ export default function ChatBox({
         )}
 
         {pending && !followupActive && Object.keys(streamingMap).length === 0 && (
-          <div className="text-sm text-gray-500">Assistant is typing…</div>
+          <div className="text-base text-gray-500">Assistant is typing…</div>
         )}
 
         {renderStreaming()}
 
         {error && (
-          <div role="alert" className="text-sm text-red-600">
+          <div role="alert" className="text-base text-red-600">
             {error}
           </div>
         )}
@@ -656,7 +634,7 @@ export default function ChatBox({
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
-            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-gray-900"
+            className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-base text-gray-900"
             placeholder="Type a message…"
             value={input}
             onChange={handleInputChange}
@@ -664,7 +642,7 @@ export default function ChatBox({
             rows={2}
           />
           <button
-            className={`rounded-xl px-4 py-2 font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 disabled:opacity-60"}`}
+            className={`rounded-xl px-4 py-2 text-base font-medium text-white ${pending && disableCancel ? "bg-gray-400 cursor-default" : pending ? "bg-red-600 hover:bg-red-700" : "bg-accent-600 disabled:opacity-60"}`}
             onClick={pending && !disableCancel ? handleCancel : onSend}
             disabled={disableCancel || (!pending && !input.trim())}
           >

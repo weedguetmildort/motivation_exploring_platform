@@ -2,6 +2,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
+import ProgressBar from "../components/ProgressBar";
+import PageHeader from "../components/PageHeader";
+import {
+  STAGE_CONFIG,
+  isActiveSurveyStage,
+  type ActiveSurveyStage,
+  type StudyStepId,
+} from "../lib/studySteps";
 import {
   getSurveyState,
   submitSurvey,
@@ -9,82 +17,12 @@ import {
   type SurveyAnswer,
 } from "../lib/surveys";
 
-type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-
-type ActiveSurveyStage = Exclude<SurveyStage, "complete">;
-
-type ExtendedUser = User & {
-  assigned_var?: string | null;
-  survey_stage?: SurveyStage | null;
-  survey_pre_base_completed?: boolean;
-  survey_post_base_completed?: boolean;
-  survey_post_variant_completed?: boolean;
-  quiz_base_completed?: boolean;
-  quiz_variant_completed?: boolean;
-};
-
-const STAGE_CONFIG: Record<
-  ActiveSurveyStage,
-  {
-    title: string;
-    description: string;
-    emptyMessage: string;
-    submitLabel: string;
-    loadError: string;
-  }
-> = {
-  pre_quiz: {
-    title: "Pre-Quiz Survey",
-    description:
-      "Before you begin the base quiz, please answer a few quick questions.",
-    emptyMessage:
-      "No survey items found for the pre-quiz survey. Add items in the Surveys Panel.",
-    submitLabel: "Begin Base Quiz",
-    loadError: "Failed to load the pre-quiz survey.",
-  },
-
-  post_base: {
-    title: "Post-Base Quiz Survey",
-    description:
-      "You’ve completed the base quiz. Please answer a few follow-up questions.",
-    emptyMessage:
-      "No survey items found for the post-base survey. Add items in the Surveys Panel.",
-    submitLabel: "Continue to Variant Quiz",
-    loadError: "Failed to load the post-base survey.",
-  },
-
-  post_variant: {
-    title: "Final Survey",
-    description:
-      "You’ve completed the variant quiz. Please answer a few final questions.",
-    emptyMessage:
-      "No survey items found for the post-variant survey. Add items in the Surveys Panel.",
-    submitLabel: "Finish",
-    loadError: "Failed to load the final survey.",
-  },
-};
-
-function isSurveyStage(value: unknown): value is SurveyStage {
-  return (
-    value === "pre_quiz" ||
-    value === "post_base" ||
-    value === "post_variant" ||
-    value === "complete"
-  );
-}
-
-function isActiveSurveyStage(value: unknown): value is ActiveSurveyStage {
-  return (
-    value === "pre_quiz" || value === "post_base" || value === "post_variant"
-  );
-}
-
 /**
  * Returns the survey stage that should actually be shown right now.
  * Returns null when the user should not see a survey page and should be routed onward.
  */
 function resolveCurrentSurveyStage(
-  user: ExtendedUser | null,
+  user: User | null,
 ): ActiveSurveyStage | null {
   if (!user) return null;
 
@@ -119,7 +57,7 @@ function getLoadStage(activeStage: ActiveSurveyStage): ActiveSurveyStage {
  * When there is no active survey to show, decide where the user should go next.
  */
 function getNextRouteForResolvedGap(
-  user: ExtendedUser | null,
+  user: User | null,
   quizId?: string,
 ): string {
   if (!user) return "/dashboard";
@@ -154,7 +92,7 @@ export default function SurveyPage() {
     stage?: string;
   };
 
-  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
   const [saving, setSaving] = useState(false);
@@ -178,10 +116,6 @@ export default function SurveyPage() {
     return false;
   }
 
-  const rawSurveyStage = isSurveyStage(user?.survey_stage)
-    ? user.survey_stage
-    : null;
-
   const forcedStage = isActiveSurveyStage(stage) ? stage : null;
 
   const activeSurveyStage = forcedStage ?? resolveCurrentSurveyStage(user);
@@ -196,7 +130,7 @@ export default function SurveyPage() {
         const res = await getMe();
         if (cancel) return;
 
-        setUser(res.user as ExtendedUser);
+        setUser(res.user as User);
       } catch {
         if (!cancel) router.replace("/login");
       } finally {
@@ -253,7 +187,7 @@ export default function SurveyPage() {
           const refreshed = await getMe();
           if (cancel) return;
           router.replace(
-            getNextRouteForResolvedGap(refreshed.user as ExtendedUser, quiz_id),
+            getNextRouteForResolvedGap(refreshed.user as User, quiz_id),
           );
           return;
         }
@@ -315,7 +249,7 @@ export default function SurveyPage() {
       await submitSurvey(activeSurveyStage, answers);
       invalidateMeCache();
 
-      const optimisticUser: ExtendedUser | null =
+      const optimisticUser: User | null =
         user &&
         ({
           ...user,
@@ -331,7 +265,7 @@ export default function SurveyPage() {
             activeSurveyStage === "post_variant"
               ? true
               : user.survey_post_variant_completed,
-        } as ExtendedUser);
+        } as User);
 
       router.replace(getNextRouteForResolvedGap(optimisticUser, quiz_id));
     } catch (e) {
@@ -350,22 +284,13 @@ export default function SurveyPage() {
     const right = item.scale_right_label ?? "Strongly agree";
 
     return (
-      <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-4">
-        <p className="text-sm font-medium text-gray-900">
+      <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 sm:p-6">
+        <p className="text-base font-medium text-gray-900 leading-snug">
           {item.prompt}
           {item.required && <span className="text-red-500"> *</span>}
         </p>
 
-        <div className="flex items-center justify-between text-xs text-gray-500">
-          <span>
-            {min} = {left}
-          </span>
-          <span>
-            {max} = {right}
-          </span>
-        </div>
-
-        <div className="mt-2 flex justify-between gap-2">
+        <div className="flex gap-2 sm:gap-3">
           {Array.from({ length: max - min + 1 }).map((_, idx) => {
             const n = min + idx;
             const checked = value === n;
@@ -374,14 +299,13 @@ export default function SurveyPage() {
               <label
                 key={n}
                 className={[
-                  "flex flex-1 cursor-pointer flex-col items-center rounded-md border px-2 py-2 text-xs transition",
+                  "flex flex-1 cursor-pointer flex-col items-center rounded-xl border-2 py-4 transition select-none",
                   checked
-                    ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm"
-                    : "border-gray-200 bg-gray-50 text-gray-700 hover:border-blue-300 hover:bg-blue-50/60",
+                    ? "border-blue-500 bg-blue-50 shadow-sm"
+                    : "border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/50",
                 ].join(" ")}
               >
                 <input
-                  id={`${item.id}-${n}`}
                   type="radio"
                   name={item.id}
                   value={n}
@@ -389,10 +313,15 @@ export default function SurveyPage() {
                   onChange={() => setLikert(item.id, n)}
                   className="sr-only"
                 />
-                <span className="text-sm font-semibold">{n}</span>
+                <span className={`text-lg font-bold leading-none ${checked ? "text-blue-600" : "text-gray-500"}`}>{n}</span>
               </label>
             );
           })}
+        </div>
+
+        <div className="flex items-center justify-between text-sm text-gray-400">
+          <span>{left}</span>
+          <span>{right}</span>
         </div>
       </div>
     );
@@ -409,85 +338,92 @@ export default function SurveyPage() {
   if (!user) return null;
   if (!activeSurveyStage || !config) return null;
 
+  const surveyStepId: StudyStepId | undefined = (() => {
+    if (activeSurveyStage === "pre_quiz") return "survey_pre";
+    if (activeSurveyStage === "post_base") return "survey_post_base";
+    if (activeSurveyStage === "post_variant") return "survey_final";
+    return undefined;
+  })();
+
+  const surveyStepNum = activeSurveyStage === "pre_quiz" ? 1 : activeSurveyStage === "post_base" ? 3 : 5;
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="border-b bg-white px-6 h-[8dvh] max-h-24 overflow-hidden overflow-hidden">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">
-              {config.title}
-            </h1>
-            <p className="text-sm text-gray-600">{config.description}</p>
-          </div>
+      <PageHeader
+        title={
+          <>
+            {config.title}
+            <span className="ml-3 text-base font-normal text-gray-400">
+              Step {surveyStepNum} of 5
+            </span>
+          </>
+        }
+        subtitle={config.description}
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition hover:bg-blue-700"
-            >
-              Back to Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="rounded-lg bg-gray-100 px-4 py-2 text-sm hover:bg-gray-200"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <main className="px-4 py-8 sm:px-12 sm:py-10">
+        <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[340px_1fr] lg:items-start lg:gap-12">
 
-      <main className="mx-auto max-w-3xl p-6">
-        <form
-          onSubmit={onSubmit}
-          className="space-y-6 rounded-xl border bg-white p-6 shadow-sm"
-        >
-          {error && (
-            <div className="text-sm text-red-600" role="alert">
-              {error}
-            </div>
-          )}
+          {/* Sidebar */}
+          <aside className="lg:sticky lg:top-6">
+            <ProgressBar user={user} activeStep={surveyStepId} collapsible />
+          </aside>
 
-          {loadingSurvey ? (
-            <div className="text-sm text-gray-500">Loading survey…</div>
-          ) : items.length === 0 ? (
-            <div className="text-sm text-gray-500">{config.emptyMessage}</div>
-          ) : (
-            <>
-              {items.map((item) =>
-                item.type === "likert" ? (
-                  <div key={item.id}>{renderLikertRow(item)}</div>
-                ) : (
-                  <div
-                    key={item.id}
-                    className="rounded-lg border border-gray-200 bg-white p-4"
-                  >
-                    <p className="text-sm font-medium text-gray-900">
-                      {item.prompt}
-                      {item.required && (
-                        <span className="text-red-500"> *</span>
-                      )}
-                    </p>
-                    <p className="mt-2 text-xs text-gray-500">
-                      Unsupported question type:{" "}
-                      <span className="font-medium">{item.type}</span>
-                    </p>
-                  </div>
-                ),
-              )}
-
-              <div className="flex justify-end pt-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-                >
-                  {saving ? "Saving…" : config.submitLabel}
-                </button>
+          {/* Form */}
+          <form
+            onSubmit={onSubmit}
+            className="space-y-6 rounded-xl border bg-white p-8 shadow-sm"
+          >
+            {error && (
+              <div className="text-sm text-red-600" role="alert">
+                {error}
               </div>
-            </>
-          )}
-        </form>
+            )}
+
+            {loadingSurvey ? (
+              <div className="text-sm text-gray-500">Loading survey…</div>
+            ) : items.length === 0 ? (
+              <div className="text-sm text-gray-500">{config.emptyMessage}</div>
+            ) : (
+              <>
+                {items.map((item) =>
+                  item.type === "likert" ? (
+                    <div key={item.id}>{renderLikertRow(item)}</div>
+                  ) : (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-gray-200 bg-white p-5 sm:p-6"
+                    >
+                      <p className="text-base font-medium text-gray-900 leading-snug">
+                        {item.prompt}
+                        {item.required && (
+                          <span className="text-red-500"> *</span>
+                        )}
+                      </p>
+                      <p className="mt-2 text-sm text-gray-500">
+                        Unsupported question type:{" "}
+                        <span className="font-medium">{item.type}</span>
+                      </p>
+                    </div>
+                  ),
+                )}
+
+                <div className="flex justify-end pt-4">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition"
+                  >
+                    {saving ? "Saving…" : config.submitLabel}
+                  </button>
+                </div>
+              </>
+            )}
+          </form>
+
+        </div>
       </main>
     </div>
   );

@@ -13,40 +13,26 @@ import {
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 import QuizCompletionCard from "../../components/QuizCompletionCard";
+import PageHeader from "../../components/PageHeader";
+import {
+  STEP_SUBTITLES,
+  isVariantQuizId,
+  type QuizId,
+} from "../../lib/studySteps";
 
-type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-
-const VARIANT_QUIZ_IDS = ["followup", "links", "double"] as const;
-type VariantQuizId = (typeof VARIANT_QUIZ_IDS)[number];
-type QuizId = "base" | VariantQuizId;
-
-type ExtendedUser = User & {
-  assigned_var?: string | null;
-  survey_stage?: SurveyStage | null;
-  survey_pre_base_completed?: boolean;
-  quiz_base_completed?: boolean;
-  survey_post_base_completed?: boolean;
-  quiz_variant_completed?: boolean;
-  survey_post_variant_completed?: boolean;
-};
-
-function isVariantQuizId(value: string): value is VariantQuizId {
-  return (VARIANT_QUIZ_IDS as readonly string[]).includes(value);
-}
-
-function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
+function isValidQuizId(value: string, user?: User | null): boolean {
   if (user?.is_admin) return true;
   return value === "base" || isVariantQuizId(value);
 }
 
 function isUsersAssignedVariant(
   quizId: string,
-  user?: ExtendedUser | null,
+  user?: User | null,
 ): boolean {
   return Boolean(user?.assigned_var && quizId === user.assigned_var);
 }
 
-function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
+function canAccessQuiz(quizId: QuizId, user: User): boolean {
   if (user.is_admin) {
     return true;
   }
@@ -62,7 +48,7 @@ function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
   );
 }
 
-function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
+function getBlockedQuizRedirect(quizId: QuizId, user: User): string {
   const assignedVariantPath = user.assigned_var
     ? `/quiz/${user.assigned_var}`
     : "/dashboard";
@@ -98,7 +84,7 @@ export default function QuizPage() {
   const router = useRouter();
   const rawQuizId = [router.query.quiz_id].flat()[0] ?? null;
 
-  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
   const [quizState, setQuizState] = useState<QuizStateResponse | null>(null);
@@ -130,7 +116,7 @@ export default function QuizPage() {
         const res = await getMe();
         if (cancel) return;
 
-        const u = res.user as ExtendedUser;
+        const u = res.user as User;
 
         if (!isValidQuizId(rawQuizId, u)) {
           router.replace("/dashboard");
@@ -202,6 +188,9 @@ export default function QuizPage() {
   const attempt = quizState?.attempt;
   const conversationId = quizState?.conversation_id ?? null;
   const quizCompleted = attempt?.status === "completed";
+  const answerIncorrectly = Boolean(
+    current && attempt?.incorrect_question_ids?.includes(current.id),
+  );
 
   useEffect(() => {
     if (!current) return;
@@ -221,7 +210,7 @@ export default function QuizPage() {
     try {
       invalidateMeCache();
       const res = await getMe();
-      const refreshedUser = res.user as ExtendedUser;
+      const refreshedUser = res.user as User;
 
       if (quizId === "base") {
         if (!refreshedUser.survey_post_base_completed) {
@@ -324,48 +313,29 @@ export default function QuizPage() {
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
-      <header className="shrink-0 bg-white border-b px-4 py-3 sm:px-6 sm:py-4">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">
-              Quiz {quizId ?? rawQuizId}
-              {attempt && (
-                <span className="ml-3 text-base 2xl:text-lg font-normal text-gray-500">
-                  {attempt.answered_count} of {attempt.total_questions} answered
-                  {quizCompleted && (
-                    <span className="ml-2 font-semibold text-green-700">(Completed)</span>
-                  )}
-                </span>
-              )}
-            </h1>
-            {!quizCompleted && (
-              <p className="page-subtitle">
-                Answer each question once. Your progress is saved automatically.
-              </p>
+      //Keep at page height on normal zoom levels but overflow and expand on very short viewports or when zoomed in, so the user can always access the whole quiz interface and see the quiz completion card without needing to scroll through the chat.
+    <div data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
+      <PageHeader
+        className="shrink-0"
+        title={
+          <>
+            {quizId ? quizId.charAt(0).toUpperCase() + quizId.slice(1) : ""} Quiz
+            {quizCompleted ? (
+              <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
+            ) : (
+              <span className="ml-3 text-base font-normal text-gray-400">
+                Step {quizId === "base" ? 2 : 4} of 5
+              </span>
             )}
-          </div>
+          </>
+        }
+        subtitle={!quizCompleted ? STEP_SUBTITLES[quizId === "base" ? "quiz_base" : "quiz_variant"] : undefined}
+        onDashboard={() => router.replace("/dashboard")}
+        onLogout={onLogout}
+      />
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => router.replace("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-            >
-              Back to Dashboard
-            </button>
-
-            <button
-              onClick={onLogout}
-              className="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="flex-1 min-h-0 md:overflow-auto [@media(max-height:700px)]:flex-none">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-2 md:px-6 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
+      <div className="flex-1 min-h-0 overflow-hidden [@media(max-height:760px)]:flex-none [@media(max-height:760px)]:overflow-visible">
+        <div className="px-page py-2 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
           <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto [@media(max-height:700px)]:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">
@@ -375,21 +345,21 @@ export default function QuizPage() {
 
             {quizCompleted ? (
               <div className="overflow-auto flex-1 min-h-0 md:flex-none">
-              <QuizCompletionCard
-                isAdmin={user.is_admin}
-                quizResults={quizResults}
-                onDashboard={() => router.replace("/dashboard")}
-                onNextStep={redirectAfterCompletion}
-                onReset={user.is_admin ? async () => {
-                  if (!quizId) return;
-                  await resetQuiz(quizId);
-                  invalidateMeCache();
-                  const state = await getQuizState(quizId);
-                  setQuizState(state);
-                  setSelectedChoice(null);
-                  setQuizResults(null);
-                } : undefined}
-              />
+                <QuizCompletionCard
+                  isAdmin={user.is_admin}
+                  quizResults={quizResults}
+                  onDashboard={() => router.replace("/dashboard")}
+                  onNextStep={redirectAfterCompletion}
+                  onReset={user.is_admin ? async () => {
+                    if (!quizId) return;
+                    await resetQuiz(quizId);
+                    invalidateMeCache();
+                    const state = await getQuizState(quizId);
+                    setQuizState(state);
+                    setSelectedChoice(null);
+                    setQuizResults(null);
+                  } : undefined}
+                />
               </div>
             ) : (
               <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
@@ -408,72 +378,77 @@ export default function QuizPage() {
                     {quizState && current && (
                       <>
                         <div className="p-4">
-                          <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
-                            Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
-                          </h2>
+                          <div className="flex items-baseline justify-between gap-3 mb-1">
+                            <h2 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
+                              Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
+                            </h2>
+                            {attempt && (
+                              <span className="text-base text-gray-400 whitespace-nowrap">
+                                {attempt.answered_count + 1} of {attempt.total_questions}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {current.subtitle && (
-                            <div className="px-4 pb-4">
-                              <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
+                          <div className="px-4 pb-4">
+                            <p className="text-xl 2xl:text-2xl text-gray-600">{current.subtitle}</p>
+                          </div>
+                        )}
+
+                        <hr className="border-gray-200" />
+
+                        <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
+                          <div
+                            className={`space-y-3 transition ${
+                              !hasAskedChat
+                                ? "pointer-events-none opacity-40 blur-[1px]"
+                                : ""
+                            }`}
+                          >
+                            <QuestionBox
+                              choices={current.choices as Choice[]}
+                              value={selectedChoice}
+                              onChange={setSelectedChoice}
+                              className="max-w-3xl 2xl:max-w-none mx-auto"
+                            />
+
+                            <div className="flex items-center justify-between gap-4 pt-2">
+                              <p className="text-base text-gray-600">
+                                Selected:{" "}
+                                <span className="font-semibold text-gray-900">
+                                  {selectedChoice?.toUpperCase() ?? "(none)"}
+                                </span>
+                              </p>
+
+                              <button
+                                onClick={onSubmit}
+                                disabled={!selectedChoice || submitting || chatLoading}
+                                className="btn-primary disabled:opacity-60 shrink-0"
+                              >
+                                {submitting ? "Submitting…" : "Submit answer"}
+                              </button>
                             </div>
-                          )}
+                          </div>
 
-                          <hr className="border-gray-200" />
-
-                          <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
-                            <div
-                              className={`space-y-3 transition ${
-                                !hasAskedChat
-                                  ? "pointer-events-none opacity-40 blur-[1px]"
-                                  : ""
-                              }`}
-                            >
-                              <QuestionBox
-                                choices={current.choices as Choice[]}
-                                value={selectedChoice}
-                                onChange={setSelectedChoice}
-                                className="max-w-3xl 2xl:max-w-none mx-auto"
-                              />
-
-                              <div className="flex items-center justify-between text-sm text-gray-600 pt-1">
-                                <div>
-                                  Selected:{" "}
-                                  <span className="font-medium">
-                                    {selectedChoice?.toUpperCase() ?? "(none)"}
-                                  </span>
-                                </div>
-
+                          {!hasAskedChat && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
+                                <p className="text-sm text-gray-800 mb-3">
+                                  Before choosing an answer, send this question to
+                                  the assistant and read the explanation.
+                                </p>
                                 <button
-                                  onClick={onSubmit}
-                                  disabled={
-                                    !selectedChoice || submitting || chatLoading
-                                  }
-                                  className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
+                                  type="button"
+                                  onClick={onAskAssistantAboutQuestion}
+                                  className="inline-flex items-center justify-center rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 transition"
                                 >
-                                  {submitting ? "Submitting…" : "Submit answer"}
+                                  Ask the assistant about this question
                                 </button>
                               </div>
                             </div>
-
-                            {!hasAskedChat && (
-                              <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
-                                  <p className="text-sm text-gray-800 mb-3">
-                                    Before choosing an answer, send this question to
-                                    the assistant and read the explanation.
-                                  </p>
-                                  <button
-                                    type="button"
-                                    onClick={onAskAssistantAboutQuestion}
-                                    className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
-                                  >
-                                    Ask the assistant about this question
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          )}
+                        </div>
                       </>
                     )}
                   </section>
@@ -492,6 +467,8 @@ export default function QuizPage() {
                         onAssistantMessage={() => setFirstChatResponded(true)}
                         questionCollapsed={questionCollapsed}
                         onToggleQuestion={() => setQuestionCollapsed((c: boolean) => !c)}
+                        answerIncorrectly={answerIncorrectly}
+                        answerChoices={current?.choices}
                       />
                     </div>
                   )}

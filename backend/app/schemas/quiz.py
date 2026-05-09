@@ -27,6 +27,7 @@ class QuizAttemptPublic(BaseModel):
     status: str  # "in_progress" or "completed"
     total_questions: int
     answered_count: int
+    incorrect_question_ids: list[str] = []
 
 
 # The question data sent to the client for the current unanswered question.

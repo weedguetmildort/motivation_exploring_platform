@@ -62,13 +62,13 @@ export default function QuestionBox({
               />
               <div
                 className={`cursor-pointer rounded-xl border px-4 py-3 transition-colors select-none
-                ${c.disabled ? "opacity-60 cursor-not-allowed" : "hover:border-blue-400"}
-                ${active ? "border-blue-600 bg-blue-50" : "border-gray-200 bg-white"}
+                ${c.disabled ? "opacity-60 cursor-not-allowed" : "hover:border-accent-400"}
+                ${active ? "border-accent-600 bg-accent-50" : "border-gray-200 bg-white"}
               `}
               >
-                <div className="font-medium text-gray-900"><span className="uppercase font-bold mr-2">{c.id}.</span>{c.label}</div>
+                <div className="text-lg font-medium text-gray-900"><span className="uppercase font-bold mr-2">{c.id}.</span>{c.label}</div>
                 {c.description && (
-                  <div className="text-sm text-gray-600 mt-0.5">{c.description}</div>
+                  <div className="text-base text-gray-600 mt-0.5">{c.description}</div>
                 )}
               </div>
             </label>

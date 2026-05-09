@@ -18,6 +18,7 @@ export type User = {
   consent?: boolean;
   consent_given_at?: string;
   is_admin: boolean;
+  assigned_var?: string | null;
   demographics_completed?: boolean;
   survey_pre_base_completed?: boolean;
   quiz_base_completed?: boolean;
