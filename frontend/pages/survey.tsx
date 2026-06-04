@@ -319,9 +319,9 @@ export default function SurveyPage() {
           })}
         </div>
 
-        <div className="flex items-center justify-between text-sm text-gray-400">
-          <span>{left}</span>
-          <span>{right}</span>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-gray-700">{left}</span>
+          <span className="text-sm font-semibold text-gray-700">{right}</span>
         </div>
       </div>
     );

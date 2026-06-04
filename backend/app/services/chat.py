@@ -17,22 +17,18 @@ def get_last_exchange(
     messages_col: Collection,
     conv_id: str,
     agent_prefix: Optional[str] = None,
+    recent_turns: int = 3,
 ) -> list[dict]:
-    """Return the most recent user/assistant exchange (1 turn) to save tokens.
+    """Return the first exchange (anchors the quiz question) plus the most recent
+    turns so the model always knows what question it is helping with.
 
-    Anchors on the last assistant message's timestamp, then finds the user message
-    that preceded it. This guarantees a properly paired exchange even if the current
-    user message has already been inserted into the collection.
+    recent_turns: how many of the latest user/assistant pairs to include after
+    the first exchange. Total context is at most 1 + recent_turns pairs.
 
-    agent_prefix: if provided (e.g. '[AGENT A]'), finds the last assistant doc that
-    actually contains that agent's reply (skipping turns where only the other agent
-    responded), extracts only that agent's text, and strips the prefix before returning.
-    This means a globally-addressed turn is still visible to all agents, while an
-    @-mentioned turn is only visible to the addressed agent.
+    agent_prefix: if provided (e.g. '[AGENT A]'), filters and strips per-agent
+    replies so each agent only sees its own history.
     """
     if agent_prefix:
-        # Only consider assistant docs where this agent actually replied.
-        # $elemMatch matches array docs; the regex anchors to the start of each element.
         asst_query = {
             "conversation_id": conv_id,
             "role": "assistant",
@@ -41,32 +37,53 @@ def get_last_exchange(
     else:
         asst_query = {"conversation_id": conv_id, "role": "assistant"}
 
-    last_asst = messages_col.find_one(asst_query, sort=[("created_at", -1)])
-    if not last_asst:
+    # Fetch all assistant docs in chronological order.
+    all_asst = list(messages_col.find(asst_query, sort=[("created_at", 1)]))
+    if not all_asst:
         return []
 
-    content = last_asst["content"]
-    if agent_prefix and isinstance(content, list):
-        matches = [c for c in content if c.startswith(agent_prefix)]
-        asst_content = matches[0][len(agent_prefix):].strip() if matches else _format_assistant(content)
-    else:
-        asst_content = _format_assistant(content)
+    def _extract_content(doc: dict) -> str:
+        content = doc["content"]
+        if agent_prefix and isinstance(content, list):
+            matches = [c for c in content if c.startswith(agent_prefix)]
+            return matches[0][len(agent_prefix):].strip() if matches else _format_assistant(content)
+        return _format_assistant(content)
 
-    last_user = messages_col.find_one(
-        {
-            "conversation_id": conv_id,
-            "role": "user",
-            "created_at": {"$lt": last_asst["created_at"]},
-        },
-        sort=[("created_at", -1)],
-    )
-    if not last_user:
+    def _user_before(asst_doc: dict) -> Optional[dict]:
+        return messages_col.find_one(
+            {
+                "conversation_id": conv_id,
+                "role": "user",
+                "created_at": {"$lt": asst_doc["created_at"]},
+            },
+            sort=[("created_at", -1)],
+        )
+
+    # Build the first exchange (contains the original quiz question).
+    first_asst = all_asst[0]
+    first_user = _user_before(first_asst)
+    if not first_user:
         return []
 
-    return [
-        {"role": "user", "content": last_user["content"]},
-        {"role": "assistant", "content": asst_content},
+    first_pair = [
+        {"role": "user", "content": first_user["content"]},
+        {"role": "assistant", "content": _extract_content(first_asst)},
     ]
+
+    # Build recent exchanges (skip the first one to avoid duplication).
+    recent_asst_docs = all_asst[-(recent_turns):]
+    if recent_asst_docs and recent_asst_docs[0]["_id"] == first_asst["_id"]:
+        recent_asst_docs = recent_asst_docs[1:]
+
+    recent_pairs: list[dict] = []
+    for asst_doc in recent_asst_docs:
+        user_doc = _user_before(asst_doc)
+        if not user_doc:
+            continue
+        recent_pairs.append({"role": "user", "content": user_doc["content"]})
+        recent_pairs.append({"role": "assistant", "content": _extract_content(asst_doc)})
+
+    return first_pair + recent_pairs
 
 
 def get_conversation_history(messages_col: Collection, conv_id: str) -> list[dict]:
