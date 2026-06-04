@@ -33,7 +33,7 @@ export default function Landing() {
             groupName="Emerging Technologies in Education Group"
             institution="University of Florida"
             contactEmail="weedguet.mildort@ufl.edu"
-            supervisor="Dr. Neha Rani IRB Protocol #"
+            supervisor="Dr. Neha Rani IRB Protocol #ET00053311"
         />
 
       </div>
