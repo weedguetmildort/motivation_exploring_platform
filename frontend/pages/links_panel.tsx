@@ -12,16 +12,38 @@ const PREDEFINED_TAGS = [
   "Other",
 ] as const;
 
+type LinkStatus = "READY" | "NOT_READY" | "NEEDS_REVIEW" | "REJECTED";
+
 type KnowledgeLink = {
   id: string;
   title: string;
   url: string;
   tags: string[];
   description: string;
-  active: boolean;
+  status: LinkStatus;
+  last_checked?: string;
+  last_http_code?: number;
+  last_error_type?: string;
   created_at?: string;
   updated_at?: string;
 };
+
+type ActiveTab = "all" | "review" | "dead";
+
+function StatusBadge({ status }: { status: LinkStatus }) {
+  const cfg: Record<LinkStatus, { label: string; cls: string }> = {
+    READY:        { label: "Ready",          cls: "bg-green-100 text-green-800 border-green-200" },
+    NOT_READY:    { label: "Not Ready",      cls: "bg-red-100 text-red-800 border-red-200" },
+    NEEDS_REVIEW: { label: "Needs Review",   cls: "bg-yellow-100 text-yellow-800 border-yellow-200" },
+    REJECTED:     { label: "Rejected",       cls: "bg-gray-100 text-gray-500 border-gray-200" },
+  };
+  const { label, cls } = cfg[status] ?? cfg.READY;
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${cls}`}>
+      {label}
+    </span>
+  );
+}
 
 export default function LinkPanelPage() {
   const router = useRouter();
@@ -34,7 +56,6 @@ export default function LinkPanelPage() {
   const [url, setUrl] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
-  const [active, setActive] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -43,27 +64,27 @@ export default function LinkPanelPage() {
   const [links, setLinks] = useState<KnowledgeLink[]>([]);
   const [loadingLinks, setLoadingLinks] = useState(false);
   const [linksError, setLinksError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("all");
 
   // edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Partial<KnowledgeLink>>({});
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+
+  // health check trigger
+  const [healthChecking, setHealthChecking] = useState(false);
 
   // --- auth gate (admin only) ---
   useEffect(() => {
     let cancel = false;
-
     (async () => {
       try {
         const res = await getMe();
         if (cancel) return;
-
-        if (!res.user.is_admin) {
-          router.replace("/dashboard");
-          return;
-        }
-
+        if (!res.user.is_admin) { router.replace("/dashboard"); return; }
         setUser(res.user);
       } catch {
         if (!cancel) router.replace("/login");
@@ -71,22 +92,16 @@ export default function LinkPanelPage() {
         if (!cancel) setChecking(false);
       }
     })();
-
-    return () => {
-      cancel = true;
-    };
+    return () => { cancel = true; };
   }, []);
 
   // --- load links ---
   useEffect(() => {
     if (!user) return;
-
     let cancel = false;
-
     async function loadLinks() {
       setLoadingLinks(true);
       setLinksError(null);
-
       try {
         const data = await apiFetch<KnowledgeLink[]>("/api/knowledge-links");
         if (!cancel) setLinks(data);
@@ -97,12 +112,8 @@ export default function LinkPanelPage() {
         if (!cancel) setLoadingLinks(false);
       }
     }
-
     loadLinks();
-
-    return () => {
-      cancel = true;
-    };
+    return () => { cancel = true; };
   }, [user]);
 
   if (checking) {
@@ -116,20 +127,11 @@ export default function LinkPanelPage() {
   if (!user) return null;
 
   async function onLogout() {
-    try {
-      await logout();
-    } finally {
-      router.replace("/login");
-    }
+    try { await logout(); } finally { router.replace("/login"); }
   }
 
   function isValidUrl(value: string) {
-    try {
-      new URL(value);
-      return true;
-    } catch {
-      return false;
-    }
+    try { new URL(value); return true; } catch { return false; }
   }
 
   function selectTag(tag: string, current: string[], set: (v: string[]) => void) {
@@ -140,63 +142,22 @@ export default function LinkPanelPage() {
     e.preventDefault();
     setMessage(null);
 
-    if (!title.trim()) {
-      setMessage("Title is required.");
-      return;
-    }
-
-    if (!url.trim()) {
-      setMessage("URL is required.");
-      return;
-    }
-
-    if (!isValidUrl(url.trim())) {
-      setMessage("Please enter a valid URL.");
-      return;
-    }
-
-    const duplicate = links.find(
-      (l) => l.url.trim().toLowerCase() === url.trim().toLowerCase(),
-    );
-    if (duplicate) {
-      setMessage(`This URL is already in the database ("${duplicate.title}").`);
-      return;
-    }
-
-    if (!description.trim()) {
-      setMessage("Description is required.");
-      return;
-    }
-
-    if (tags.length === 0) {
-      setMessage("Please select a tag.");
-      return;
-    }
+    if (!title.trim()) { setMessage("Title is required."); return; }
+    if (!url.trim()) { setMessage("URL is required."); return; }
+    if (!isValidUrl(url.trim())) { setMessage("Please enter a valid URL."); return; }
+    const duplicate = links.find((l) => l.url.trim().toLowerCase() === url.trim().toLowerCase());
+    if (duplicate) { setMessage(`This URL is already in the database ("${duplicate.title}").`); return; }
+    if (!description.trim()) { setMessage("Description is required."); return; }
+    if (tags.length === 0) { setMessage("Please select a tag."); return; }
 
     setSaving(true);
-
     try {
-      const payload = {
-        title: title.trim(),
-        url: url.trim(),
-        description: description.trim(),
-        tags,
-        active,
-      };
-
       const created = await apiFetch<KnowledgeLink>("/api/knowledge-links", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ title: title.trim(), url: url.trim(), description: description.trim(), tags }),
       });
-
       setLinks((prev) => [created, ...prev]);
-
-      // reset form
-      setTitle("");
-      setUrl("");
-      setDescription("");
-      setTags([]);
-      setActive(true);
+      setTitle(""); setUrl(""); setDescription(""); setTags([]);
       setMessage("Knowledge link added.");
     } catch (e) {
       console.error(e);
@@ -208,62 +169,29 @@ export default function LinkPanelPage() {
 
   function beginEdit(link: KnowledgeLink) {
     setEditingId(link.id);
-    setEditDraft({
-      ...link,
-      tags: link.tags ?? [],
-    });
+    setEditDraft({ ...link, tags: link.tags ?? [] });
   }
 
-  function cancelEdit() {
-    setEditingId(null);
-    setEditDraft({});
-  }
+  function cancelEdit() { setEditingId(null); setEditDraft({}); }
 
   async function saveEdit(id: string) {
-    if (!editDraft.title?.trim()) {
-      alert("Title is required.");
-      return;
-    }
-
-    if (!editDraft.url?.trim()) {
-      alert("URL is required.");
-      return;
-    }
-
-    if (!isValidUrl(editDraft.url)) {
-      alert("Please enter a valid URL.");
-      return;
-    }
-
-    if (!editDraft.description?.trim()) {
-      alert("Description is required.");
-      return;
-    }
-
-    if (!editDraft.tags || editDraft.tags.length === 0) {
-      alert("Please select a tag.");
-      return;
-    }
+    if (!editDraft.title?.trim()) { alert("Title is required."); return; }
+    if (!editDraft.url?.trim()) { alert("URL is required."); return; }
+    if (!isValidUrl(editDraft.url)) { alert("Please enter a valid URL."); return; }
+    if (!editDraft.description?.trim()) { alert("Description is required."); return; }
+    if (!editDraft.tags || editDraft.tags.length === 0) { alert("Please select a tag."); return; }
 
     setSavingEdit(true);
-
     try {
-      const payload = {
-        title: editDraft.title.trim(),
-        url: editDraft.url.trim(),
-        description: editDraft.description.trim(),
-        tags: editDraft.tags ?? [],
-        active: editDraft.active ?? true,
-      };
-
-      const updated = await apiFetch<KnowledgeLink>(
-        `/api/knowledge-links/${id}`,
-        {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        },
-      );
-
+      const updated = await apiFetch<KnowledgeLink>(`/api/knowledge-links/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          title: editDraft.title.trim(),
+          url: editDraft.url.trim(),
+          description: editDraft.description.trim(),
+          tags: editDraft.tags ?? [],
+        }),
+      });
       setLinks((prev) => prev.map((x) => (x.id === id ? updated : x)));
       cancelEdit();
     } catch (e) {
@@ -276,14 +204,9 @@ export default function LinkPanelPage() {
 
   async function deleteLink(id: string) {
     if (!window.confirm("Delete this knowledge link?")) return;
-
     setDeletingId(id);
-
     try {
-      await apiFetch<void>(`/api/knowledge-links/${id}`, {
-        method: "DELETE",
-      });
-
+      await apiFetch<void>(`/api/knowledge-links/${id}`, { method: "DELETE" });
       setLinks((prev) => prev.filter((x) => x.id !== id));
     } catch (e) {
       console.error(e);
@@ -293,36 +216,82 @@ export default function LinkPanelPage() {
     }
   }
 
+  async function approveLink(id: string) {
+    setApprovingId(id);
+    try {
+      const updated = await apiFetch<KnowledgeLink>(`/api/knowledge-links/${id}/approve`, { method: "POST" });
+      setLinks((prev) => prev.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      console.error(e);
+      alert("Failed to approve link.");
+    } finally {
+      setApprovingId(null);
+    }
+  }
+
+  async function rejectLink(id: string) {
+    if (!window.confirm("Reject this link? It will be tombstoned and never suggested again.")) return;
+    setRejectingId(id);
+    try {
+      const updated = await apiFetch<KnowledgeLink>(`/api/knowledge-links/${id}/reject`, { method: "POST" });
+      setLinks((prev) => prev.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      console.error(e);
+      alert("Failed to reject link.");
+    } finally {
+      setRejectingId(null);
+    }
+  }
+
+  async function triggerHealthCheck() {
+    setHealthChecking(true);
+    try {
+      await apiFetch("/api/knowledge-links/trigger-health-check", { method: "POST" });
+      setMessage("Health check triggered. Refresh in a moment to see updated statuses.");
+    } catch (e) {
+      console.error(e);
+      setMessage("Failed to trigger health check.");
+    } finally {
+      setHealthChecking(false);
+    }
+  }
+
+  const filteredLinks = links.filter((l) => {
+    if (activeTab === "review") return l.status === "NEEDS_REVIEW";
+    if (activeTab === "dead") return l.status === "NOT_READY";
+    return true;
+  });
+
+  const reviewCount = links.filter((l) => l.status === "NEEDS_REVIEW").length;
+  const deadCount = links.filter((l) => l.status === "NOT_READY").length;
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="site-header">
         <div className="site-header-inner">
           <div>
             <h1 className="page-title">Knowledge Links Panel</h1>
-            <p className="page-subtitle">
-              Manage links the chatbot can use in its answers.
-            </p>
+            <p className="page-subtitle">Manage links the chatbot can use in its answers.</p>
           </div>
-
           <div className="flex items-center gap-4">
             <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
+              onClick={triggerHealthCheck}
+              disabled={healthChecking}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60"
             >
+              {healthChecking ? "Checking…" : "Trigger Health Check"}
+            </button>
+            <button onClick={() => router.push("/dashboard")} className="btn-primary">
               Back to Dashboard
             </button>
-            <button onClick={onLogout} className="btn-secondary">
-              Logout
-            </button>
+            <button onClick={onLogout} className="btn-secondary">Logout</button>
           </div>
         </div>
       </header>
 
       <div className="page-container">
         <div className="bg-white rounded-xl p-8 shadow-sm border">
-          <h2 className="text-xl 2xl:text-2xl font-semibold mb-4">
-            Add Knowledge Link
-          </h2>
+          <h2 className="text-xl 2xl:text-2xl font-semibold mb-4">Add Knowledge Link</h2>
 
           <form onSubmit={onCreate} className="space-y-4">
             <div>
@@ -331,7 +300,7 @@ export default function LinkPanelPage() {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
-                placeholder="Example: Student Refund Policy"
+                placeholder="Example: Khan Academy — Probability"
                 required
               />
             </div>
@@ -355,36 +324,30 @@ export default function LinkPanelPage() {
                           ? "border-green-500 bg-green-50 focus:outline-none focus:ring-1 focus:ring-green-500"
                           : ""
                       }`}
-                      placeholder="https://example.com/refund-policy"
+                      placeholder="https://example.com/resource"
                       required
                     />
-                    {isDuplicate && (
-                      <p className="mt-1 text-xs font-medium text-red-600">Link already in the database</p>
-                    )}
-                    {isUnique && (
-                      <p className="mt-1 text-xs font-medium text-green-600">New link</p>
-                    )}
+                    {isDuplicate && <p className="mt-1 text-xs font-medium text-red-600">Link already in the database</p>}
+                    {isUnique && <p className="mt-1 text-xs font-medium text-green-600">New link</p>}
                   </>
                 );
               })()}
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Brief Description
-              </label>
+              <label className="block text-sm font-medium mb-1">Brief Description</label>
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
                 rows={4}
-                placeholder="Describe what this page is about so the chatbot can decide when it is relevant."
+                placeholder="Describe what this page covers so the chatbot can decide when it is relevant."
                 required
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Tags</label>
+              <label className="block text-sm font-medium mb-1">Tag</label>
               <div className="flex flex-wrap gap-2">
                 {PREDEFINED_TAGS.map((tag) => (
                   <button
@@ -403,20 +366,11 @@ export default function LinkPanelPage() {
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={active}
-                onChange={(e) => setActive(e.target.checked)}
-              />
-              Active
-            </label>
-
             {message && (
               <div
                 role="status"
                 className={`rounded-lg px-4 py-3 text-sm font-medium border ${
-                  message.toLowerCase().includes("added")
+                  message.toLowerCase().includes("added") || message.toLowerCase().includes("triggered")
                     ? "bg-green-50 text-green-800 border-green-300"
                     : "bg-red-50 text-red-800 border-red-300"
                 }`}
@@ -436,14 +390,7 @@ export default function LinkPanelPage() {
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => {
-                  setTitle("");
-                  setUrl("");
-                  setDescription("");
-                  setTags([]);
-                  setActive(true);
-                  setMessage(null);
-                }}
+                onClick={() => { setTitle(""); setUrl(""); setDescription(""); setTags([]); setMessage(null); }}
                 className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60"
               >
                 Clear form
@@ -455,130 +402,115 @@ export default function LinkPanelPage() {
 
       <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto pt-0 px-6 pb-6">
         <div className="bg-white rounded-xl p-8 shadow-sm border">
-          <h2 className="text-xl 2xl:text-2xl font-semibold mb-2">
-            View Knowledge Links
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl 2xl:text-2xl font-semibold">View Knowledge Links</h2>
+          </div>
 
-          {loadingLinks && (
-            <p className="text-sm text-gray-500">Loading knowledge links…</p>
+          {/* Tabs */}
+          <div className="flex gap-2 mb-4">
+            {(["all", "review", "dead"] as ActiveTab[]).map((tab) => {
+              const label =
+                tab === "all" ? `All (${links.length})` :
+                tab === "review" ? `Review Queue${reviewCount > 0 ? ` (${reviewCount})` : ""}` :
+                `Dead Links${deadCount > 0 ? ` (${deadCount})` : ""}`;
+              return (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`rounded-full px-4 py-1.5 text-sm font-medium border transition-colors ${
+                    activeTab === tab
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-600 border-gray-300 hover:border-blue-400"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {loadingLinks && <p className="text-sm text-gray-500">Loading knowledge links…</p>}
+          {linksError && <p className="text-sm text-red-600 mb-2">{linksError}</p>}
+
+          {!loadingLinks && !linksError && filteredLinks.length === 0 && (
+            <p className="text-sm text-gray-500">
+              {activeTab === "review" ? "No links awaiting review." :
+               activeTab === "dead" ? "No dead links." :
+               "No knowledge links yet."}
+            </p>
           )}
 
-          {linksError && (
-            <p className="text-sm text-red-600 mb-2">{linksError}</p>
-          )}
-
-          {!loadingLinks && !linksError && links.length === 0 && (
-            <p className="text-sm text-gray-500">No knowledge links yet.</p>
-          )}
-
-          {!loadingLinks && links.length > 0 && (
-            <div className="mt-4 space-y-3">
-              {links.map((link) => {
+          {!loadingLinks && filteredLinks.length > 0 && (
+            <div className="mt-2 space-y-3">
+              {filteredLinks.map((link) => {
                 const isEditing = editingId === link.id;
 
                 return (
-                  <div
-                    key={link.id}
-                    className="rounded-lg border px-4 py-3 bg-gray-50"
-                  >
+                  <div key={link.id} className="rounded-lg border px-4 py-3 bg-gray-50">
                     <div className="flex justify-between items-start gap-4">
                       <div className="min-w-0 flex-1">
                         {!isEditing ? (
                           <>
-                            <div className="text-sm font-semibold text-gray-900">
-                              {link.title}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-gray-900">{link.title}</span>
+                              <StatusBadge status={link.status} />
                             </div>
 
                             <div className="mt-1 text-xs text-blue-700 break-all">
-                              <a
-                                href={link.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="underline"
-                              >
+                              <a href={link.url} target="_blank" rel="noreferrer" className="underline">
                                 {link.url}
                               </a>
                             </div>
 
-                            <div className="mt-2 text-sm text-gray-700">
-                              {link.description}
-                            </div>
+                            <div className="mt-2 text-sm text-gray-700">{link.description}</div>
 
                             {link.tags.length > 0 && (
                               <div className="mt-2 flex flex-wrap gap-2">
                                 {link.tags.map((tag) => (
-                                  <span
-                                    key={tag}
-                                    className="rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700"
-                                  >
+                                  <span key={tag} className="rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700">
                                     {tag}
                                   </span>
                                 ))}
                               </div>
                             )}
 
-                            <div className="mt-2 text-xs text-gray-500">
-                              Status:{" "}
-                              <span className="font-medium">
-                                {link.active ? "Active" : "Inactive"}
-                              </span>
-                            </div>
+                            {link.last_checked && (
+                              <div className="mt-1 text-xs text-gray-400">
+                                Last checked: {new Date(link.last_checked).toLocaleString()}
+                                {link.last_http_code ? ` · HTTP ${link.last_http_code}` : ""}
+                                {link.last_error_type ? ` · ${link.last_error_type}` : ""}
+                              </div>
+                            )}
                           </>
                         ) : (
                           <div className="space-y-3">
                             <div>
-                              <label className="block text-xs font-medium mb-1">
-                                Title
-                              </label>
+                              <label className="block text-xs font-medium mb-1">Title</label>
                               <input
                                 value={editDraft.title ?? ""}
-                                onChange={(e) =>
-                                  setEditDraft((d) => ({
-                                    ...d,
-                                    title: e.target.value,
-                                  }))
-                                }
+                                onChange={(e) => setEditDraft((d) => ({ ...d, title: e.target.value }))}
                                 className="w-full rounded border px-2 py-1 text-sm"
                               />
                             </div>
-
                             <div>
-                              <label className="block text-xs font-medium mb-1">
-                                URL
-                              </label>
+                              <label className="block text-xs font-medium mb-1">URL</label>
                               <input
                                 value={editDraft.url ?? ""}
-                                onChange={(e) =>
-                                  setEditDraft((d) => ({
-                                    ...d,
-                                    url: e.target.value,
-                                  }))
-                                }
+                                onChange={(e) => setEditDraft((d) => ({ ...d, url: e.target.value }))}
                                 className="w-full rounded border px-2 py-1 text-sm"
                               />
                             </div>
-
                             <div>
-                              <label className="block text-xs font-medium mb-1">
-                                Description
-                              </label>
+                              <label className="block text-xs font-medium mb-1">Description</label>
                               <textarea
                                 value={editDraft.description ?? ""}
-                                onChange={(e) =>
-                                  setEditDraft((d) => ({
-                                    ...d,
-                                    description: e.target.value,
-                                  }))
-                                }
+                                onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
                                 className="w-full rounded border px-2 py-1 text-sm"
                                 rows={4}
                               />
                             </div>
-
                             <div>
-                              <label className="block text-xs font-medium mb-1">
-                                Tags
-                              </label>
+                              <label className="block text-xs font-medium mb-1">Tag</label>
                               <div className="flex flex-wrap gap-2">
                                 {PREDEFINED_TAGS.map((tag) => {
                                   const selected = (editDraft.tags ?? []).includes(tag);
@@ -586,12 +518,7 @@ export default function LinkPanelPage() {
                                     <button
                                       key={tag}
                                       type="button"
-                                      onClick={() =>
-                                        setEditDraft((d) => ({
-                                          ...d,
-                                          tags: selected ? [] : [tag],
-                                        }))
-                                      }
+                                      onClick={() => setEditDraft((d) => ({ ...d, tags: selected ? [] : [tag] }))}
                                       className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
                                         selected
                                           ? "bg-blue-600 text-white border-blue-600"
@@ -604,42 +531,79 @@ export default function LinkPanelPage() {
                                 })}
                               </div>
                             </div>
-
-                            <label className="flex items-center gap-2 text-sm">
-                              <input
-                                type="checkbox"
-                                checked={editDraft.active ?? true}
-                                onChange={(e) =>
-                                  setEditDraft((d) => ({
-                                    ...d,
-                                    active: e.target.checked,
-                                  }))
-                                }
-                              />
-                              Active
-                            </label>
                           </div>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2 text-xs shrink-0">
+                      {/* Action buttons per status */}
+                      <div className="flex flex-col items-end gap-2 text-xs shrink-0">
                         {!isEditing ? (
                           <>
-                            <button
-                              type="button"
-                              onClick={() => beginEdit(link)}
-                              className="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteLink(link.id)}
-                              disabled={deletingId === link.id}
-                              className="px-2 py-1 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
-                            >
-                              {deletingId === link.id ? "Deleting…" : "Delete"}
-                            </button>
+                            {link.status === "NEEDS_REVIEW" && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => approveLink(link.id)}
+                                  disabled={approvingId === link.id}
+                                  className="px-2 py-1 rounded border border-green-400 bg-white text-green-700 hover:bg-green-50 disabled:opacity-60"
+                                >
+                                  {approvingId === link.id ? "Approving…" : "Approve"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => rejectLink(link.id)}
+                                  disabled={rejectingId === link.id}
+                                  className="px-2 py-1 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                >
+                                  {rejectingId === link.id ? "Rejecting…" : "Reject"}
+                                </button>
+                              </>
+                            )}
+
+                            {link.status === "NOT_READY" && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => rejectLink(link.id)}
+                                  disabled={rejectingId === link.id}
+                                  className="px-2 py-1 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                >
+                                  {rejectingId === link.id ? "Rejecting…" : "Reject"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteLink(link.id)}
+                                  disabled={deletingId === link.id}
+                                  className="px-2 py-1 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 disabled:opacity-60"
+                                >
+                                  {deletingId === link.id ? "Deleting…" : "Delete"}
+                                </button>
+                              </>
+                            )}
+
+                            {link.status === "READY" && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => beginEdit(link)}
+                                  className="px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteLink(link.id)}
+                                  disabled={deletingId === link.id}
+                                  className="px-2 py-1 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                >
+                                  {deletingId === link.id ? "Deleting…" : "Delete"}
+                                </button>
+                              </>
+                            )}
+
+                            {link.status === "REJECTED" && (
+                              <span className="text-gray-400 italic">Tombstoned</span>
+                            )}
                           </>
                         ) : (
                           <>

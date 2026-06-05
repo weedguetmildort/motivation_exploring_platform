@@ -1,5 +1,7 @@
-from typing import List
-from fastapi import APIRouter, HTTPException, Request, Depends
+# backend/app/api/knowledge_links.py
+import threading
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Request, Depends, Query
 
 from ..schemas.knowledge_link import (
     KnowledgeLinkCreate,
@@ -12,26 +14,49 @@ from ..services.knowledge_links import (
     get_knowledge_links_collection,
     ensure_indexes,
     create_knowledge_link,
-    list_knowledge_links,
+    list_knowledge_links_by_status,
     update_knowledge_link,
     delete_knowledge_link,
+    approve_link,
+    reject_link,
 )
 
 router = APIRouter(prefix="/knowledge-links", tags=["knowledge-links"])
+
 
 def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
+
+# ── Literal-path routes MUST come before /{link_id} ─────────────────────────
+
+@router.post("/trigger-health-check")
+def trigger_health_check(
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    """Fire-and-forget: runs health check then discovery in a background thread."""
+    from ..scheduler import run_jobs_now
+
+    t = threading.Thread(target=run_jobs_now, args=[request.app], daemon=True)
+    t.start()
+    return {"ok": True, "message": "Health check triggered. Refresh in a moment to see results."}
+
+
+# ── CRUD ─────────────────────────────────────────────────────────────────────
+
 @router.get("", response_model=List[KnowledgeLinkPublic])
 def get_all_knowledge_links(
     request: Request,
+    status: Optional[str] = Query(default=None),
     user: UserPublic = Depends(require_admin),
 ):
     links = get_knowledge_links_collection(request.app.state.db)
     ensure_indexes(links)
-    return list_knowledge_links(links)
+    return list_knowledge_links_by_status(links, status)
+
 
 @router.post("", response_model=KnowledgeLinkPublic)
 def create_new_knowledge_link(
@@ -42,7 +67,8 @@ def create_new_knowledge_link(
     links = get_knowledge_links_collection(request.app.state.db)
     ensure_indexes(links)
     created = create_knowledge_link(links, data)
-    if created.active:
+    # Admin-created links are READY — add to chatbot cache immediately
+    if created.status.value == "READY":
         request.app.state.knowledge_links.append({
             "id": created.id,
             "title": created.title,
@@ -50,6 +76,7 @@ def create_new_knowledge_link(
             "description": created.description,
         })
     return created
+
 
 @router.put("/{link_id}", response_model=KnowledgeLinkPublic)
 def update_existing_knowledge_link(
@@ -60,15 +87,15 @@ def update_existing_knowledge_link(
 ):
     links = get_knowledge_links_collection(request.app.state.db)
     ensure_indexes(links)
-
     updated = update_knowledge_link(links, link_id, data)
     if not updated:
         raise HTTPException(status_code=404, detail="Knowledge link not found")
 
+    # Refresh cache entry
     request.app.state.knowledge_links = [
         l for l in request.app.state.knowledge_links if l["id"] != link_id
     ]
-    if updated.active:
+    if updated.status.value == "READY":
         request.app.state.knowledge_links.append({
             "id": updated.id,
             "title": updated.title,
@@ -76,6 +103,7 @@ def update_existing_knowledge_link(
             "description": updated.description,
         })
     return updated
+
 
 @router.delete("/{link_id}", response_model=KnowledgeLinkPublic)
 def delete_existing_knowledge_link(
@@ -85,12 +113,53 @@ def delete_existing_knowledge_link(
 ):
     links = get_knowledge_links_collection(request.app.state.db)
     ensure_indexes(links)
-
     deleted = delete_knowledge_link(links, link_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Knowledge link not found")
-
     request.app.state.knowledge_links = [
         l for l in request.app.state.knowledge_links if l["id"] != link_id
     ]
     return deleted
+
+
+# ── Approve / Reject ─────────────────────────────────────────────────────────
+
+@router.post("/{link_id}/approve", response_model=KnowledgeLinkPublic)
+def approve_knowledge_link(
+    link_id: str,
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    links = get_knowledge_links_collection(request.app.state.db)
+    result = approve_link(links, link_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Link not found or not in NEEDS_REVIEW state",
+        )
+    request.app.state.knowledge_links.append({
+        "id": result.id,
+        "title": result.title,
+        "url": str(result.url),
+        "description": result.description,
+    })
+    return result
+
+
+@router.post("/{link_id}/reject", response_model=KnowledgeLinkPublic)
+def reject_knowledge_link(
+    link_id: str,
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    links = get_knowledge_links_collection(request.app.state.db)
+    result = reject_link(links, link_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Link not found or not in a rejectable state (NEEDS_REVIEW or NOT_READY)",
+        )
+    request.app.state.knowledge_links = [
+        l for l in request.app.state.knowledge_links if l["id"] != link_id
+    ]
+    return result

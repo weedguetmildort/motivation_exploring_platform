@@ -25,6 +25,13 @@ class Settings:
     # Environment
     ENV: str = os.getenv("ENV", "development")
 
+    # Link Health & Discovery
+    LINK_CHECK_INTERVAL_HOURS: int = int(os.getenv("LINK_CHECK_INTERVAL_HOURS", "12"))
+    MAX_LIVE_LINKS_PER_SUBJECT: int = int(os.getenv("MAX_LIVE_LINKS_PER_SUBJECT", "30"))
+    MAX_RETRIES_LINK_CHECK: int = int(os.getenv("MAX_RETRIES_LINK_CHECK", "3"))
+    CANDIDATES_PER_CYCLE: int = int(os.getenv("CANDIDATES_PER_CYCLE", "1"))
+    LINK_REQUEST_TIMEOUT: int = int(os.getenv("LINK_REQUEST_TIMEOUT", "10"))
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()

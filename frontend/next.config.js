@@ -43,6 +43,10 @@ const nextConfig = {
         destination: `${backend}/knowledge-links/:path*`,
       },
       {
+        source: "/api/allowlist/:path*",
+        destination: `${backend}/allowlist/:path*`,
+      },
+      {
         source: "/api/:path*",
         destination: `${backend}/api/:path*`,
       },

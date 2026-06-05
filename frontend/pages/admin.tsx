@@ -94,7 +94,17 @@ useEffect(() => {
               className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
             >
               <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Links Panel</h2>
-              <p className="text-sm text-gray-600">Manage links</p>
+              <p className="text-sm text-gray-600">Manage links, review discovered links, and trigger health checks</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/allowlist_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Trusted Domain Allowlist</h2>
+              <p className="text-sm text-gray-600">Manage domains approved for link discovery and health checks</p>
             </Link>
           )}
         </div>
