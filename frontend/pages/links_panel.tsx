@@ -45,6 +45,23 @@ function StatusBadge({ status }: { status: LinkStatus }) {
   );
 }
 
+// Maps raw `last_error_type` values (set by the health checker) to admin-readable text.
+// "domain_not_allowed" and "irrelevant" look identical to a participant but mean very
+// different things to an admin: one is a trust/curation call, the other an LLM content
+// judgment — spelling them out here is what makes the distinction actually useful.
+const ERROR_TYPE_LABELS: Record<string, string> = {
+  http_error: "HTTP error",
+  timeout: "Request timed out",
+  connection_error: "Connection failed",
+  redirect_root: "Redirected to site root",
+  domain_not_allowed: "Domain not in allowlist",
+  irrelevant: "AI judged content off-topic",
+};
+
+function errorTypeLabel(value: string): string {
+  return ERROR_TYPE_LABELS[value] ?? value;
+}
+
 export default function LinkPanelPage() {
   const router = useRouter();
 
@@ -478,7 +495,7 @@ export default function LinkPanelPage() {
                               <div className="mt-1 text-xs text-gray-400">
                                 Last checked: {new Date(link.last_checked).toLocaleString()}
                                 {link.last_http_code ? ` · HTTP ${link.last_http_code}` : ""}
-                                {link.last_error_type ? ` · ${link.last_error_type}` : ""}
+                                {link.last_error_type ? ` · ${errorTypeLabel(link.last_error_type)}` : ""}
                               </div>
                             )}
                           </>

@@ -105,16 +105,23 @@ def is_relevant(
     link: dict,
     openai_client: OpenAI,
     allowlist_cache: set,
-) -> bool:
-    """Single source of truth for link relevance. Hard allowlist filter first, then LLM."""
+) -> tuple[bool, Optional[str]]:
+    """Single source of truth for link relevance. Hard allowlist filter first, then LLM.
+
+    Returns (is_relevant, reason). reason is None when relevant, otherwise one of:
+      "domain_not_allowed" — domain isn't in the trusted allowlist (hard filter; LLM not consulted)
+      "irrelevant"         — domain is trusted but the LLM judged the content off-topic
+    """
     if not domain_is_allowed(link.get("url", ""), allowlist_cache):
-        return False
-    return llm_judges_relevant(
+        return False, "domain_not_allowed"
+    if llm_judges_relevant(
         subject_tag,
         link.get("title", ""),
         link.get("description", ""),
         openai_client,
-    )
+    ):
+        return True, None
+    return False, "irrelevant"
 
 
 # ── Health checker (Job 1) ───────────────────────────────────────────────────
@@ -145,7 +152,17 @@ def run_health_check(db, settings, openai_client: OpenAI, allowlist_cache: set) 
             max_retries=settings.MAX_RETRIES_LINK_CHECK,
             timeout=settings.LINK_REQUEST_TIMEOUT,
         )
-        relevant = ok and is_relevant(tag, link, openai_client, allowlist_cache)
+
+        # Only consult the relevance gate when the page is reachable — short-circuits
+        # the allowlist/LLM checks for dead links (matches prior `ok and is_relevant(...)`).
+        relevant, relevance_reason = (
+            is_relevant(tag, link, openai_client, allowlist_cache) if ok else (False, None)
+        )
+        # Reachability errors (http_error/timeout/...) take priority for diagnostics;
+        # otherwise surface *why* it's not relevant — "domain_not_allowed" (untrusted
+        # source) vs "irrelevant" (LLM judged the content off-topic) — instead of a
+        # single generic label that hides which gate actually blocked the link.
+        fail_reason = error_type or relevance_reason
 
         update: dict = {"last_checked": now}
 
@@ -153,7 +170,7 @@ def run_health_check(db, settings, openai_client: OpenAI, allowlist_cache: set) 
             if not (ok and relevant):
                 update["status"] = "NOT_READY"
                 update["last_http_code"] = http_code
-                update["last_error_type"] = error_type or ("irrelevant" if ok else error_type)
+                update["last_error_type"] = fail_reason
                 degraded += 1
         else:  # NOT_READY
             if ok and relevant:
@@ -163,7 +180,7 @@ def run_health_check(db, settings, openai_client: OpenAI, allowlist_cache: set) 
                 recovered += 1
             else:
                 update["last_http_code"] = http_code
-                update["last_error_type"] = error_type
+                update["last_error_type"] = fail_reason
 
         col.update_one({"_id": link_id}, {"$set": update})
         checked += 1
@@ -234,7 +251,8 @@ def run_discovery(db, settings, openai_client: OpenAI, allowlist_cache: set) -> 
 
             # Relevance check
             link_dict = {"url": url, "title": title, "description": description}
-            if not is_relevant(tag, link_dict, openai_client, allowlist_cache):
+            relevant, _ = is_relevant(tag, link_dict, openai_client, allowlist_cache)
+            if not relevant:
                 continue
 
             # Insert as NEEDS_REVIEW

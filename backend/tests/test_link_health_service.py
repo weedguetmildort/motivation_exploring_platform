@@ -154,8 +154,9 @@ class TestIsRelevant:
     def test_domain_not_in_allowlist_blocked_before_llm(self):
         client = MagicMock()
         link = {"url": "https://shady-site.net/prob", "title": "Prob", "description": "stuff"}
-        result = is_relevant("Basic Probability", link, client, {"khanacademy.org"})
-        assert result is False
+        relevant, reason = is_relevant("Basic Probability", link, client, {"khanacademy.org"})
+        assert relevant is False
+        assert reason == "domain_not_allowed"
         client.chat.completions.create.assert_not_called()  # LLM never reached
 
     def test_domain_allowed_and_llm_says_yes(self):
@@ -165,8 +166,9 @@ class TestIsRelevant:
         client.chat.completions.create.return_value = MagicMock(choices=[choice])
 
         link = {"url": "https://khanacademy.org/probability", "title": "Probability", "description": "Coin flips"}
-        result = is_relevant("Basic Probability", link, client, {"khanacademy.org"})
-        assert result is True
+        relevant, reason = is_relevant("Basic Probability", link, client, {"khanacademy.org"})
+        assert relevant is True
+        assert reason is None
 
     def test_domain_allowed_but_llm_says_no(self):
         client = MagicMock()
@@ -175,8 +177,9 @@ class TestIsRelevant:
         client.chat.completions.create.return_value = MagicMock(choices=[choice])
 
         link = {"url": "https://khanacademy.org/calculus", "title": "Calculus", "description": "Derivatives"}
-        result = is_relevant("Basic Probability", link, client, {"khanacademy.org"})
-        assert result is False
+        relevant, reason = is_relevant("Basic Probability", link, client, {"khanacademy.org"})
+        assert relevant is False
+        assert reason == "irrelevant"
 
 
 # ── run_health_check — state transitions ──────────────────────────────────────
@@ -233,7 +236,7 @@ class TestRunHealthCheckTransitions:
         db = self._setup_db(col)
 
         with patch("app.services.link_health.fetch_with_retries", return_value=(True, 200, None)), \
-             patch("app.services.link_health.is_relevant", return_value=True):
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
             result = run_health_check(db, self._settings(), MagicMock(), {"khanacademy.org"})
 
         assert result["degraded"] == 0
@@ -256,7 +259,7 @@ class TestRunHealthCheckTransitions:
         db = self._setup_db(col)
 
         with patch("app.services.link_health.fetch_with_retries", return_value=(True, 200, None)), \
-             patch("app.services.link_health.is_relevant", return_value=True):
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
             result = run_health_check(db, self._settings(), MagicMock(), {"khanacademy.org"})
 
         assert result["recovered"] == 1
@@ -285,7 +288,8 @@ class TestRunHealthCheckTransitions:
         assert "status" not in update  # NOT_READY stays NOT_READY
 
     def test_ready_link_domain_not_in_allowlist_degrades(self):
-        """A READY link on a now-untrusted domain should move to NOT_READY."""
+        """A READY link on a now-untrusted domain should move to NOT_READY, tagged
+        with the specific 'domain_not_allowed' reason (not a generic 'irrelevant')."""
         link = {
             "_id": ObjectId(),
             "url": "https://removed-domain.com/prob",
@@ -299,12 +303,38 @@ class TestRunHealthCheckTransitions:
 
         # fetch succeeds but is_relevant fails (domain not in allowlist)
         with patch("app.services.link_health.fetch_with_retries", return_value=(True, 200, None)), \
-             patch("app.services.link_health.is_relevant", return_value=False):
+             patch("app.services.link_health.is_relevant", return_value=(False, "domain_not_allowed")):
             result = run_health_check(db, self._settings(), MagicMock(), set())
 
         assert result["degraded"] == 1
         update = col.update_one.call_args[0][1]["$set"]
         assert update["status"] == "NOT_READY"
+        assert update["last_error_type"] == "domain_not_allowed"
+
+    def test_ready_link_llm_judges_irrelevant_degrades_with_reason(self):
+        """A READY link on a trusted domain whose content the LLM judges off-topic
+        should move to NOT_READY, tagged 'irrelevant' — distinct from a domain-trust
+        failure so admins can tell which gate actually blocked the link."""
+        link = {
+            "_id": ObjectId(),
+            "url": "https://khanacademy.org/calculus",
+            "status": "READY",
+            "tags": ["Basic Probability"],
+            "title": "Calculus",
+            "description": "Derivatives",
+        }
+        col = self._setup_col([link])
+        db = self._setup_db(col)
+
+        # fetch succeeds and domain is trusted, but the LLM says the content is off-topic
+        with patch("app.services.link_health.fetch_with_retries", return_value=(True, 200, None)), \
+             patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
+            result = run_health_check(db, self._settings(), MagicMock(), {"khanacademy.org"})
+
+        assert result["degraded"] == 1
+        update = col.update_one.call_args[0][1]["$set"]
+        assert update["status"] == "NOT_READY"
+        assert update["last_error_type"] == "irrelevant"
 
     def test_summary_counts_multiple_links(self):
         """Two READY links fail (degraded), one NOT_READY link recovers.
@@ -331,7 +361,7 @@ class TestRunHealthCheckTransitions:
         fetch_results = [(False, 404, "http_error"), (False, 404, "http_error"), (True, 200, None)]
 
         with patch("app.services.link_health.fetch_with_retries", side_effect=fetch_results), \
-             patch("app.services.link_health.is_relevant", return_value=True):  # called once (link 3)
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):  # called once (link 3)
             result = run_health_check(db, self._settings(), MagicMock(), {"a.com", "b.com", "c.com"})
 
         assert result["checked"] == 3

@@ -1,9 +1,14 @@
 # backend/app/scheduler.py
 import os
 import threading
+from datetime import datetime, timedelta, timezone
 
 _scheduler = None
 _scheduler_lock = threading.Lock()
+
+# How long to wait after app startup before the first health-check/discovery
+# run, so restarting the dev server doesn't re-trigger the job every time.
+INITIAL_DELAY_HOURS = 1
 
 
 def run_jobs_now(app) -> None:
@@ -47,12 +52,15 @@ def start_scheduler(app) -> None:
 
         interval_hours = app.state.settings.LINK_CHECK_INTERVAL_HOURS
 
+        first_run = datetime.now(timezone.utc) + timedelta(hours=INITIAL_DELAY_HOURS)
+
         sched = BackgroundScheduler(daemon=True)
         sched.add_job(
             func=run_jobs_now,
             args=[app],
             trigger="interval",
             hours=interval_hours,
+            next_run_time=first_run,
             id="link_health_and_discovery",
             replace_existing=True,
             max_instances=1,
@@ -60,7 +68,7 @@ def start_scheduler(app) -> None:
         )
         sched.start()
         _scheduler = sched
-        print(f"[scheduler] started — interval={interval_hours}h")
+        print(f"[scheduler] started — first run in {INITIAL_DELAY_HOURS}h, then every {interval_hours}h")
 
 
 def stop_scheduler() -> None:

@@ -5,35 +5,33 @@ import asyncio
 from urllib.parse import urlparse
 from openai import AsyncOpenAI
 
-_UF_BASE_URL = os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu")
-_UF_API_KEY = os.getenv("UF_OPENAI_API_KEY")
-_UF_SEARCH_TOOL = os.getenv("UF_SEARCH_TOOL_NAME", "")
+_TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
 
 async def _run_search(query: str, max_results: int = 5) -> list[dict]:
-    """Execute a NaviGator AI search asynchronously and return raw results.
+    """Execute a Tavily web search and return results as [{title, url, snippet}].
 
-    Returns [] on any failure so the caller can fall back to answering without search.
-    If UF_SEARCH_TOOL_NAME is set, passes it in the URL path. Otherwise falls back
-    to passing the chat model name as the 'model' body parameter.
+    Returns [] if TAVILY_API_KEY is not set or on any failure,
+    so callers degrade gracefully.
     """
+    if not _TAVILY_API_KEY:
+        return []
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            body: dict = {"query": query, "max_results": max_results}
-            if _UF_SEARCH_TOOL:
-                url = f"{_UF_BASE_URL}/v1/search/{_UF_SEARCH_TOOL}"
-            else:
-                url = f"{_UF_BASE_URL}/v1/search"
-                body["model"] = os.getenv("UF_OPENAI_API_MODEL", "")
             resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {_UF_API_KEY}", "Content-Type": "application/json"},
-                json=body,
+                _TAVILY_SEARCH_URL,
+                headers={"Authorization": f"Bearer {_TAVILY_API_KEY}"},
+                json={"query": query, "max_results": min(max_results, 20)},
             )
             if not resp.is_success:
                 print(f"[search] _run_search HTTP {resp.status_code} body: {resp.text[:500]}")
             resp.raise_for_status()
-            results = resp.json().get("results", [])
+            items = resp.json().get("results", [])
+            results = [
+                {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+                for r in items
+            ]
             print(f"[search] _run_search: query={query!r} returned {len(results)} result(s)")
             return results
     except Exception as e:
