@@ -120,7 +120,13 @@ def chat_app(regular_user, chat_col):
 
 @pytest.fixture
 def chat_client(chat_app):
-    return TestClient(chat_app)
+    # Use as a context manager so Starlette keeps a single persistent event
+    # loop alive for the test's duration. Without it, each request gets its
+    # own throwaway loop that's torn down before _schedule_exchange_save's
+    # asyncio.create_task background task gets a chance to run, leaving
+    # insert_one permanently uncalled.
+    with TestClient(chat_app) as client:
+        yield client
 
 
 # ── _sse ────────────────────────────────────────────────────────────────────
