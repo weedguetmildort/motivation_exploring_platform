@@ -52,6 +52,7 @@ export default function AuthForm({ mode }: Props) {
     try {
       if (mode === "login") {
         await login(email.trim(), password);
+        router.push("/dashboard");
       } else {
         await signup({
           firstName: firstName.trim(),
@@ -60,9 +61,8 @@ export default function AuthForm({ mode }: Props) {
           password,
           consent,
         });
+        router.push("/consent");
       }
-
-      router.push("/dashboard");
     } catch (err: any) {
       setError(err?.message || "Something went wrong.");
     } finally {

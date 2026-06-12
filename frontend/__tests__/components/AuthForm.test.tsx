@@ -195,7 +195,7 @@ describe("AuthForm", () => {
           consent: true,
         })
       );
-      await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/dashboard"));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/consent"));
     });
 
     it("renders a link to the login page", () => {
