@@ -5,8 +5,16 @@ on:
     branches: [ "main" ]   # change if your default branch is different
   workflow_dispatch:       # allow manual runs from the Actions tab
 
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   build-and-deploy:
+    needs: tests
     runs-on: ubuntu-latest
 
     env:

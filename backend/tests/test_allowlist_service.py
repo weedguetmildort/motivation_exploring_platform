@@ -45,6 +45,27 @@ class TestExtractRegistrableDomain:
     def test_empty_string_returns_none(self):
         assert _extract_registrable_domain("") is None
 
+    def test_multi_part_suffix_co_uk(self):
+        # bbc.co.uk should NOT collapse to "co.uk"
+        assert _extract_registrable_domain("https://www.bbc.co.uk/bitesize") == "bbc.co.uk"
+
+    def test_multi_part_suffix_ac_uk_subdomain(self):
+        # subdomain of a .ac.uk site → registrable domain keeps the institution label
+        assert _extract_registrable_domain("https://www.ox.ac.uk/courses") == "ox.ac.uk"
+
+    def test_multi_part_suffix_with_deep_subdomain(self):
+        assert _extract_registrable_domain("https://maths.ox.ac.uk/courses") == "ox.ac.uk"
+
+    def test_multi_part_suffix_edu_au(self):
+        assert _extract_registrable_domain("https://www.unimelb.edu.au/study") == "unimelb.edu.au"
+
+    def test_two_label_uk_domain_unaffected(self):
+        # A bare two-label .uk domain (not under a known multi-part suffix) is unaffected
+        assert _extract_registrable_domain("https://example.uk/page") == "example.uk"
+
+    def test_normal_com_domain_unaffected_by_suffix_list(self):
+        assert _extract_registrable_domain("https://sub.example.com/page") == "example.com"
+
 
 # ── _normalize_domain ─────────────────────────────────────────────────────────
 

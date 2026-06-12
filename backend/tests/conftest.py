@@ -1,4 +1,12 @@
 # backend/tests/conftest.py
+import os
+
+# Modules under app.api.chat (and app.main, which imports it) construct an
+# AsyncOpenAI client at import time, which raises OpenAIError if no API key
+# is configured. Set a dummy key before any test module imports those
+# modules so collection doesn't fail when UF_OPENAI_API_KEY isn't set.
+os.environ.setdefault("UF_OPENAI_API_KEY", "test-key-for-tests")
+
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from bson import ObjectId

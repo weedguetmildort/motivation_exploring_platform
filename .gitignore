@@ -2,6 +2,7 @@
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
+frontend/coverage/
 **/*.tsbuildinfo
 
 # Python / backend
@@ -9,6 +10,8 @@ backend/__pycache__/
 backend/*.pyc
 backend/venv/
 backend/.env
+backend/htmlcov/
+backend/.coverage
 
 # Python virtual environments (anywhere)
 .venv/

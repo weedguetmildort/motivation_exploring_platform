@@ -1,0 +1,6 @@
+[run]
+source = app
+
+[report]
+show_missing = true
+skip_covered = false

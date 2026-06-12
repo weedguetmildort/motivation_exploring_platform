@@ -6,12 +6,12 @@ export async function apiFetch<T = any>(
   init: RequestInit = {}
 ): Promise<T> {
   const res = await fetch(input, {
+    ...init,
     credentials: "include", // send cookies
     headers: {
       "Content-Type": "application/json",
       ...(init.headers || {}),
     },
-    ...init,
   });
 
   // Try to parse JSON even on non-2xx for better error messages

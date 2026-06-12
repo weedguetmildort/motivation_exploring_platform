@@ -18,10 +18,30 @@ def ensure_indexes(col: Collection) -> None:
     col.create_index("domain", unique=True)
 
 
+# Common multi-part public suffixes where the registrable domain needs an
+# extra label (e.g. "bbc.co.uk", not just "co.uk"). Not exhaustive (a full
+# Public Suffix List would require an extra dependency), but covers the
+# ccTLD patterns most likely to appear in educational/news sources.
+_TWO_PART_SUFFIXES = frozenset({
+    "co.uk", "ac.uk", "org.uk", "gov.uk", "sch.uk", "nhs.uk", "ltd.uk", "plc.uk",
+    "co.jp", "ac.jp", "or.jp", "ne.jp", "go.jp",
+    "co.in", "ac.in", "gov.in", "edu.in", "res.in",
+    "edu.au", "gov.au", "org.au", "com.au", "net.au", "asn.au", "id.au",
+    "edu.cn", "gov.cn", "com.cn", "org.cn", "net.cn",
+    "ac.nz", "co.nz", "govt.nz", "org.nz", "net.nz",
+    "co.za", "ac.za", "gov.za", "org.za", "net.za",
+    "edu.sg", "gov.sg", "com.sg", "net.sg", "org.sg",
+    "com.br", "gov.br", "org.br", "net.br",
+})
+
+
 def _extract_registrable_domain(url: str) -> Optional[str]:
-    """Extract the registrable domain (last 2 dot-separated parts) from a URL or bare domain.
+    """Extract the registrable domain from a URL or bare domain.
 
     Strips scheme, path, www. prefix, and port. Lowercases the result.
+    Normally returns the last 2 dot-separated parts, but for known
+    multi-part public suffixes (e.g. "co.uk", "ac.jp") returns the last 3
+    parts so e.g. "bbc.co.uk" isn't collapsed to "co.uk".
     Returns None if parsing fails or result has no dot.
     """
     try:
@@ -33,10 +53,14 @@ def _extract_registrable_domain(url: str) -> Optional[str]:
         # Strip leading www.
         if host.startswith("www."):
             host = host[4:]
-        # Take the last two dot-separated parts as the registrable domain
+        # Take the last two dot-separated parts as the registrable domain,
+        # or the last three if the last two form a known multi-part suffix.
         parts = host.split(".")
         if len(parts) >= 2:
-            return ".".join(parts[-2:])
+            last_two = ".".join(parts[-2:])
+            if len(parts) >= 3 and last_two in _TWO_PART_SUFFIXES:
+                return ".".join(parts[-3:])
+            return last_two
         return host if host else None
     except Exception:
         return None
