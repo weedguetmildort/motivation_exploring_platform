@@ -8,70 +8,98 @@ from ..schemas.knowledge_link import (
     KnowledgeLinkCreate,
     KnowledgeLinkUpdate,
     KnowledgeLinkPublic,
+    LinkStatus,
 )
+
 
 def get_knowledge_links_collection(db) -> Collection:
     return db["knowledge_links"]
 
+
 def ensure_indexes(links: Collection) -> None:
     links.create_index("active")
     links.create_index("tags")
+    links.create_index("status")
+    links.create_index([("tags", 1), ("status", 1)])
     links.create_index([("title", "text"), ("description", "text")])
 
+
 def normalize_tags(tags: List[str]) -> List[str]:
-    seen = set()
+    # Deduplicate case-insensitively but preserve original casing so that
+    # stored tags match the PREDEFINED_TAGS used in discovery queries.
+    seen: set = set()
     cleaned = []
-
     for tag in tags:
-        value = str(tag).strip().lower()
-        if value and value not in seen:
-            seen.add(value)
+        value = str(tag).strip()
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
             cleaned.append(value)
-
     return cleaned
 
+
 def _to_public(doc: dict) -> KnowledgeLinkPublic:
+    raw_status = doc.get("status", "READY")
+    try:
+        status = LinkStatus(raw_status)
+    except ValueError:
+        status = LinkStatus.READY
+
     return KnowledgeLinkPublic(
         id=str(doc["_id"]),
         title=doc["title"],
         url=doc["url"],
         tags=doc.get("tags", []),
         description=doc["description"],
-        active=bool(doc.get("active", True)),
+        status=status,
+        last_checked=doc.get("last_checked"),
+        last_http_code=doc.get("last_http_code"),
+        last_error_type=doc.get("last_error_type"),
         created_at=doc.get("created_at"),
         updated_at=doc.get("updated_at"),
     )
+
 
 def create_knowledge_link(
     links: Collection,
     data: KnowledgeLinkCreate,
 ) -> KnowledgeLinkPublic:
     now = datetime.now(timezone.utc)
-
     doc = {
         "title": data.title.strip(),
         "url": str(data.url).strip(),
         "tags": normalize_tags(data.tags),
         "description": data.description.strip(),
-        "active": bool(data.active),
+        "status": "READY",
+        "active": True,
         "created_at": now,
         "updated_at": now,
     }
-
     res = links.insert_one(doc)
     doc["_id"] = res.inserted_id
-
     return _to_public(doc)
+
 
 def list_knowledge_links(links: Collection) -> List[KnowledgeLinkPublic]:
     docs = links.find().sort("created_at", -1)
     return [_to_public(doc) for doc in docs]
 
+
+def list_knowledge_links_by_status(
+    links: Collection,
+    status: Optional[str],
+) -> List[KnowledgeLinkPublic]:
+    if status is None:
+        return list_knowledge_links(links)
+    docs = links.find({"status": status}).sort("created_at", -1)
+    return [_to_public(doc) for doc in docs]
+
+
 def find_knowledge_link_by_id(links: Collection, link_id: str) -> Optional[dict]:
     if not ObjectId.is_valid(link_id):
         return None
-
     return links.find_one({"_id": ObjectId(link_id)})
+
 
 def update_knowledge_link(
     links: Collection,
@@ -80,30 +108,21 @@ def update_knowledge_link(
 ) -> Optional[KnowledgeLinkPublic]:
     if not ObjectId.is_valid(link_id):
         return None
-
     existing = links.find_one({"_id": ObjectId(link_id)})
     if not existing:
         return None
-
     update_doc = {
         "title": data.title.strip(),
         "url": str(data.url).strip(),
         "tags": normalize_tags(data.tags),
         "description": data.description.strip(),
-        "active": bool(data.active),
         "updated_at": datetime.now(timezone.utc),
+        # status is intentionally NOT updated here — managed by health jobs and approve/reject
     }
-
-    links.update_one(
-        {"_id": ObjectId(link_id)},
-        {"$set": update_doc},
-    )
-
+    links.update_one({"_id": ObjectId(link_id)}, {"$set": update_doc})
     updated = links.find_one({"_id": ObjectId(link_id)})
-    if not updated:
-        return None
+    return _to_public(updated) if updated else None
 
-    return _to_public(updated)
 
 def delete_knowledge_link(
     links: Collection,
@@ -111,10 +130,55 @@ def delete_knowledge_link(
 ) -> Optional[KnowledgeLinkPublic]:
     if not ObjectId.is_valid(link_id):
         return None
-
     existing = links.find_one({"_id": ObjectId(link_id)})
     if not existing:
         return None
-
     links.delete_one({"_id": ObjectId(link_id)})
     return _to_public(existing)
+
+
+def approve_link(links: Collection, link_id: str) -> Optional[KnowledgeLinkPublic]:
+    """Move a NEEDS_REVIEW link to READY."""
+    if not ObjectId.is_valid(link_id):
+        return None
+    doc = links.find_one({"_id": ObjectId(link_id), "status": "NEEDS_REVIEW"})
+    if not doc:
+        return None
+    now = datetime.now(timezone.utc)
+    links.update_one(
+        {"_id": ObjectId(link_id)},
+        {"$set": {"status": "READY", "active": True, "updated_at": now}},
+    )
+    updated = links.find_one({"_id": ObjectId(link_id)})
+    return _to_public(updated) if updated else None
+
+
+def reject_link(links: Collection, link_id: str) -> Optional[KnowledgeLinkPublic]:
+    """Move a NEEDS_REVIEW or NOT_READY link to REJECTED (tombstone)."""
+    if not ObjectId.is_valid(link_id):
+        return None
+    doc = links.find_one(
+        {"_id": ObjectId(link_id), "status": {"$in": ["NEEDS_REVIEW", "NOT_READY"]}}
+    )
+    if not doc:
+        return None
+    now = datetime.now(timezone.utc)
+    links.update_one(
+        {"_id": ObjectId(link_id)},
+        {"$set": {"status": "REJECTED", "active": False, "updated_at": now}},
+    )
+    updated = links.find_one({"_id": ObjectId(link_id)})
+    return _to_public(updated) if updated else None
+
+
+def reload_knowledge_links_cache(links: Collection) -> list:
+    """Return list of READY link dicts for use in app.state.knowledge_links."""
+    return [
+        {
+            "id": str(doc["_id"]),
+            "title": doc["title"],
+            "url": doc["url"],
+            "description": doc["description"],
+        }
+        for doc in links.find({"status": "READY"})
+    ]

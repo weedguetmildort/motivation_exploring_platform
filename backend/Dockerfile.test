@@ -1,0 +1,19 @@
+# Backend - TEST
+# backend/Dockerfile.test
+# Builds an image that runs the pytest suite with coverage. Mongo is mocked
+# in tests, so no database service is required to run this image.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt requirements-test.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-test.txt
+
+COPY app ./app
+COPY tests ./tests
+COPY pytest.ini .coveragerc ./
+
+CMD ["pytest", "--cov=app", "--cov-report=term-missing", "--cov-report=html:/app/htmlcov"]

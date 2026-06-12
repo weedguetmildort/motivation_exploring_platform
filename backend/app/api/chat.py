@@ -235,7 +235,7 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
-    metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly)
+    metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly).model_dump(exclude_none=True)
     _schedule_exchange_save(col, user, conv_id, user_message, [stored_reply], metadata)
     yield _sse({"type": "done", "conversation_id": conv_id})
 
