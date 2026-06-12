@@ -7,6 +7,7 @@ network calls are made. MongoDB collections are MagicMocks.
 """
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -81,6 +82,21 @@ def _parse_sse(body: str) -> list[dict]:
         assert chunk.startswith("data: ")
         events.append(json.loads(chunk[len("data: "):]))
     return events
+
+
+def _wait_for_insert_calls(col: MagicMock, n: int, timeout: float = 2.0) -> None:
+    """Poll until col.insert_one has been called >= n times.
+
+    _schedule_exchange_save persists messages on a background thread, so the
+    HTTP response can return before the inserts are recorded.
+    """
+    deadline = time.monotonic() + timeout
+    while col.insert_one.call_count < n:
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"Timed out waiting for {n} insert_one call(s); got {col.insert_one.call_count}"
+            )
+        time.sleep(0.01)
 
 
 # ── App fixtures ──────────────────────────────────────────────────────────────
@@ -574,6 +590,7 @@ class TestDoubleChatEndpoint:
         assert "".join(e["content"] for e in token_events) == "solo reply"
         assert events[-1] == {"type": "done", "conversation_id": "conv1"}
 
+        _wait_for_insert_calls(chat_col, 2)
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert assistant_doc["content"] == ["[AGENT A] solo reply"]
 
@@ -583,6 +600,7 @@ class TestDoubleChatEndpoint:
         resp = chat_client.post("/chat/double", json={"message": "hi", "conversation_id": "conv1", "agents": []})
 
         assert resp.status_code == 200
+        _wait_for_insert_calls(chat_col, 2)
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert set(assistant_doc["content"]) == {"[AGENT A] hello-a", "[AGENT B] hello-b"}
         assert assistant_doc["metadata"] == {"answer_incorrectly": False}
@@ -651,6 +669,7 @@ class TestLinksChatEndpoint:
         assert done["conversation_id"] == "conv4"
         assert "https://khanacademy.org/prob" in done["reply"]
 
+        _wait_for_insert_calls(chat_col, 2)
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert "https://khanacademy.org/prob" in assistant_doc["content"][0]
 
