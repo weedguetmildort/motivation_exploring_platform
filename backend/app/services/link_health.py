@@ -26,6 +26,24 @@ DISCOVERABLE_TAGS = [tag for tag in PREDEFINED_TAGS if tag != "Other"]
 
 # ── HTTP health check ────────────────────────────────────────────────────────
 
+# A realistic browser fingerprint. Sites guarded by anti-bot/WAF services (Cloudflare,
+# Akamai, etc.) often block bare "Mozilla/5.0" requests with 401/402/403 even though
+# the page is genuinely live and accessible to a real browser.
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# Status codes that commonly indicate an anti-bot/WAF block rather than a genuinely
+# dead or restricted page — treat as reachable so a real block doesn't get conflated
+# with a removed page.
+_BOT_BLOCK_STATUS_CODES = {401, 402, 403}
+
+
 def fetch_with_retries(
     url: str,
     max_retries: int = 3,
@@ -42,10 +60,13 @@ def fetch_with_retries(
     for attempt in range(max_retries):
         try:
             with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                resp = client.get(url, headers=_BROWSER_HEADERS)
 
             if resp.status_code == 404:
                 return False, 404, "http_error"
+
+            if resp.status_code in _BOT_BLOCK_STATUS_CODES:
+                return True, resp.status_code, None
 
             if resp.status_code >= 400:
                 return False, resp.status_code, "http_error"

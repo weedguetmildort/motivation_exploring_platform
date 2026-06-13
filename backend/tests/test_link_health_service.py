@@ -57,6 +57,44 @@ class TestFetchWithRetries:
         assert code == 500
         assert error == "http_error"
 
+    def test_401_treated_as_ok_bot_block(self):
+        """401/402/403 commonly come from anti-bot/WAF blocks rather than a
+        genuinely dead page, so they should not be flagged as failures."""
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(_make_resp(401))):
+            ok, code, error = fetch_with_retries("https://example.com/page", max_retries=1, timeout=5)
+        assert ok is True
+        assert code == 401
+        assert error is None
+
+    def test_402_treated_as_ok_bot_block(self):
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(_make_resp(402))):
+            ok, code, error = fetch_with_retries("https://example.com/page", max_retries=1, timeout=5)
+        assert ok is True
+        assert code == 402
+        assert error is None
+
+    def test_403_treated_as_ok_bot_block(self):
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(_make_resp(403))):
+            ok, code, error = fetch_with_retries("https://example.com/page", max_retries=1, timeout=5)
+        assert ok is True
+        assert code == 403
+        assert error is None
+
+    def test_sends_realistic_browser_headers(self):
+        """A bare 'Mozilla/5.0' UA with no Accept headers is itself a bot signal
+        to many WAFs — make sure we send a fuller, realistic header set."""
+        resp = _make_resp(200)
+        ctx = _mock_httpx_client(resp)
+        with patch("app.services.link_health.httpx.Client", return_value=ctx) as mock_client_cls:
+            fetch_with_retries("https://example.com/page", max_retries=1, timeout=5)
+
+        mock_client = ctx.__enter__.return_value
+        _, kwargs = mock_client.get.call_args
+        headers = kwargs["headers"]
+        assert "Chrome" in headers["User-Agent"]
+        assert "Accept" in headers
+        assert "Accept-Language" in headers
+
     def test_redirect_to_root_returns_redirect_root(self):
         # Original URL has a path; final URL is the bare root → page was removed
         resp = _make_resp(301, url="https://example.com")  # final URL has no path
