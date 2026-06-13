@@ -19,6 +19,10 @@ PREDEFINED_TAGS = [
     "Other",
 ]
 
+# "Other" is a catch-all fallback for untagged links (see is_relevant below),
+# not a real subject — searching for it during discovery returns junk.
+DISCOVERABLE_TAGS = [tag for tag in PREDEFINED_TAGS if tag != "Other"]
+
 
 # ── HTTP health check ────────────────────────────────────────────────────────
 
@@ -208,7 +212,7 @@ def run_discovery(db, settings, openai_client: OpenAI, allowlist_cache: set) -> 
     discovered = 0
     now = datetime.now(timezone.utc)
 
-    for tag in PREDEFINED_TAGS:
+    for tag in DISCOVERABLE_TAGS:
         live_count = col.count_documents({"tags": tag, "status": "READY"})
         if live_count >= settings.MAX_LIVE_LINKS_PER_SUBJECT:
             continue

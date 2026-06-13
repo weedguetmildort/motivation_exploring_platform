@@ -175,6 +175,9 @@ _STOP_WORDS = frozenset({
 
 _RE_UNLINKED_PREFIX = r"(?<!\[)\b"
 _RE_UNLINKED_SUFFIX = r"\b(?!\])"
+# Matches a fully-formed `[text](url)` link, allowing one level of balanced
+# parentheses inside the URL (e.g. Wikipedia's "Mitosis_(biology)").
+_RE_MARKDOWN_LINK = re.compile(r"\[[^\[\]]*\]\([^()]*(?:\([^()]*\)[^()]*)*\)")
 _RE_FORMULA_CHARS = re.compile(r"[=÷×≥≤≠→←+\-*/\\|^]")
 
 
@@ -185,12 +188,22 @@ def _title_keywords(title: str) -> list[str]:
     return sorted(candidates, key=len, reverse=True)
 
 
+def _markdown_link_spans(text: str) -> list[tuple[int, int]]:
+    """Return (start, end) spans of every fully-formed `[text](url)` link in text."""
+    return [m.span() for m in _RE_MARKDOWN_LINK.finditer(text)]
+
+
 def _unlinked_search(term: str, text: str) -> re.Match | None:
-    """Find the first occurrence of term in text that is not already inside a markdown link."""
-    return re.search(
-        _RE_UNLINKED_PREFIX + re.escape(term) + _RE_UNLINKED_SUFFIX,
-        text, re.IGNORECASE,
-    )
+    """Find the first occurrence of term in text that is not already part of
+    a markdown link, i.e. not in a `[display text]` and not inside a `(url)`
+    destination of a link already inserted by an earlier citation.
+    """
+    spans = _markdown_link_spans(text)
+    pattern = re.compile(_RE_UNLINKED_PREFIX + re.escape(term) + _RE_UNLINKED_SUFFIX, re.IGNORECASE)
+    for match in pattern.finditer(text):
+        if not any(start <= match.start() < end for start, end in spans):
+            return match
+    return None
 
 
 def _place_marker_inline(phrase: str, url: str, before_marker: str, after_marker: str) -> str:

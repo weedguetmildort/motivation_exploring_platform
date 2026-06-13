@@ -13,6 +13,7 @@ from app.services.search import (
     _filter_valid_urls,
     _build_search_context,
     _title_keywords,
+    _markdown_link_spans,
     _unlinked_search,
     _place_marker_inline,
     _inject_citation_links,
@@ -347,6 +348,37 @@ class TestTitleKeywords:
         assert "An" not in keywords
 
 
+# ── _markdown_link_spans ──────────────────────────────────────────────────────
+
+class TestMarkdownLinkSpans:
+    def test_finds_single_link_span(self):
+        text = "See [probability](https://example.com/prob) for details."
+        spans = _markdown_link_spans(text)
+
+        assert len(spans) == 1
+        start, end = spans[0]
+        assert text[start:end] == "[probability](https://example.com/prob)"
+
+    def test_finds_multiple_link_spans(self):
+        text = "[A](https://example.com/a) and [B](https://example.com/b)."
+        spans = _markdown_link_spans(text)
+
+        assert len(spans) == 2
+        assert text[spans[0][0]:spans[0][1]] == "[A](https://example.com/a)"
+        assert text[spans[1][0]:spans[1][1]] == "[B](https://example.com/b)"
+
+    def test_handles_balanced_parens_in_url(self):
+        text = "See [biology](https://en.wikipedia.org/wiki/Mitosis_(biology)) for details."
+        spans = _markdown_link_spans(text)
+
+        assert len(spans) == 1
+        start, end = spans[0]
+        assert text[start:end] == "[biology](https://en.wikipedia.org/wiki/Mitosis_(biology))"
+
+    def test_no_links_returns_empty_list(self):
+        assert _markdown_link_spans("Plain text with no links.") == []
+
+
 # ── _unlinked_search ──────────────────────────────────────────────────────────
 
 class TestUnlinkedSearch:
@@ -361,6 +393,20 @@ class TestUnlinkedSearch:
         match = _unlinked_search("probability", text)
         assert match is None
 
+    def test_does_not_match_term_inside_already_linked_url(self):
+        # "calculate" appears inside a URL that was already turned into a
+        # markdown link by an earlier citation — must not be matched again.
+        text = (
+            "Read about probabilities"
+            "[1](https://www.geeksforgeeks.org/maths/how-to-calculate-dice-probabilities/)."
+            " Learn how to calculate it."
+        )
+        match = _unlinked_search("calculate", text)
+
+        assert match is not None
+        # The only valid match is the standalone "calculate" outside the link.
+        assert text[:match.start()].endswith("how to ")
+
     def test_case_insensitive(self):
         text = "PROBABILITY is fun."
         match = _unlinked_search("probability", text)
@@ -369,6 +415,15 @@ class TestUnlinkedSearch:
     def test_no_match_returns_none(self):
         text = "This text has nothing relevant."
         match = _unlinked_search("probability", text)
+        assert match is None
+
+    def test_returns_none_when_only_occurrence_is_inside_linked_url(self):
+        text = (
+            "Read about probabilities"
+            "[1](https://www.geeksforgeeks.org/maths/how-to-calculate-dice-probabilities/)."
+        )
+        match = _unlinked_search("calculate", text)
+
         assert match is None
 
 
@@ -476,6 +531,40 @@ class TestInjectCitationLinks:
         text = "Plain text with no markers."
         result = _inject_citation_links(text, [])
         assert result == "Plain text with no markers."
+
+    def test_citation_phrase_inside_earlier_citation_url_does_not_nest_links(self):
+        # Regression test: citation 1's URL contains the word "calculate",
+        # which is also the phrase citation 2 wants to link. Citation 1 is
+        # processed first (via the bare [1] marker), turning its URL into
+        # part of the text. Citation 2's phrase "calculate" must NOT be
+        # matched inside that already-inserted URL, which would otherwise
+        # splice a second markdown link into the middle of the first one's
+        # destination.
+        text = "Read about probabilities[1]. Learn how to [calculate][2] it."
+        citations = [
+            {
+                "n": 1,
+                "title": "Dice Probabilities",
+                "url": "https://www.geeksforgeeks.org/maths/how-to-calculate-dice-probabilities/",
+            },
+            {
+                "n": 2,
+                "title": "Calculate",
+                "url": "https://www.investopedia.com/terms/m/median.asp",
+            },
+        ]
+
+        result = _inject_citation_links(text, citations)
+
+        # Citation 1's URL must remain intact, with no link nested inside it.
+        assert (
+            "(https://www.geeksforgeeks.org/maths/how-to-calculate-dice-probabilities/)"
+            in result
+        )
+        # Citation 2 must be its own separate, well-formed link.
+        assert "[calculate](https://www.investopedia.com/terms/m/median.asp)" in result
+        # No markdown link should appear nested inside another's URL.
+        assert "[calculate](https://www.investopedia.com/terms/m/median.asp)-dice" not in result
 
 
 # ── get_chat_response_with_search ──────────────────────────────────────────────
