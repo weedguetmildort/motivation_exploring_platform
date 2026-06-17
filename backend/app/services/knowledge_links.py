@@ -8,6 +8,7 @@ from ..schemas.knowledge_link import (
     KnowledgeLinkCreate,
     KnowledgeLinkUpdate,
     KnowledgeLinkPublic,
+    ExplorePreview,
     LinkStatus,
 )
 
@@ -177,14 +178,11 @@ def explore_link(
     openai_client,
     allowlist_cache: set,
     timeout: int = 10,
-) -> Optional[KnowledgeLinkPublic]:
-    """Fetch the link's live page, update its stored title/description from HTML meta
-    tags, re-run the relevance judge with the enriched content, and return the updated
-    document.
+) -> Optional[ExplorePreview]:
+    """Fetch the link's live page and return a preview of what would change — nothing
+    is written to the database.  The admin reviews the proposed title/description (and
+    the raw article excerpt as an alternative) then calls apply_explore to commit.
 
-    Status transitions follow the same rules as run_health_check:
-      READY + fails relevance  → NOT_READY
-      NOT_READY + passes relevance → NEEDS_REVIEW
     Returns None for REJECTED links or invalid IDs.
     """
     from .link_health import fetch_page_metadata, is_relevant
@@ -197,24 +195,58 @@ def explore_link(
 
     url = doc.get("url", "")
     tag = doc["tags"][0] if doc.get("tags") else "Other"
+
+    fetched_title, fetched_description, article_excerpt, http_code = fetch_page_metadata(url, timeout=timeout)
+
+    # Judge relevance using the best available content (meta desc preferred, excerpt
+    # as fallback, existing description as last resort so we always get a verdict).
+    judge_title = fetched_title or doc.get("title", "")
+    judge_description = fetched_description or article_excerpt or doc.get("description", "")
+    link_dict = {"url": url, "title": judge_title, "description": judge_description}
+    relevant, relevance_reason = is_relevant(tag, link_dict, openai_client, allowlist_cache)
+
+    return ExplorePreview(
+        proposed_title=fetched_title,
+        proposed_description=fetched_description,
+        article_excerpt=article_excerpt,
+        http_code=http_code,
+        relevant=relevant,
+        relevance_reason=relevance_reason,
+    )
+
+
+def apply_explore(
+    links: Collection,
+    link_id: str,
+    new_title: str,
+    new_description: str,
+    openai_client,
+    allowlist_cache: set,
+) -> Optional[KnowledgeLinkPublic]:
+    """Save the admin-confirmed title/description, re-run the relevance judge, apply
+    the same status transitions as run_health_check, and return the updated document.
+
+    Returns None for REJECTED links or invalid IDs.
+    """
+    from .link_health import is_relevant
+
+    if not ObjectId.is_valid(link_id):
+        return None
+    doc = links.find_one({"_id": ObjectId(link_id)})
+    if not doc or doc.get("status") == "REJECTED":
+        return None
+
+    url = doc.get("url", "")
+    tag = doc["tags"][0] if doc.get("tags") else "Other"
     now = datetime.now(timezone.utc)
 
-    fetched_title, fetched_description, http_code = fetch_page_metadata(url, timeout=timeout)
+    title = new_title.strip()
+    description = new_description.strip()
 
-    update: dict = {"last_checked": now, "updated_at": now}
-    if http_code is not None:
-        update["last_http_code"] = http_code
-
-    # Only overwrite stored fields when the page returned real content
-    new_title = fetched_title if fetched_title else doc.get("title", "")
-    new_description = fetched_description if fetched_description else doc.get("description", "")
-    if fetched_title:
-        update["title"] = fetched_title
-    if fetched_description:
-        update["description"] = fetched_description
-
-    link_dict = {"url": url, "title": new_title, "description": new_description}
+    link_dict = {"url": url, "title": title, "description": description}
     relevant, relevance_reason = is_relevant(tag, link_dict, openai_client, allowlist_cache)
+
+    update: dict = {"title": title, "description": description, "last_checked": now, "updated_at": now}
 
     current_status = doc.get("status", "READY")
     if current_status == "READY" and not relevant:

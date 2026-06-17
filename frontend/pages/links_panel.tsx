@@ -30,6 +30,19 @@ type KnowledgeLink = {
 
 type ActiveTab = "all" | "review" | "dead";
 
+type ExplorePreview = {
+  linkId: string;
+  proposedTitle: string;
+  proposedDescription: string;
+  articleExcerpt: string;
+  httpCode: number | null;
+  relevant: boolean;
+  relevanceReason: string | null;
+  // editable drafts shown in the confirmation card
+  draftTitle: string;
+  draftDescription: string;
+};
+
 function StatusBadge({ status }: { status: LinkStatus }) {
   const cfg: Record<LinkStatus, { label: string; cls: string }> = {
     READY:        { label: "Ready",          cls: "bg-green-100 text-green-800 border-green-200" },
@@ -91,6 +104,8 @@ export default function LinkPanelPage() {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [exploringId, setExploringId] = useState<string | null>(null);
+  const [explorePreview, setExplorePreview] = useState<ExplorePreview | null>(null);
+  const [applyingExplore, setApplyingExplore] = useState(false);
 
   // health check trigger
   const [healthChecking, setHealthChecking] = useState(false);
@@ -264,13 +279,56 @@ export default function LinkPanelPage() {
   async function exploreLink(id: string) {
     setExploringId(id);
     try {
-      const updated = await apiFetch<KnowledgeLink>(`/api/knowledge-links/${id}/explore`, { method: "POST" });
-      setLinks((prev) => prev.map((x) => (x.id === id ? updated : x)));
+      const data = await apiFetch<{
+        proposed_title: string;
+        proposed_description: string;
+        article_excerpt: string;
+        http_code: number | null;
+        relevant: boolean;
+        relevance_reason: string | null;
+      }>(`/api/knowledge-links/${id}/explore`, { method: "POST" });
+
+      const bestDescription = data.proposed_description || data.article_excerpt || "";
+      setExplorePreview({
+        linkId: id,
+        proposedTitle: data.proposed_title,
+        proposedDescription: data.proposed_description,
+        articleExcerpt: data.article_excerpt,
+        httpCode: data.http_code,
+        relevant: data.relevant,
+        relevanceReason: data.relevance_reason,
+        draftTitle: data.proposed_title || links.find((l) => l.id === id)?.title || "",
+        draftDescription: bestDescription || links.find((l) => l.id === id)?.description || "",
+      });
     } catch (e) {
       console.error(e);
-      alert("Failed to explore link.");
+      alert("Failed to fetch page preview.");
     } finally {
       setExploringId(null);
+    }
+  }
+
+  async function applyExplore() {
+    if (!explorePreview || applyingExplore) return;
+    setApplyingExplore(true);
+    try {
+      const updated = await apiFetch<KnowledgeLink>(
+        `/api/knowledge-links/${explorePreview.linkId}/explore/apply`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: explorePreview.draftTitle,
+            description: explorePreview.draftDescription,
+          }),
+        }
+      );
+      setLinks((prev) => prev.map((x) => (x.id === explorePreview.linkId ? updated : x)));
+      setExplorePreview(null);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to apply explore changes.");
+    } finally {
+      setApplyingExplore(false);
     }
   }
 
@@ -681,11 +739,77 @@ export default function LinkPanelPage() {
                         )}
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  {/* Explore confirmation panel */}
+                  {explorePreview?.linkId === link.id && (
+                    <div className="mt-3 rounded-lg border border-purple-200 bg-purple-50 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-purple-800 uppercase tracking-wide">Explore Preview</span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border ${
+                          explorePreview.relevant
+                            ? "bg-green-100 text-green-800 border-green-200"
+                            : "bg-red-100 text-red-800 border-red-200"
+                        }`}>
+                          {explorePreview.relevant ? "Relevant" : `Not relevant · ${errorTypeLabel(explorePreview.relevanceReason ?? "irrelevant")}`}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Title</label>
+                        <input
+                          value={explorePreview.draftTitle}
+                          onChange={(e) => setExplorePreview((p) => p ? { ...p, draftTitle: e.target.value } : p)}
+                          className="w-full rounded border px-2 py-1 text-sm"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Description</label>
+                        <textarea
+                          value={explorePreview.draftDescription}
+                          onChange={(e) => setExplorePreview((p) => p ? { ...p, draftDescription: e.target.value } : p)}
+                          className="w-full rounded border px-2 py-1 text-sm"
+                          rows={4}
+                        />
+                        {explorePreview.articleExcerpt &&
+                          explorePreview.articleExcerpt !== explorePreview.draftDescription && (
+                          <div className="mt-2 rounded bg-white border border-purple-200 p-2">
+                            <p className="text-xs font-medium text-purple-700 mb-1">Alternative from article body:</p>
+                            <p className="text-xs text-gray-600 line-clamp-3">{explorePreview.articleExcerpt}</p>
+                            <button
+                              type="button"
+                              onClick={() => setExplorePreview((p) => p ? { ...p, draftDescription: p.articleExcerpt } : p)}
+                              className="mt-1 text-xs text-purple-700 underline hover:text-purple-900"
+                            >
+                              Use this instead
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={applyExplore}
+                          disabled={applyingExplore || !explorePreview.draftTitle.trim() || !explorePreview.draftDescription.trim()}
+                          className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-700 disabled:opacity-60"
+                        >
+                          {applyingExplore ? "Saving…" : "Apply"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExplorePreview(null)}
+                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
         </div>
       </div>
     </div>

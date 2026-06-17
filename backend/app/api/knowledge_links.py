@@ -9,6 +9,8 @@ from ..schemas.knowledge_link import (
     KnowledgeLinkCreate,
     KnowledgeLinkUpdate,
     KnowledgeLinkPublic,
+    ExplorePreview,
+    ExploreApply,
 )
 from ..schemas.user import UserPublic
 from ..api.auth import get_current_user
@@ -22,6 +24,7 @@ from ..services.knowledge_links import (
     approve_link,
     reject_link,
     explore_link,
+    apply_explore,
 )
 
 router = APIRouter(prefix="/knowledge-links", tags=["knowledge-links"])
@@ -149,14 +152,15 @@ def approve_knowledge_link(
     return result
 
 
-@router.post("/{link_id}/explore", response_model=KnowledgeLinkPublic)
+@router.post("/{link_id}/explore", response_model=ExplorePreview)
 def explore_knowledge_link(
     link_id: str,
     request: Request,
     user: UserPublic = Depends(require_admin),
 ):
-    """Fetch the live page, update title/description from HTML meta tags, re-run the
-    relevance judge with the enriched content, and return the updated link state."""
+    """Fetch the live page and return a preview (proposed title, description, article
+    excerpt, and relevance verdict) WITHOUT saving anything. The admin reviews and
+    calls /explore/apply to commit."""
     links = get_knowledge_links_collection(request.app.state.db)
     openai_client = OpenAI(
         api_key=os.getenv("UF_OPENAI_API_KEY"),
@@ -169,10 +173,36 @@ def explore_knowledge_link(
         request.app.state.allowlist_cache,
         timeout=request.app.state.settings.LINK_REQUEST_TIMEOUT,
     )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Link not found or is tombstoned")
+    return result
+
+
+@router.post("/{link_id}/explore/apply", response_model=KnowledgeLinkPublic)
+def apply_explore_knowledge_link(
+    link_id: str,
+    data: ExploreApply,
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    """Save the admin-confirmed title/description, re-run the relevance judge, and
+    return the updated link state."""
+    links = get_knowledge_links_collection(request.app.state.db)
+    openai_client = OpenAI(
+        api_key=os.getenv("UF_OPENAI_API_KEY"),
+        base_url=os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu"),
+    )
+    result = apply_explore(
+        links,
+        link_id,
+        data.title,
+        data.description,
+        openai_client,
+        request.app.state.allowlist_cache,
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Link not found or is tombstoned")
 
-    # Keep chatbot cache consistent with any status changes
     request.app.state.knowledge_links = [
         l for l in request.app.state.knowledge_links if l["id"] != link_id
     ]

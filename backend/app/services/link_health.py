@@ -45,6 +45,19 @@ _BROWSER_HEADERS = {
 _BOT_BLOCK_STATUS_CODES = {401, 402, 403}
 
 _RE_TITLE_TAG = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_RE_HTML_TAG = re.compile(r"<[^>]+>")
+_RE_WHITESPACE = re.compile(r"\s+")
+_RE_PARA = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+
+# Content-area wrappers tried in order before falling back to the full page.
+_CONTENT_AREA_PATTERNS = [
+    re.compile(r"<article\b[^>]*>(.*?)</article>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<main\b[^>]*>(.*?)</main>", re.IGNORECASE | re.DOTALL),
+    re.compile(
+        r'<div\b[^>]*\bclass=["\'][^"\']*(?:content|article|post|entry|body)[^"\']*["\'][^>]*>(.*?)</div>',
+        re.IGNORECASE | re.DOTALL,
+    ),
+]
 
 
 def _meta_content(html: str, attr: str, value: str) -> str:
@@ -64,26 +77,51 @@ def _meta_content(html: str, attr: str, value: str) -> str:
     return m.group(1) if m else ""
 
 
+def _first_article_paragraph(html: str, min_length: int = 80) -> str:
+    """Return the first meaningful <p> text from a semantic content area.
+
+    Tries <article>, <main>, and common content div classes in order, then falls back
+    to the full page. Strips tags, collapses whitespace, and caps at 500 chars.
+    min_length filters out nav items, captions, and other short inline text.
+    """
+    region = html
+    for pattern in _CONTENT_AREA_PATTERNS:
+        m = pattern.search(html)
+        if m:
+            region = m.group(1)
+            break
+
+    for p_match in _RE_PARA.finditer(region):
+        text = _RE_HTML_TAG.sub("", p_match.group(1))
+        text = _RE_WHITESPACE.sub(" ", text).strip()
+        if len(text) >= min_length:
+            return text[:500]
+    return ""
+
+
 def fetch_page_metadata(
     url: str,
     timeout: int = 10,
-) -> tuple[str, str, Optional[int]]:
-    """Fetch url and extract (title, description, http_code) from its HTML meta tags.
+) -> tuple[str, str, str, Optional[int]]:
+    """Fetch url and extract (title, description, article_excerpt, http_code).
 
-    Returns ("", "", http_code) when unreachable, non-HTML, or metadata is absent.
-    Bot-blocked responses (401/402/403) return ("", "", http_code) without parsing.
+    description  — best meta tag description (og:description or meta name=description)
+    article_excerpt — first meaningful paragraph from article/main body content;
+                      useful as a fallback when the meta description is generic.
+    Returns ("", "", "", http_code) when unreachable or non-HTML.
+    Bot-blocked responses (401/402/403) return empty strings without parsing.
     """
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             resp = client.get(url, headers=_BROWSER_HEADERS)
         http_code = resp.status_code
         if resp.status_code != 200:
-            return "", "", http_code
+            return "", "", "", http_code
         if "html" not in resp.headers.get("content-type", "").lower():
-            return "", "", http_code
-        html = resp.text[:51200]  # first 50 KB — meta tags are always in <head>
+            return "", "", "", http_code
+        html = resp.text[:51200]  # first 50 KB — meta tags and article intros are in <head>/<body>
     except Exception:
-        return "", "", None
+        return "", "", "", None
 
     _title_m = _RE_TITLE_TAG.search(html)
     title = (
@@ -95,7 +133,8 @@ def fetch_page_metadata(
         _meta_content(html, "property", "og:description")
         or _meta_content(html, "name", "description")
     )
-    return title.strip(), description.strip(), http_code
+    excerpt = _first_article_paragraph(html)
+    return title.strip(), description.strip(), excerpt, http_code
 
 
 def fetch_with_retries(
