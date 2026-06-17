@@ -27,6 +27,22 @@ class KnowledgeLinkUpdate(KnowledgeLinkBase):
     pass
 
 
+class ExplorePreview(BaseModel):
+    """Returned by POST /explore before the admin confirms. Nothing is saved yet."""
+    proposed_title: str
+    proposed_description: str
+    article_excerpt: str
+    http_code: Optional[int] = None
+    relevant: bool
+    relevance_reason: Optional[str] = None
+
+
+class ExploreApply(BaseModel):
+    """Body for POST /explore/apply — the title/description the admin confirmed."""
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
 class KnowledgeLinkPublic(BaseModel):
     id: str
     title: str

@@ -12,6 +12,7 @@ from app.services.knowledge_links import (
     approve_link,
     reject_link,
     explore_link,
+    apply_explore,
     reload_knowledge_links_cache,
     list_knowledge_links_by_status,
     update_knowledge_link,
@@ -268,7 +269,7 @@ class TestListKnowledgeLinksByStatus:
         assert results[0].status == LinkStatus.READY
 
 
-# ── explore_link ──────────────────────────────────────────────────────────────
+# ── explore_link (preview — no DB writes) ────────────────────────────────────
 
 class TestExploreLink:
     def _make_doc(self, oid, status="READY"):
@@ -298,60 +299,107 @@ class TestExploreLink:
         col, _ = self._make_col(oid, status="REJECTED")
         result = explore_link(col, str(oid), MagicMock(), set())
         assert result is None
+
+    def test_does_not_write_to_db(self):
+        """explore_link is a preview-only operation — it must not touch the database."""
+        oid = ObjectId()
+        col, _ = self._make_col(oid)
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("T", "D", "E", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            explore_link(col, str(oid), MagicMock(), set())
         col.update_one.assert_not_called()
 
-    def test_updates_description_when_page_returns_content(self):
+    def test_returns_explore_preview_with_fetched_content(self):
+        oid = ObjectId()
+        col, _ = self._make_col(oid)
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("Fetched Title", "Fetched desc", "Article para", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            result = explore_link(col, str(oid), MagicMock(), set())
+        assert result.proposed_title == "Fetched Title"
+        assert result.proposed_description == "Fetched desc"
+        assert result.article_excerpt == "Article para"
+        assert result.http_code == 200
+
+    def test_relevant_flag_reflects_judge_verdict(self):
+        oid = ObjectId()
+        col, _ = self._make_col(oid)
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Some desc", "", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
+            result = explore_link(col, str(oid), MagicMock(), set())
+        assert result.relevant is False
+        assert result.relevance_reason == "irrelevant"
+
+    def test_falls_back_to_stored_description_for_judge_when_fetch_empty(self):
+        """When the page returns nothing useful, judge still runs using the stored description."""
+        oid = ObjectId()
+        col, doc = self._make_col(oid)
+        mock_relevant = MagicMock(return_value=(True, None))
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "", "", 403)), \
+             patch("app.services.link_health.is_relevant", mock_relevant):
+            explore_link(col, str(oid), MagicMock(), set())
+        _, kwargs = mock_relevant.call_args
+        link_arg = mock_relevant.call_args[0][1]
+        assert link_arg["description"] == doc["description"]
+
+
+# ── apply_explore (saves confirmed content) ───────────────────────────────────
+
+class TestApplyExplore:
+    def _make_doc(self, oid, status="READY"):
+        return {
+            "_id": oid,
+            "title": "Old Title",
+            "url": "https://khanacademy.org/probability",
+            "tags": ["Basic Probability"],
+            "description": "Old short desc",
+            "status": status,
+        }
+
+    def _make_col(self, oid, status="READY"):
+        doc = self._make_doc(oid, status)
+        col = MagicMock()
+        col.find_one.return_value = doc
+        return col, doc
+
+    def test_returns_none_for_invalid_id(self):
+        col = MagicMock()
+        result = apply_explore(col, "bad-id", "T", "D", MagicMock(), set())
+        assert result is None
+
+    def test_returns_none_for_rejected_link(self):
+        oid = ObjectId()
+        col, _ = self._make_col(oid, status="REJECTED")
+        result = apply_explore(col, str(oid), "T", "D", MagicMock(), set())
+        assert result is None
+        col.update_one.assert_not_called()
+
+    def test_saves_new_title_and_description(self):
         oid = ObjectId()
         col, original_doc = self._make_col(oid)
-        updated_doc = {**original_doc, "description": "Rich fetched description", "last_error_type": None}
+        updated_doc = {**original_doc, "title": "New Title", "description": "Better description"}
         col.find_one.side_effect = [original_doc, updated_doc]
-
-        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Rich fetched description", 200)), \
-             patch("app.services.link_health.is_relevant", return_value=(True, None)):
-            result = explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
-
+        with patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            apply_explore(col, str(oid), "New Title", "Better description", MagicMock(), set())
         update_args = col.update_one.call_args[0][1]["$set"]
-        assert update_args["description"] == "Rich fetched description"
-        assert result is not None
-
-    def test_does_not_overwrite_description_when_page_returns_empty(self):
-        """WAF-blocked or otherwise metadata-less pages should not wipe the stored description."""
-        oid = ObjectId()
-        col, original_doc = self._make_col(oid)
-        col.find_one.side_effect = [original_doc, original_doc]
-
-        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "", 403)), \
-             patch("app.services.link_health.is_relevant", return_value=(True, None)):
-            explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
-
-        update_args = col.update_one.call_args[0][1]["$set"]
-        assert "description" not in update_args
+        assert update_args["title"] == "New Title"
+        assert update_args["description"] == "Better description"
 
     def test_ready_link_demoted_when_judge_says_irrelevant(self):
         oid = ObjectId()
         col, original_doc = self._make_col(oid, status="READY")
-        demoted_doc = {**original_doc, "status": "NOT_READY"}
-        col.find_one.side_effect = [original_doc, demoted_doc]
-
-        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Better desc", 200)), \
-             patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
-            result = explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
-
+        col.find_one.side_effect = [original_doc, {**original_doc, "status": "NOT_READY"}]
+        with patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
+            apply_explore(col, str(oid), "T", "D", MagicMock(), set())
         update_args = col.update_one.call_args[0][1]["$set"]
         assert update_args["status"] == "NOT_READY"
-        assert update_args["active"] is False
         assert update_args["last_error_type"] == "irrelevant"
 
     def test_not_ready_link_promoted_to_needs_review(self):
         oid = ObjectId()
         col, original_doc = self._make_col(oid, status="NOT_READY")
-        promoted_doc = {**original_doc, "status": "NEEDS_REVIEW"}
-        col.find_one.side_effect = [original_doc, promoted_doc]
-
-        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Good content", 200)), \
-             patch("app.services.link_health.is_relevant", return_value=(True, None)):
-            result = explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
-
+        col.find_one.side_effect = [original_doc, {**original_doc, "status": "NEEDS_REVIEW"}]
+        with patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            apply_explore(col, str(oid), "T", "Good description", MagicMock(), set())
         update_args = col.update_one.call_args[0][1]["$set"]
         assert update_args["status"] == "NEEDS_REVIEW"
         assert update_args["last_error_type"] is None
@@ -360,26 +408,11 @@ class TestExploreLink:
         oid = ObjectId()
         col, original_doc = self._make_col(oid, status="READY")
         col.find_one.side_effect = [original_doc, original_doc]
-
-        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Good content", 200)), \
-             patch("app.services.link_health.is_relevant", return_value=(True, None)):
-            explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
-
+        with patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            apply_explore(col, str(oid), "T", "D", MagicMock(), set())
         update_args = col.update_one.call_args[0][1]["$set"]
         assert "status" not in update_args
         assert update_args.get("last_error_type") is None
-
-    def test_records_http_code(self):
-        oid = ObjectId()
-        col, original_doc = self._make_col(oid)
-        col.find_one.side_effect = [original_doc, original_doc]
-
-        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Desc", 200)), \
-             patch("app.services.link_health.is_relevant", return_value=(True, None)):
-            explore_link(col, str(oid), MagicMock(), set())
-
-        update_args = col.update_one.call_args[0][1]["$set"]
-        assert update_args["last_http_code"] == 200
 
 
 # ── update_knowledge_link — status not overwritten ────────────────────────────
