@@ -59,6 +59,41 @@ _CONTENT_AREA_PATTERNS = [
     ),
 ]
 
+# Lowercase substrings that identify known generic site-wide meta descriptions.
+# These are useless for relevance judging and should be discarded so the system
+# falls through to the article excerpt or URL slug instead.
+_GENERIC_DESCRIPTION_FRAGMENTS = [
+    "your all-in-one learning portal",          # GeeksforGeeks
+    "a free, collaborative, example repository", # Rosetta Code
+]
+
+
+def _is_generic_description(desc: str) -> bool:
+    """Return True when desc is a known site-wide boilerplate rather than page-specific content."""
+    lower = desc.lower()
+    return any(frag in lower for frag in _GENERIC_DESCRIPTION_FRAGMENTS)
+
+
+def _url_slug_description(url: str) -> str:
+    """Humanize the last meaningful path segment of a URL into a readable string.
+
+    e.g. '.../introduction-to-divide-and-conquer-algorithm/' → 'Introduction To Divide And Conquer Algorithm'
+    Falls back to '' when no useful segment is found.
+    """
+    path = urlparse(url).path
+    segments = [s for s in path.rstrip("/").split("/") if s]
+    if not segments:
+        return ""
+    slug = segments[-1]
+    # Skip overly-generic trailing segments
+    if slug in {"index", "home", "page", "article", "post", "blog", "dsa", "maths"}:
+        slug = segments[-2] if len(segments) >= 2 else ""
+    if not slug:
+        return ""
+    text = re.sub(r"[-_]+", " ", slug).strip()
+    text = _RE_WHITESPACE.sub(" ", text)
+    return text.title()
+
 
 def _meta_content(html: str, attr: str, value: str) -> str:
     """Return the content= of the first <meta> tag that has attr=value (either attribute order)."""
@@ -133,7 +168,14 @@ def fetch_page_metadata(
         _meta_content(html, "property", "og:description")
         or _meta_content(html, "name", "description")
     )
+    # Discard site-wide boilerplate so callers fall through to a more useful signal.
+    if _is_generic_description(description):
+        description = ""
     excerpt = _first_article_paragraph(html)
+    # When JS rendering hides the article body, derive a content hint from the URL slug
+    # so the relevance judge and admin always have something meaningful to work with.
+    if not excerpt:
+        excerpt = _url_slug_description(url)
     return title.strip(), description.strip(), excerpt, http_code
 
 

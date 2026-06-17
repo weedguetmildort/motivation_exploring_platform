@@ -10,6 +10,8 @@ from app.services.link_health import (
     fetch_with_retries,
     fetch_page_metadata,
     _first_article_paragraph,
+    _is_generic_description,
+    _url_slug_description,
     llm_judges_relevant,
     is_relevant,
     run_health_check,
@@ -237,6 +239,73 @@ class TestFetchPageMetadata:
         with patch("app.services.link_health.httpx.Client", return_value=ctx):
             title, desc, excerpt, code = fetch_page_metadata("https://example.com/page", timeout=5)
         assert title == "" and desc == "" and excerpt == "" and code is None
+
+    def test_clears_generic_gfg_description(self):
+        """GeeksforGeeks serves a site-wide meta description that is useless for
+        relevance judging — fetch_page_metadata must discard it (return '')."""
+        html = (
+            '<meta property="og:description" content="Your All-in-One Learning Portal: '
+            'GeeksforGeeks is a comprehensive educational platform.">'
+        )
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            _, desc, _, _ = fetch_page_metadata("https://www.geeksforgeeks.org/some-article/", timeout=5)
+        assert desc == ""
+
+    def test_uses_url_slug_when_no_article_excerpt(self):
+        """When JS rendering hides article content and meta description is empty/generic,
+        the URL slug should surface as the excerpt so the judge has something useful."""
+        html = "<html><head></head><body><div>No readable paragraphs here.</div></body></html>"
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            _, _, excerpt, _ = fetch_page_metadata(
+                "https://www.geeksforgeeks.org/dsa/introduction-to-divide-and-conquer-algorithm/", timeout=5
+            )
+        assert "Divide" in excerpt
+        assert "Conquer" in excerpt
+
+
+# ── _is_generic_description ───────────────────────────────────────────────────
+
+class TestIsGenericDescription:
+    def test_gfg_pattern_detected(self):
+        assert _is_generic_description(
+            "Your All-in-One Learning Portal: GeeksforGeeks is a comprehensive educational platform."
+        ) is True
+
+    def test_case_insensitive(self):
+        assert _is_generic_description("YOUR ALL-IN-ONE LEARNING PORTAL") is True
+
+    def test_page_specific_description_not_flagged(self):
+        assert _is_generic_description(
+            "Divide and Conquer is an algorithm design paradigm that breaks problems into subproblems."
+        ) is False
+
+    def test_empty_string_not_flagged(self):
+        assert _is_generic_description("") is False
+
+
+# ── _url_slug_description ─────────────────────────────────────────────────────
+
+class TestUrlSlugDescription:
+    def test_humanizes_hyphenated_slug(self):
+        result = _url_slug_description(
+            "https://www.geeksforgeeks.org/dsa/introduction-to-divide-and-conquer-algorithm/"
+        )
+        assert result == "Introduction To Divide And Conquer Algorithm"
+
+    def test_skips_generic_trailing_segment(self):
+        """When the last segment is a generic word like 'dsa', uses the segment before it."""
+        result = _url_slug_description("https://example.com/algorithms/dsa")
+        assert result == "Algorithms"
+
+    def test_underscore_separator(self):
+        result = _url_slug_description("https://example.com/probability_theory")
+        assert result == "Probability Theory"
+
+    def test_empty_for_bare_domain(self):
+        assert _url_slug_description("https://example.com/") == ""
+
+    def test_empty_for_unknown_generic_only(self):
+        assert _url_slug_description("https://example.com/index") == ""
 
 
 # ── _first_article_paragraph ──────────────────────────────────────────────────
