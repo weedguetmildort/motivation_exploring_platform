@@ -1,7 +1,9 @@
 # backend/app/api/knowledge_links.py
+import os
 import threading
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request, Depends, Query
+from openai import OpenAI
 
 from ..schemas.knowledge_link import (
     KnowledgeLinkCreate,
@@ -19,6 +21,7 @@ from ..services.knowledge_links import (
     delete_knowledge_link,
     approve_link,
     reject_link,
+    explore_link,
 )
 
 router = APIRouter(prefix="/knowledge-links", tags=["knowledge-links"])
@@ -143,6 +146,43 @@ def approve_knowledge_link(
         "url": str(result.url),
         "description": result.description,
     })
+    return result
+
+
+@router.post("/{link_id}/explore", response_model=KnowledgeLinkPublic)
+def explore_knowledge_link(
+    link_id: str,
+    request: Request,
+    user: UserPublic = Depends(require_admin),
+):
+    """Fetch the live page, update title/description from HTML meta tags, re-run the
+    relevance judge with the enriched content, and return the updated link state."""
+    links = get_knowledge_links_collection(request.app.state.db)
+    openai_client = OpenAI(
+        api_key=os.getenv("UF_OPENAI_API_KEY"),
+        base_url=os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu"),
+    )
+    result = explore_link(
+        links,
+        link_id,
+        openai_client,
+        request.app.state.allowlist_cache,
+        timeout=request.app.state.settings.LINK_REQUEST_TIMEOUT,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Link not found or is tombstoned")
+
+    # Keep chatbot cache consistent with any status changes
+    request.app.state.knowledge_links = [
+        l for l in request.app.state.knowledge_links if l["id"] != link_id
+    ]
+    if result.status.value == "READY":
+        request.app.state.knowledge_links.append({
+            "id": result.id,
+            "title": result.title,
+            "url": str(result.url),
+            "description": result.description,
+        })
     return result
 
 

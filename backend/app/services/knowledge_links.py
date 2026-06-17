@@ -171,6 +171,69 @@ def reject_link(links: Collection, link_id: str) -> Optional[KnowledgeLinkPublic
     return _to_public(updated) if updated else None
 
 
+def explore_link(
+    links: Collection,
+    link_id: str,
+    openai_client,
+    allowlist_cache: set,
+    timeout: int = 10,
+) -> Optional[KnowledgeLinkPublic]:
+    """Fetch the link's live page, update its stored title/description from HTML meta
+    tags, re-run the relevance judge with the enriched content, and return the updated
+    document.
+
+    Status transitions follow the same rules as run_health_check:
+      READY + fails relevance  → NOT_READY
+      NOT_READY + passes relevance → NEEDS_REVIEW
+    Returns None for REJECTED links or invalid IDs.
+    """
+    from .link_health import fetch_page_metadata, is_relevant
+
+    if not ObjectId.is_valid(link_id):
+        return None
+    doc = links.find_one({"_id": ObjectId(link_id)})
+    if not doc or doc.get("status") == "REJECTED":
+        return None
+
+    url = doc.get("url", "")
+    tag = doc["tags"][0] if doc.get("tags") else "Other"
+    now = datetime.now(timezone.utc)
+
+    fetched_title, fetched_description, http_code = fetch_page_metadata(url, timeout=timeout)
+
+    update: dict = {"last_checked": now, "updated_at": now}
+    if http_code is not None:
+        update["last_http_code"] = http_code
+
+    # Only overwrite stored fields when the page returned real content
+    new_title = fetched_title if fetched_title else doc.get("title", "")
+    new_description = fetched_description if fetched_description else doc.get("description", "")
+    if fetched_title:
+        update["title"] = fetched_title
+    if fetched_description:
+        update["description"] = fetched_description
+
+    link_dict = {"url": url, "title": new_title, "description": new_description}
+    relevant, relevance_reason = is_relevant(tag, link_dict, openai_client, allowlist_cache)
+
+    current_status = doc.get("status", "READY")
+    if current_status == "READY" and not relevant:
+        update["status"] = "NOT_READY"
+        update["active"] = False
+        update["last_error_type"] = relevance_reason
+    elif current_status == "NOT_READY" and relevant:
+        update["status"] = "NEEDS_REVIEW"
+        update["last_error_type"] = None
+    elif relevant:
+        update["last_error_type"] = None
+    else:
+        update["last_error_type"] = relevance_reason
+
+    links.update_one({"_id": ObjectId(link_id)}, {"$set": update})
+    updated = links.find_one({"_id": ObjectId(link_id)})
+    return _to_public(updated) if updated else None
+
+
 def reload_knowledge_links_cache(links: Collection) -> list:
     """Return list of READY link dicts for use in app.state.knowledge_links."""
     return [

@@ -8,6 +8,7 @@ import pytest
 
 from app.services.link_health import (
     fetch_with_retries,
+    fetch_page_metadata,
     llm_judges_relevant,
     is_relevant,
     run_health_check,
@@ -155,6 +156,80 @@ class TestFetchWithRetries:
         assert ok is True  # fail-open: don't penalize protected/unknown sites
         assert code is None
         assert error is None
+
+
+# ── fetch_page_metadata ───────────────────────────────────────────────────────
+
+class TestFetchPageMetadata:
+    def _mock_resp(self, html: str, status: int = 200, content_type: str = "text/html; charset=utf-8"):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.text = html
+        resp.headers = {"content-type": content_type}
+        return resp
+
+    def test_extracts_og_description(self):
+        html = '<meta property="og:description" content="OG description here">'
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            title, desc, code = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert desc == "OG description here"
+        assert code == 200
+
+    def test_og_description_takes_priority_over_meta_name(self):
+        html = (
+            '<meta name="description" content="Fallback">'
+            '<meta property="og:description" content="OG wins">'
+        )
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            _, desc, _ = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert desc == "OG wins"
+
+    def test_falls_back_to_meta_name_description(self):
+        html = '<meta name="description" content="Fallback description">'
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            _, desc, _ = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert desc == "Fallback description"
+
+    def test_extracts_og_title(self):
+        html = '<meta property="og:title" content="Page Title">'
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            title, _, _ = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert title == "Page Title"
+
+    def test_falls_back_to_title_tag(self):
+        html = "<title>HTML Title Tag</title>"
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            title, _, _ = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert title == "HTML Title Tag"
+
+    def test_handles_content_attribute_before_property(self):
+        """meta tags sometimes have content= before property= — both orderings must work."""
+        html = '<meta content="Reversed content" property="og:description">'
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp(html))):
+            _, desc, _ = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert desc == "Reversed content"
+
+    def test_returns_empty_for_non_html_content_type(self):
+        resp = self._mock_resp("binary content", content_type="application/pdf")
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(resp)):
+            title, desc, code = fetch_page_metadata("https://example.com/doc.pdf", timeout=5)
+        assert title == "" and desc == "" and code == 200
+
+    def test_bot_blocked_returns_empty_metadata(self):
+        """403 (WAF block) is reachable for fetch_with_retries but yields no parseable HTML."""
+        with patch("app.services.link_health.httpx.Client", return_value=_mock_httpx_client(self._mock_resp("", status=403))):
+            title, desc, code = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert title == "" and desc == "" and code == 403
+
+    def test_exception_returns_empty_and_none_code(self):
+        mock_client = MagicMock()
+        mock_client.get.side_effect = Exception("connection failed")
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=mock_client)
+        ctx.__exit__ = MagicMock(return_value=False)
+        with patch("app.services.link_health.httpx.Client", return_value=ctx):
+            title, desc, code = fetch_page_metadata("https://example.com/page", timeout=5)
+        assert title == "" and desc == "" and code is None
 
 
 # ── llm_judges_relevant ───────────────────────────────────────────────────────
