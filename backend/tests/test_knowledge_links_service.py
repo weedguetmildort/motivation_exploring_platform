@@ -1,7 +1,7 @@
 # backend/tests/test_knowledge_links_service.py
 """Unit tests for the knowledge-links service: CRUD, approve/reject, cache, tag normalization."""
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 from bson import ObjectId
 import pytest
 
@@ -11,6 +11,7 @@ from app.services.knowledge_links import (
     create_knowledge_link,
     approve_link,
     reject_link,
+    explore_link,
     reload_knowledge_links_cache,
     list_knowledge_links_by_status,
     update_knowledge_link,
@@ -265,6 +266,120 @@ class TestListKnowledgeLinksByStatus:
         col.find.return_value.sort.return_value = [doc]
         results = list_knowledge_links_by_status(col, None)
         assert results[0].status == LinkStatus.READY
+
+
+# ── explore_link ──────────────────────────────────────────────────────────────
+
+class TestExploreLink:
+    def _make_doc(self, oid, status="READY"):
+        return {
+            "_id": oid,
+            "title": "Link Title",
+            "url": "https://khanacademy.org/probability",
+            "tags": ["Basic Probability"],
+            "description": "Short desc",
+            "status": status,
+        }
+
+    def _make_col(self, oid, status="READY"):
+        doc = self._make_doc(oid, status)
+        col = MagicMock()
+        col.find_one.return_value = doc
+        return col, doc
+
+    def test_returns_none_for_invalid_id(self):
+        col = MagicMock()
+        result = explore_link(col, "not-an-objectid", MagicMock(), set())
+        assert result is None
+        col.find_one.assert_not_called()
+
+    def test_returns_none_for_rejected_link(self):
+        oid = ObjectId()
+        col, _ = self._make_col(oid, status="REJECTED")
+        result = explore_link(col, str(oid), MagicMock(), set())
+        assert result is None
+        col.update_one.assert_not_called()
+
+    def test_updates_description_when_page_returns_content(self):
+        oid = ObjectId()
+        col, original_doc = self._make_col(oid)
+        updated_doc = {**original_doc, "description": "Rich fetched description", "last_error_type": None}
+        col.find_one.side_effect = [original_doc, updated_doc]
+
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Rich fetched description", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            result = explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
+
+        update_args = col.update_one.call_args[0][1]["$set"]
+        assert update_args["description"] == "Rich fetched description"
+        assert result is not None
+
+    def test_does_not_overwrite_description_when_page_returns_empty(self):
+        """WAF-blocked or otherwise metadata-less pages should not wipe the stored description."""
+        oid = ObjectId()
+        col, original_doc = self._make_col(oid)
+        col.find_one.side_effect = [original_doc, original_doc]
+
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "", 403)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
+
+        update_args = col.update_one.call_args[0][1]["$set"]
+        assert "description" not in update_args
+
+    def test_ready_link_demoted_when_judge_says_irrelevant(self):
+        oid = ObjectId()
+        col, original_doc = self._make_col(oid, status="READY")
+        demoted_doc = {**original_doc, "status": "NOT_READY"}
+        col.find_one.side_effect = [original_doc, demoted_doc]
+
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Better desc", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
+            result = explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
+
+        update_args = col.update_one.call_args[0][1]["$set"]
+        assert update_args["status"] == "NOT_READY"
+        assert update_args["active"] is False
+        assert update_args["last_error_type"] == "irrelevant"
+
+    def test_not_ready_link_promoted_to_needs_review(self):
+        oid = ObjectId()
+        col, original_doc = self._make_col(oid, status="NOT_READY")
+        promoted_doc = {**original_doc, "status": "NEEDS_REVIEW"}
+        col.find_one.side_effect = [original_doc, promoted_doc]
+
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Good content", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            result = explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
+
+        update_args = col.update_one.call_args[0][1]["$set"]
+        assert update_args["status"] == "NEEDS_REVIEW"
+        assert update_args["last_error_type"] is None
+
+    def test_ready_link_stays_ready_when_judge_approves(self):
+        oid = ObjectId()
+        col, original_doc = self._make_col(oid, status="READY")
+        col.find_one.side_effect = [original_doc, original_doc]
+
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Good content", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            explore_link(col, str(oid), MagicMock(), {"khanacademy.org"})
+
+        update_args = col.update_one.call_args[0][1]["$set"]
+        assert "status" not in update_args
+        assert update_args.get("last_error_type") is None
+
+    def test_records_http_code(self):
+        oid = ObjectId()
+        col, original_doc = self._make_col(oid)
+        col.find_one.side_effect = [original_doc, original_doc]
+
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("", "Desc", 200)), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            explore_link(col, str(oid), MagicMock(), set())
+
+        update_args = col.update_one.call_args[0][1]["$set"]
+        assert update_args["last_http_code"] == 200
 
 
 # ── update_knowledge_link — status not overwritten ────────────────────────────

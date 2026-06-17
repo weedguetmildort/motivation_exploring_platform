@@ -90,6 +90,7 @@ export default function LinkPanelPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [exploringId, setExploringId] = useState<string | null>(null);
 
   // health check trigger
   const [healthChecking, setHealthChecking] = useState(false);
@@ -257,6 +258,19 @@ export default function LinkPanelPage() {
       alert("Failed to reject link.");
     } finally {
       setRejectingId(null);
+    }
+  }
+
+  async function exploreLink(id: string) {
+    setExploringId(id);
+    try {
+      const updated = await apiFetch<KnowledgeLink>(`/api/knowledge-links/${id}/explore`, { method: "POST" });
+      setLinks((prev) => prev.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      console.error(e);
+      alert("Failed to explore link.");
+    } finally {
+      setExploringId(null);
     }
   }
 
@@ -574,6 +588,14 @@ export default function LinkPanelPage() {
                                 >
                                   {rejectingId === link.id ? "Rejecting…" : "Reject"}
                                 </button>
+                                <button
+                                  type="button"
+                                  onClick={() => exploreLink(link.id)}
+                                  disabled={exploringId === link.id}
+                                  className="px-2 py-1 rounded border border-purple-300 bg-white text-purple-700 hover:bg-purple-50 disabled:opacity-60"
+                                >
+                                  {exploringId === link.id ? "Exploring…" : "Explore"}
+                                </button>
                               </>
                             )}
 
@@ -595,6 +617,14 @@ export default function LinkPanelPage() {
                                 >
                                   {deletingId === link.id ? "Deleting…" : "Delete"}
                                 </button>
+                                <button
+                                  type="button"
+                                  onClick={() => exploreLink(link.id)}
+                                  disabled={exploringId === link.id}
+                                  className="px-2 py-1 rounded border border-purple-300 bg-white text-purple-700 hover:bg-purple-50 disabled:opacity-60"
+                                >
+                                  {exploringId === link.id ? "Exploring…" : "Explore"}
+                                </button>
                               </>
                             )}
 
@@ -614,6 +644,14 @@ export default function LinkPanelPage() {
                                   className="px-2 py-1 rounded border border-red-300 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
                                 >
                                   {deletingId === link.id ? "Deleting…" : "Delete"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => exploreLink(link.id)}
+                                  disabled={exploringId === link.id}
+                                  className="px-2 py-1 rounded border border-purple-300 bg-white text-purple-700 hover:bg-purple-50 disabled:opacity-60"
+                                >
+                                  {exploringId === link.id ? "Exploring…" : "Explore"}
                                 </button>
                               </>
                             )}

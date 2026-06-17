@@ -1,6 +1,7 @@
 # backend/app/services/link_health.py
 import asyncio
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -42,6 +43,59 @@ _BROWSER_HEADERS = {
 # dead or restricted page — treat as reachable so a real block doesn't get conflated
 # with a removed page.
 _BOT_BLOCK_STATUS_CODES = {401, 402, 403}
+
+_RE_TITLE_TAG = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _meta_content(html: str, attr: str, value: str) -> str:
+    """Return the content= of the first <meta> tag that has attr=value (either attribute order)."""
+    # attr=value before content=
+    m = re.search(
+        r"<meta\b[^>]*\b" + re.escape(attr) + r"\s*=\s*[\"']" + re.escape(value) + r"[\"'][^>]*\bcontent\s*=\s*[\"']([^\"'<>]*)[\"']",
+        html, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    # content= before attr=value
+    m = re.search(
+        r"<meta\b[^>]*\bcontent\s*=\s*[\"']([^\"'<>]*)[\"'][^>]*\b" + re.escape(attr) + r"\s*=\s*[\"']" + re.escape(value) + r"[\"']",
+        html, re.IGNORECASE,
+    )
+    return m.group(1) if m else ""
+
+
+def fetch_page_metadata(
+    url: str,
+    timeout: int = 10,
+) -> tuple[str, str, Optional[int]]:
+    """Fetch url and extract (title, description, http_code) from its HTML meta tags.
+
+    Returns ("", "", http_code) when unreachable, non-HTML, or metadata is absent.
+    Bot-blocked responses (401/402/403) return ("", "", http_code) without parsing.
+    """
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            resp = client.get(url, headers=_BROWSER_HEADERS)
+        http_code = resp.status_code
+        if resp.status_code != 200:
+            return "", "", http_code
+        if "html" not in resp.headers.get("content-type", "").lower():
+            return "", "", http_code
+        html = resp.text[:51200]  # first 50 KB — meta tags are always in <head>
+    except Exception:
+        return "", "", None
+
+    _title_m = _RE_TITLE_TAG.search(html)
+    title = (
+        _meta_content(html, "property", "og:title")
+        or _meta_content(html, "name", "title")
+        or (_title_m.group(1).strip() if _title_m else "")
+    )
+    description = (
+        _meta_content(html, "property", "og:description")
+        or _meta_content(html, "name", "description")
+    )
+    return title.strip(), description.strip(), http_code
 
 
 def fetch_with_retries(
