@@ -185,7 +185,7 @@ def explore_link(
 
     Returns None for REJECTED links or invalid IDs.
     """
-    from .link_health import fetch_page_metadata, is_relevant
+    from .link_health import fetch_page_metadata, fetch_readable_content, summarize_page_content, is_relevant
 
     if not ObjectId.is_valid(link_id):
         return None
@@ -197,6 +197,16 @@ def explore_link(
     tag = doc["tags"][0] if doc.get("tags") else "Other"
 
     fetched_title, fetched_description, article_excerpt, http_code = fetch_page_metadata(url, timeout=timeout)
+
+    # When meta description is missing (was generic/absent) try fetching the full
+    # readable content via Jina Reader and summarizing it with the LLM.  This handles
+    # JS-rendered sites like GeeksforGeeks where the raw HTML carries no article text.
+    if not fetched_description:
+        readable = fetch_readable_content(url, timeout=timeout)
+        if readable:
+            fetched_description = summarize_page_content(readable, fetched_title or url, openai_client)
+            if not article_excerpt:
+                article_excerpt = readable[:500]
 
     # Judge relevance using the best available content (meta desc preferred, excerpt
     # as fallback, existing description as last resort so we always get a verdict).
