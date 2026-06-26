@@ -179,6 +179,54 @@ def fetch_page_metadata(
     return title.strip(), description.strip(), excerpt, http_code
 
 
+def fetch_readable_content(url: str, timeout: int = 15) -> str:
+    """Fetch clean readable text from a JS-rendered page via Jina Reader (r.jina.ai).
+
+    Jina renders the page with a headless browser and returns plain text, which is
+    useful when the raw HTML fetch yields no article content (e.g. GeeksforGeeks,
+    Medium, or other SPA-heavy sites). Only called during admin Explore, not health
+    checks, so the extra latency is acceptable.
+    Returns empty string on any failure.
+    """
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(
+                f"https://r.jina.ai/{url}",
+                headers={"Accept": "text/plain"},
+            )
+        if resp.status_code == 200:
+            return resp.text[:4000]
+    except Exception:
+        pass
+    return ""
+
+
+def summarize_page_content(content: str, title: str, openai_client) -> str:
+    """Ask the LLM to generate a 1-2 sentence resource description from page content.
+
+    Returns empty string on failure so callers can fall through to other signals.
+    """
+    if not content:
+        return ""
+    try:
+        prompt = (
+            "Write a concise 1-2 sentence description of the following web page for use "
+            "as an educational resource summary. Focus on the specific topic covered, not "
+            f"the website itself. Page title: '{title}'.\n\nPage content:\n{content[:3000]}"
+        )
+        model = os.getenv("UF_OPENAI_API_MODEL", "gpt-4o-mini")
+        resp = openai_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=120,
+            temperature=0.3,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[link_health] summarize_page_content error: {e}")
+        return ""
+
+
 def fetch_with_retries(
     url: str,
     max_retries: int = 3,

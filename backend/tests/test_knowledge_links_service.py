@@ -330,16 +330,41 @@ class TestExploreLink:
         assert result.relevance_reason == "irrelevant"
 
     def test_falls_back_to_stored_description_for_judge_when_fetch_empty(self):
-        """When the page returns nothing useful, judge still runs using the stored description."""
+        """When the page returns nothing useful (including Jina), judge runs using stored description."""
         oid = ObjectId()
         col, doc = self._make_col(oid)
         mock_relevant = MagicMock(return_value=(True, None))
         with patch("app.services.link_health.fetch_page_metadata", return_value=("", "", "", 403)), \
+             patch("app.services.link_health.fetch_readable_content", return_value=""), \
              patch("app.services.link_health.is_relevant", mock_relevant):
             explore_link(col, str(oid), MagicMock(), set())
-        _, kwargs = mock_relevant.call_args
         link_arg = mock_relevant.call_args[0][1]
         assert link_arg["description"] == doc["description"]
+
+    def test_uses_ai_summary_when_meta_description_missing(self):
+        """When meta description is absent, Jina content is fetched and the LLM
+        generates a proper summary to use as the proposed description."""
+        oid = ObjectId()
+        col, _ = self._make_col(oid)
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("D&C Title", "", "", 200)), \
+             patch("app.services.link_health.fetch_readable_content", return_value="Divide and conquer splits a problem..."), \
+             patch("app.services.link_health.summarize_page_content", return_value="Covers divide and conquer algorithm design."), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            result = explore_link(col, str(oid), MagicMock(), set())
+        assert result.proposed_description == "Covers divide and conquer algorithm design."
+
+    def test_sets_article_excerpt_from_readable_content_when_body_empty(self):
+        """When article body extraction finds nothing but Jina returns content,
+        the first 500 chars of the readable content are used as the excerpt."""
+        oid = ObjectId()
+        col, _ = self._make_col(oid)
+        jina_text = "Readable content from Jina " * 5
+        with patch("app.services.link_health.fetch_page_metadata", return_value=("Title", "", "", 200)), \
+             patch("app.services.link_health.fetch_readable_content", return_value=jina_text), \
+             patch("app.services.link_health.summarize_page_content", return_value="Summary."), \
+             patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            result = explore_link(col, str(oid), MagicMock(), set())
+        assert result.article_excerpt == jina_text[:500]
 
 
 # ── apply_explore (saves confirmed content) ───────────────────────────────────

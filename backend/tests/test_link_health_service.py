@@ -9,6 +9,8 @@ import pytest
 from app.services.link_health import (
     fetch_with_retries,
     fetch_page_metadata,
+    fetch_readable_content,
+    summarize_page_content,
     _first_article_paragraph,
     _is_generic_description,
     _url_slug_description,
@@ -306,6 +308,70 @@ class TestUrlSlugDescription:
 
     def test_empty_for_unknown_generic_only(self):
         assert _url_slug_description("https://example.com/index") == ""
+
+
+# ── fetch_readable_content ────────────────────────────────────────────────────
+
+class TestFetchReadableContent:
+    def _jina_ctx(self, text: str, status: int = 200):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.text = text
+        return _mock_httpx_client(resp)
+
+    def test_returns_text_on_200(self):
+        with patch("app.services.link_health.httpx.Client", return_value=self._jina_ctx("Article content here")):
+            result = fetch_readable_content("https://example.com/page", timeout=5)
+        assert result == "Article content here"
+
+    def test_truncates_to_4000_chars(self):
+        long_text = "A" * 5000
+        with patch("app.services.link_health.httpx.Client", return_value=self._jina_ctx(long_text)):
+            result = fetch_readable_content("https://example.com/page", timeout=5)
+        assert len(result) == 4000
+
+    def test_returns_empty_on_non_200(self):
+        with patch("app.services.link_health.httpx.Client", return_value=self._jina_ctx("", status=429)):
+            result = fetch_readable_content("https://example.com/page", timeout=5)
+        assert result == ""
+
+    def test_returns_empty_on_exception(self):
+        mock_client = MagicMock()
+        mock_client.get.side_effect = Exception("network error")
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=mock_client)
+        ctx.__exit__ = MagicMock(return_value=False)
+        with patch("app.services.link_health.httpx.Client", return_value=ctx):
+            result = fetch_readable_content("https://example.com/page", timeout=5)
+        assert result == ""
+
+
+# ── summarize_page_content ────────────────────────────────────────────────────
+
+class TestSummarizePageContent:
+    def _make_client(self, content: str):
+        client = MagicMock()
+        choice = MagicMock()
+        choice.message.content = content
+        client.chat.completions.create.return_value = MagicMock(choices=[choice])
+        return client
+
+    def test_returns_llm_summary(self):
+        client = self._make_client("Explains divide and conquer with examples.")
+        result = summarize_page_content("Some article text...", "Divide and Conquer", client)
+        assert result == "Explains divide and conquer with examples."
+
+    def test_returns_empty_for_empty_content(self):
+        client = self._make_client("Should not be called")
+        result = summarize_page_content("", "Title", client)
+        assert result == ""
+        client.chat.completions.create.assert_not_called()
+
+    def test_returns_empty_on_llm_failure(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = Exception("API error")
+        result = summarize_page_content("Some content", "Title", client)
+        assert result == ""
 
 
 # ── _first_article_paragraph ──────────────────────────────────────────────────
