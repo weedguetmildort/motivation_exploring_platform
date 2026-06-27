@@ -32,7 +32,7 @@ export const QUIZ_THEMES: Record<QuizType, QuizTheme> = {
     label: "Dual Response",
     subtitle: "Dual Response",
     description:
-      "Two independent AI agents each provide their own response side by side.",
+      "Two independent AI agents each provide their own response side by side. You can direct a follow-up to one agent specifically by typing @AgentA or @AgentB at the start of your message.",
     dataTheme: "double",
   },
   links: {

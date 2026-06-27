@@ -90,6 +90,16 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
+        {/* ── My Reports link ── */}
+        <div className="flex justify-end">
+          <a
+            href="/my_reports"
+            className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            My issue reports →
+          </a>
+        </div>
+
         {/* ── Admin Section ── */}
         {user.is_admin && (
           <>

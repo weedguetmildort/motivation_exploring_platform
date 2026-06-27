@@ -1,5 +1,5 @@
 // frontend/pages/quiz/[quiz_id].tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/router";
 import QuestionBox, { Choice } from "../../components/QuestionBox";
 import { getMe, invalidateMeCache, logout, type User } from "../../lib/auth";
@@ -19,6 +19,7 @@ import {
   isVariantQuizId,
   type QuizId,
 } from "../../lib/studySteps";
+import { createReport, type ReportCategory } from "../../lib/reports";
 
 function isValidQuizId(value: string, user?: User | null): boolean {
   if (user?.is_admin) return true;
@@ -97,6 +98,12 @@ export default function QuizPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
   const [firstChatResponded, setFirstChatResponded] = useState(false);
+  const [showReportForm, setShowReportForm] = useState(false);
+  const [reportCategory, setReportCategory] = useState<ReportCategory>("other");
+  const [reportDescription, setReportDescription] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportSuccess, setReportSuccess] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const lastResetQuestionId = useRef<string | undefined>(undefined);
 
@@ -203,6 +210,11 @@ export default function QuizPage() {
     setExternalQuestion(null);
     setFirstChatResponded(false);
     setQuestionCollapsed(false);
+    setShowReportForm(false);
+    setReportCategory("other");
+    setReportDescription("");
+    setReportSuccess(false);
+    setReportError(null);
   }, [current?.id]);
 
   async function redirectAfterCompletion() {
@@ -290,6 +302,28 @@ export default function QuizPage() {
 
     setExternalQuestion(parts.join("\n\n"));
     setHasAskedChat(true);
+  }
+
+  async function onSubmitReport(e: FormEvent) {
+    e.preventDefault();
+    if (!reportDescription.trim() || reportSubmitting) return;
+    setReportSubmitting(true);
+    setReportError(null);
+    try {
+      await createReport({
+        category: reportCategory,
+        description: reportDescription,
+        quiz_id: quizId ?? undefined,
+        question_id: current?.id ?? undefined,
+      });
+      setReportSuccess(true);
+      setReportDescription("");
+      setShowReportForm(false);
+    } catch {
+      setReportError("Failed to submit report. Please try again.");
+    } finally {
+      setReportSubmitting(false);
+    }
   }
 
   async function onSubmit() {
@@ -447,6 +481,75 @@ export default function QuizPage() {
                                 </button>
                               </div>
                             </div>
+                          )}
+                        </div>
+
+                        {/* Report an issue */}
+                        <div className="border-t">
+                          {reportSuccess && !showReportForm && (
+                            <p className="px-4 py-3 text-sm text-green-700 bg-green-50">
+                              Report submitted — thank you!
+                            </p>
+                          )}
+                          {!reportSuccess && (
+                            <button
+                              type="button"
+                              onClick={() => setShowReportForm((v) => !v)}
+                              className="flex items-center gap-1.5 px-4 py-3 text-xs text-gray-400 hover:text-gray-600 transition w-full"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                              </svg>
+                              {showReportForm ? "Cancel" : "Report an issue"}
+                            </button>
+                          )}
+                          {showReportForm && (
+                            <form onSubmit={onSubmitReport} className="px-4 pb-4 flex flex-col gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
+                                <select
+                                  value={reportCategory}
+                                  onChange={(e) => setReportCategory(e.target.value as ReportCategory)}
+                                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-accent-400"
+                                >
+                                  <option value="bug">Bug</option>
+                                  <option value="unclear_question">Unclear question</option>
+                                  <option value="wrong_answer">Wrong answer</option>
+                                  <option value="technical">Technical issue</option>
+                                  <option value="other">Other</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+                                <textarea
+                                  value={reportDescription}
+                                  onChange={(e) => setReportDescription(e.target.value)}
+                                  placeholder="Describe the issue…"
+                                  rows={3}
+                                  required
+                                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-accent-400 resize-none"
+                                />
+                              </div>
+                              {reportError && (
+                                <p className="text-xs text-red-600">{reportError}</p>
+                              )}
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => { setShowReportForm(false); setReportError(null); }}
+                                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={!reportDescription.trim() || reportSubmitting}
+                                  className="rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50 transition"
+                                >
+                                  {reportSubmitting ? "Submitting…" : "Submit report"}
+                                </button>
+                              </div>
+                            </form>
                           )}
                         </div>
                       </>

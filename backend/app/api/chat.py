@@ -31,7 +31,9 @@ MAX_TOKENS: int = 1000
 
 # Controls response randomness. 0.0 = fully deterministic, 2.0 = very random. Valid range: 0.0–2.0. Recommended: 0.0–1.0.
 TEMPERATURE: float = 0.5
-
+# Lower temperature for double-agent mode so stochastic answer divergence is minimised
+# and the style difference (intuitive vs. formal) is the dominant signal between agents.
+DOUBLE_TEMPERATURE: float = 0.1
 
 
 # Initialize OpenAI client with UF proxy settings (from env)
@@ -45,19 +47,33 @@ _BASE_SYSTEM_PROMPT = (
     "Go through the explanation first, and only then provide the solution at the end."
 )
 
+# Explanation-style personas for double-agent mode.
+# Appended to each agent's system prompt to create a consistent, intentional difference
+# in approach. Names stay neutral ("Agent A / B") to avoid priming students.
+_AGENT_A_STYLE = (
+    "Explain using intuition and everyday analogies — coin flips, card draws, "
+    "real-world scenarios. Avoid mathematical notation. Make the concept feel "
+    "natural and relatable before confirming the answer."
+)
+_AGENT_B_STYLE = (
+    "Explain using precise mathematical reasoning. Define terms formally, "
+    "show step-by-step logic, and use proper notation where helpful. "
+    "Prioritize rigor and exactness."
+)
+
 
 def _sse(data: dict) -> str:
     """Format a dict as a Server-Sent Event string."""
     return f"data: {json.dumps(data)}\n\n"
 
 
-async def _stream_ai(messages: list[dict]) -> AsyncGenerator[str, None]:
+async def _stream_ai(messages: list[dict], temperature: float = TEMPERATURE) -> AsyncGenerator[str, None]:
     """Streams text delta tokens from the AI. Raises on failure."""
     stream = await _client.chat.completions.create(
         model=os.getenv("UF_OPENAI_API_MODEL"),
         messages=messages,
         stream=True,
-        temperature=TEMPERATURE,
+        temperature=temperature,
         **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
     )
     async for chunk in stream:
@@ -193,6 +209,7 @@ def _build_standard_messages(
 async def _stream_agent_tokens(
     messages: list[dict],
     agent_tag: Optional[str] = None,
+    temperature: float = TEMPERATURE,
 ) -> AsyncGenerator[tuple[bool, str, str], None]:
     """Core token-streaming helper. Yields (is_error, delta, sse_str) tuples.
 
@@ -201,7 +218,7 @@ async def _stream_agent_tokens(
     Callers accumulate delta to reconstruct the full reply.
     """
     try:
-        async for delta in _stream_ai(messages):
+        async for delta in _stream_ai(messages, temperature=temperature):
             event: dict = {"type": "token", "content": delta}
             if agent_tag:
                 event["agent"] = agent_tag
@@ -221,6 +238,7 @@ async def _standard_stream(
     agent_tag: Optional[str] = None,
     reply_prefix: str = "",
     answer_incorrectly: bool = False,
+    temperature: float = TEMPERATURE,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done.
 
@@ -228,7 +246,7 @@ async def _standard_stream(
     reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
     """
     full_reply = ""
-    async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag):
+    async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag, temperature=temperature):
         yield sse
         if is_error:
             return
@@ -248,10 +266,11 @@ async def _stream_into_queue(
     messages: list[dict],
     tag: str,
     queue: asyncio.Queue,
+    temperature: float = TEMPERATURE,
 ) -> None:
     """Stream one agent's tokens into a shared queue for concurrent multi-agent rendering."""
     try:
-        async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=tag):
+        async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=tag, temperature=temperature):
             await queue.put((is_error, delta, tag, sse))
             if is_error:
                 return
@@ -299,13 +318,13 @@ async def double_chat(
     )
 
     messages_a = [
-        {"role": "system", "content": f"{system_instruction_a}\nYou are Agent A."},
+        {"role": "system", "content": f"{system_instruction_a}\nYou are Agent A.\n{_AGENT_A_STYLE}"},
         *history_a,
         {"role": "user", "content": prompt_content},
     ]
 
     messages_b = [
-        {"role": "system", "content": f"{system_instruction_b}\nYou are Agent B."},
+        {"role": "system", "content": f"{system_instruction_b}\nYou are Agent B.\n{_AGENT_B_STYLE}"},
         *history_b,
         {"role": "user", "content": prompt_content},
     ]
@@ -317,7 +336,8 @@ async def double_chat(
         return StreamingResponse(
             _standard_stream(msgs, col, user, conv_id, req.message,
                              agent_tag=tag, reply_prefix=f"[AGENT {tag}] ",
-                             answer_incorrectly=req.answer_incorrectly),
+                             answer_incorrectly=req.answer_incorrectly,
+                             temperature=DOUBLE_TEMPERATURE),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -329,8 +349,8 @@ async def double_chat(
 
         async def _run_both() -> None:
             await asyncio.gather(
-                _stream_into_queue(messages_a, "A", queue),
-                _stream_into_queue(messages_b, "B", queue),
+                _stream_into_queue(messages_a, "A", queue, temperature=DOUBLE_TEMPERATURE),
+                _stream_into_queue(messages_b, "B", queue, temperature=DOUBLE_TEMPERATURE),
             )
 
         task = asyncio.create_task(_run_both())
