@@ -9,6 +9,7 @@ from ..schemas.auth import (
     LoginRequest,
     AuthResponse,
     ChangePasswordRequest,
+    ConsentAgreementRequest,
 )
 from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..services.users import (
@@ -62,6 +63,8 @@ def build_user_public(doc: dict) -> UserPublic:
         last_name=doc.get("last_name"),
         consent=doc.get("consent"),
         consent_given_at=doc.get("consent_given_at"),
+        consent_text=doc.get("consent_text"),
+        consent_agreed_at=doc.get("consent_agreed_at"),
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
@@ -146,6 +149,32 @@ def me(user: UserPublic = Depends(get_current_user)):
 @router.post("/logout")
 def logout(response: Response):
     clear_session_cookie(response)
+    return {"ok": True}
+
+
+@router.post("/consent")
+def record_consent_agreement(
+    data: ConsentAgreementRequest,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    users = get_users_collection(request.app.state.db)
+    doc = find_user_by_email(users, user.email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+    users.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {
+                "consent_text": data.consent_text,
+                "consent_agreed_at": now,
+                "updated_at": now,
+            }
+        },
+    )
+
     return {"ok": True}
 
 

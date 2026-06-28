@@ -7,7 +7,6 @@ network calls are made. MongoDB collections are MagicMocks.
 """
 import asyncio
 import json
-import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -84,21 +83,6 @@ def _parse_sse(body: str) -> list[dict]:
     return events
 
 
-def _wait_for_insert_calls(col: MagicMock, n: int, timeout: float = 2.0) -> None:
-    """Poll until col.insert_one has been called >= n times.
-
-    _schedule_exchange_save persists messages on a background thread, so the
-    HTTP response can return before the inserts are recorded.
-    """
-    deadline = time.monotonic() + timeout
-    while col.insert_one.call_count < n:
-        if time.monotonic() > deadline:
-            raise AssertionError(
-                f"Timed out waiting for {n} insert_one call(s); got {col.insert_one.call_count}"
-            )
-        time.sleep(0.01)
-
-
 # ── App fixtures ──────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -120,11 +104,6 @@ def chat_app(regular_user, chat_col):
 
 @pytest.fixture
 def chat_client(chat_app):
-    # Use as a context manager so Starlette keeps a single persistent event
-    # loop alive for the test's duration. Without it, each request gets its
-    # own throwaway loop that's torn down before _schedule_exchange_save's
-    # asyncio.create_task background task gets a chance to run, leaving
-    # insert_one permanently uncalled.
     with TestClient(chat_app) as client:
         yield client
 
@@ -261,27 +240,27 @@ class TestSaveMessage:
         # regression: stored metadata must be a plain BSON-encodable dict
         bson.encode(doc)
 
-    def test_swallows_insert_exceptions(self):
+    def test_propagates_insert_exceptions(self):
         col = MagicMock()
         col.insert_one.side_effect = RuntimeError("db down")
         user = UserPublic(id="u1", email="a@b.com", is_admin=False)
 
-        # should not raise
-        chat_module._save_message(col, "user", user, "conv1", "hello")
+        # _save_message itself no longer swallows failures — _save_exchange is
+        # responsible for catching + logging so a failure is never silent.
+        with pytest.raises(RuntimeError):
+            chat_module._save_message(col, "user", user, "conv1", "hello")
 
 
-# ── _schedule_exchange_save ───────────────────────────────────────────────────
+# ── _save_exchange ────────────────────────────────────────────────────────────
 
-class TestScheduleExchangeSave:
+class TestSaveExchange:
     def test_saves_user_then_assistant(self):
         col = MagicMock()
         user = UserPublic(id="u1", email="a@b.com", is_admin=False)
 
-        async def run():
-            chat_module._schedule_exchange_save(col, user, "conv1", "hello", ["hi there"], {"answer_incorrectly": False})
-            await asyncio.sleep(0.05)
-
-        asyncio.run(run())
+        asyncio.run(
+            chat_module._save_exchange(col, user, "conv1", "hello", ["hi there"], {"answer_incorrectly": False})
+        )
 
         assert col.insert_one.call_count == 2
         user_doc, assistant_doc = (c.args[0] for c in col.insert_one.call_args_list)
@@ -294,6 +273,35 @@ class TestScheduleExchangeSave:
         # regression: both docs must be BSON-encodable (real pymongo would raise otherwise)
         bson.encode(user_doc)
         bson.encode(assistant_doc)
+
+    def test_does_not_raise_when_insert_fails(self, capsys):
+        col = MagicMock()
+        col.insert_one.side_effect = RuntimeError("db down")
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        # A persistence failure must never propagate and break the response
+        # the participant already saw stream in — but it must be loud in logs.
+        asyncio.run(
+            chat_module._save_exchange(col, user, "conv1", "hello", ["hi there"], None)
+        )
+
+        out = capsys.readouterr().out
+        assert "FAILED to save USER message" in out
+        assert "FAILED to save ASSISTANT message" in out
+        assert "conv1" in out
+        assert "u1" in out
+
+    def test_assistant_save_still_attempted_when_user_save_fails(self):
+        col = MagicMock()
+        col.insert_one.side_effect = [RuntimeError("db down"), None]
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        asyncio.run(
+            chat_module._save_exchange(col, user, "conv1", "hello", ["hi there"], None)
+        )
+
+        # Both inserts were attempted even though the first one failed.
+        assert col.insert_one.call_count == 2
 
 
 # ── _stream_ai ─────────────────────────────────────────────────────────────────
@@ -596,7 +604,7 @@ class TestDoubleChatEndpoint:
         assert "".join(e["content"] for e in token_events) == "solo reply"
         assert events[-1] == {"type": "done", "conversation_id": "conv1"}
 
-        _wait_for_insert_calls(chat_col, 2)
+        assert chat_col.insert_one.call_count == 2
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert assistant_doc["content"] == ["[AGENT A] solo reply"]
 
@@ -606,7 +614,7 @@ class TestDoubleChatEndpoint:
         resp = chat_client.post("/chat/double", json={"message": "hi", "conversation_id": "conv1", "agents": []})
 
         assert resp.status_code == 200
-        _wait_for_insert_calls(chat_col, 2)
+        assert chat_col.insert_one.call_count == 2
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert set(assistant_doc["content"]) == {"[AGENT A] hello-a", "[AGENT B] hello-b"}
         assert assistant_doc["metadata"] == {"answer_incorrectly": False}
@@ -675,7 +683,7 @@ class TestLinksChatEndpoint:
         assert done["conversation_id"] == "conv4"
         assert "https://khanacademy.org/prob" in done["reply"]
 
-        _wait_for_insert_calls(chat_col, 2)
+        assert chat_col.insert_one.call_count == 2
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert "https://khanacademy.org/prob" in assistant_doc["content"][0]
 

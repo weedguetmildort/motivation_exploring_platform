@@ -17,6 +17,8 @@ export type User = {
   last_name?: string;
   consent?: boolean;
   consent_given_at?: string;
+  consent_text?: string;
+  consent_agreed_at?: string;
   is_admin: boolean;
   assigned_var?: string | null;
   demographics_completed?: boolean;
@@ -88,6 +90,13 @@ export async function getMe() {
 export async function logout() {
   invalidateMeCache();
   return apiFetch<void>("/auth/logout", { method: "POST" });
+}
+
+export async function recordConsentAgreement(consentText: string) {
+  return apiFetch<{ ok: boolean }>("/auth/consent", {
+    method: "POST",
+    body: JSON.stringify({ consent_text: consentText }),
+  });
 }
 
 export async function changePassword(currentPassword: string, newPassword: string) {

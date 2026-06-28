@@ -91,41 +91,43 @@ def _save_message(
     content,
     metadata=None,
 ) -> None:
-    try:
-        doc = {
-            "conversation_id": conv_id,
-            "role": role,
-            "user_id": user.id,
-            "user_email": user.email,
-            "content": content,
-            "created_at": datetime.utcnow(),
-            "source": "web" if role == "user" else "ai",
-        }
-        if metadata is not None:
-            doc["metadata"] = metadata
-        col.insert_one(doc)
-    except Exception:
-        pass
+    """Insert one message document. Raises on failure — callers must handle/log."""
+    doc = {
+        "conversation_id": conv_id,
+        "role": role,
+        "user_id": user.id,
+        "user_email": user.email,
+        "content": content,
+        "created_at": datetime.utcnow(),
+        "source": "web" if role == "user" else "ai",
+    }
+    if metadata is not None:
+        doc["metadata"] = metadata
+    col.insert_one(doc)
 
 
-_background_tasks: set = set()
-
-
-def _schedule_exchange_save(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list, assistant_metadata: dict | None = None) -> None:
-    """Fire-and-forget: save user then assistant message in a background thread.
+async def _save_exchange(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list, assistant_metadata: dict | None = None) -> None:
+    """Persist the user message then the assistant reply, awaited before the
+    caller reports success to the client.
 
     Saves user message first so its timestamp is strictly earlier than the
     assistant message. Called only after streaming completes successfully, so a
-    failed stream leaves no partial records in the DB. Holds a strong reference
-    to the task until it completes to prevent early GC by the event loop.
+    failed stream leaves no partial records in the DB. A save failure is logged
+    loudly (with conversation/user context) rather than silently dropped — the
+    participant already saw the reply stream in, so we don't fail the request
+    over a persistence error, but it must never vanish without a trace.
     """
     def _save() -> None:
-        _save_message(col, "user", user, conv_id, user_message)
-        _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata)
+        try:
+            _save_message(col, "user", user, conv_id, user_message)
+        except Exception as e:
+            print(f"[chat] FAILED to save USER message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
+        try:
+            _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata)
+        except Exception as e:
+            print(f"[chat] FAILED to save ASSISTANT message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
 
-    task = asyncio.create_task(asyncio.to_thread(_save))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    await asyncio.to_thread(_save)
 
 def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
     if answer_incorrectly and has_choices:
@@ -254,7 +256,7 @@ async def _standard_stream(
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
     metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly).model_dump(exclude_none=True)
-    _schedule_exchange_save(col, user, conv_id, user_message, [stored_reply], metadata)
+    await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata)
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -369,7 +371,7 @@ async def double_chat(
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
         metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
-        _schedule_exchange_save(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata)
+        await _save_exchange(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata)
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -466,7 +468,7 @@ async def chat_with_embedded_links(
 
         stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
         metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
-        _schedule_exchange_save(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata)
+        await _save_exchange(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata)
 
         yield _sse({"type": "done", "conversation_id": conv_id, "reply": stored_reply})
 
