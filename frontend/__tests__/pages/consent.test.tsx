@@ -66,7 +66,7 @@ describe("ConsentPage", () => {
     expect(screen.getByText("Research Risks")).toBeInTheDocument();
     expect(screen.getByText("Statement of Confidentiality")).toBeInTheDocument();
     expect(
-      screen.getByText("Who to contact if you have questions or injured")
+      screen.getByText("Who to contact if you have questions")
     ).toBeInTheDocument();
     expect(screen.getByText("Voluntary Participation")).toBeInTheDocument();
     expect(screen.getByText(/about 45 minutes/)).toBeInTheDocument();

@@ -354,7 +354,7 @@ describe("QuizPage ([quiz_id])", () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     render(<QuizPage />);
 
-    expect(await screen.findByText("Base Quiz")).toBeInTheDocument();
+    expect(await screen.findByText("Quiz Part 1")).toBeInTheDocument();
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument();
     expect(
       screen.getByText("Answer each of the questions using the help of the AI assistant."),
@@ -373,7 +373,7 @@ describe("QuizPage ([quiz_id])", () => {
     });
     render(<QuizPage />);
 
-    expect(await screen.findByText("Followup Quiz")).toBeInTheDocument();
+    expect(await screen.findByText("Quiz Part 2")).toBeInTheDocument();
     expect(screen.getByText("Step 4 of 5")).toBeInTheDocument();
   });
 
@@ -533,7 +533,7 @@ describe("QuizPage ([quiz_id])", () => {
     expect(await screen.findByText("Quiz completed")).toBeInTheDocument();
     expect(screen.queryByText("Quiz completed (admin view)")).not.toBeInTheDocument();
     expect(screen.queryByText("2 of 3 correct")).not.toBeInTheDocument();
-    expect(screen.getByText("Question 1: What is 2+2?")).toBeInTheDocument();
+    expect(await screen.findByText("Question 1: What is 2+2?")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Reset/ })).not.toBeInTheDocument();
   });
 
@@ -725,7 +725,7 @@ describe("QuizPage ([quiz_id])", () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     render(<QuizPage />);
 
-    await screen.findByText("Base Quiz");
+    await screen.findByText("Quiz Part 1");
     fireEvent.click(screen.getByText("Dashboard"));
 
     expect(mockReplace).toHaveBeenCalledWith("/dashboard");
@@ -736,7 +736,7 @@ describe("QuizPage ([quiz_id])", () => {
     mockLogout.mockResolvedValue(undefined);
     render(<QuizPage />);
 
-    await screen.findByText("Base Quiz");
+    await screen.findByText("Quiz Part 1");
     fireEvent.click(screen.getByText("Logout"));
 
     await waitFor(() => expect(mockLogout).toHaveBeenCalled());

@@ -84,11 +84,6 @@ export default function ChatHeader({
 
         <h2 className="text-2xl font-semibold text-gray-900 2xl:text-3xl">
           AI Assistant
-          {theme.id !== "base" && (
-            <span className="font-normal text-gray-500">
-              {" "}&middot; {theme.subtitle}
-            </span>
-          )}
         </h2>
 
         <div className="relative">
@@ -127,7 +122,7 @@ export default function ChatHeader({
                     <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                   </svg>
                 </div>
-                <span className="text-lg font-semibold text-gray-900">{theme.subtitle}</span>
+                <span className="text-lg font-semibold text-gray-900">How this works</span>
               </div>
               <p className="text-base text-gray-600 leading-relaxed">
                 {theme.description}

@@ -11,6 +11,7 @@ jest.mock("../../lib/chat", () => ({
 }));
 
 const PLACEHOLDER = "Type a message…";
+const DOUBLE_PLACEHOLDER = "Message both agents, or @AgentA / @AgentB to address one…";
 
 describe("ChatBox", () => {
   beforeEach(() => {
@@ -126,7 +127,7 @@ describe("ChatBox", () => {
 
   it("shows mention suggestions for @ in double-agent quizzes and allows keyboard selection", () => {
     render(<ChatBox quizId="double" />);
-    const textarea = screen.getByPlaceholderText(PLACEHOLDER);
+    const textarea = screen.getByPlaceholderText(DOUBLE_PLACEHOLDER);
 
     fireEvent.change(textarea, { target: { value: "@" } });
     expect(screen.getByText("@agenta")).toBeInTheDocument();
@@ -148,7 +149,7 @@ describe("ChatBox", () => {
     });
 
     const { container } = render(<ChatBox quizId="double" />);
-    const textarea = screen.getByPlaceholderText(PLACEHOLDER);
+    const textarea = screen.getByPlaceholderText(DOUBLE_PLACEHOLDER);
     fireEvent.change(textarea, { target: { value: "@agenta What's up?" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 

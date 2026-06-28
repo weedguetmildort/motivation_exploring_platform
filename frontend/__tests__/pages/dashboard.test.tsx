@@ -79,9 +79,9 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
 
     expect(await screen.findByText("Next Step")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Pre-Quiz Survey" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Survey 1" })).toBeInTheDocument();
 
-    const button = screen.getByRole("button", { name: /Start the Pre-Quiz Survey/ });
+    const button = screen.getByRole("button", { name: /Start the Survey 1/ });
     fireEvent.click(button);
 
     expect(mockPush).toHaveBeenCalledWith("/survey?stage=pre_quiz");

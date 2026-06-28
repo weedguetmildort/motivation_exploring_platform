@@ -29,8 +29,9 @@ const incompleteUser = { id: "1", email: "user@example.com", is_admin: false, de
 function fillRequiredFields(container: HTMLElement) {
   const selects = container.querySelectorAll("select");
   fireEvent.change(selects[0], { target: { value: "Male" } }); // gender
-  fireEvent.change(selects[1], { target: { value: "first" } }); // year
-  fireEvent.change(selects[2], { target: { value: "Computer Science" } }); // major
+  fireEvent.change(selects[1], { target: { value: "Undergraduate" } }); // academic level
+  fireEvent.change(selects[2], { target: { value: "first" } }); // year
+  fireEvent.change(selects[3], { target: { value: "Computer Science" } }); // major
 
   const checkboxes = container.querySelectorAll('input[type="checkbox"]');
   fireEvent.click(checkboxes[0]); // white
@@ -106,6 +107,7 @@ describe("DemographicsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Please fill out the required fields.");
     expect(screen.getByText("Please select your gender.")).toBeInTheDocument();
     expect(screen.getByText("Please select at least one option.")).toBeInTheDocument();
+    expect(screen.getByText("Please select your academic level.")).toBeInTheDocument();
     expect(screen.getByText("Please select your year in college.")).toBeInTheDocument();
     expect(screen.getByText("Please select your major/field of study.")).toBeInTheDocument();
     expect(screen.getByText("Please enter your age.")).toBeInTheDocument();
@@ -131,7 +133,7 @@ describe("DemographicsPage", () => {
     fillRequiredFields(container);
 
     const selects = container.querySelectorAll("select");
-    fireEvent.change(selects[2], { target: { value: "Other" } });
+    fireEvent.change(selects[3], { target: { value: "Other" } });
 
     expect(screen.getByPlaceholderText("e.g., Computer Science")).toBeInTheDocument();
 
@@ -179,6 +181,8 @@ describe("DemographicsPage", () => {
         gender: "Male",
         other_gender: undefined,
         race_ethnicity: ["white"],
+        academic_level: "Undergraduate",
+        other_academic_level: undefined,
         year: "first",
         major: "Computer Science",
         other_major: undefined,

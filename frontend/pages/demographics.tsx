@@ -16,6 +16,7 @@ export default function DemographicsPage() {
     year?: string;
     major?: string;
     age?: string;
+    academicLevel?: string;
   }>({});
 
   const [gender, setGender] = useState("");
@@ -26,6 +27,8 @@ export default function DemographicsPage() {
   const [otherMajor, setOtherMajor] = useState("");
   const [className, setClassName] = useState("");
   const [age, setAge] = useState("");
+  const [academicLevel, setAcademicLevel] = useState("");
+  const [otherAcademicLevel, setOtherAcademicLevel] = useState("");
 
   const fieldClass = (hasError: boolean) =>
     `w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring ${
@@ -77,11 +80,17 @@ export default function DemographicsPage() {
       year?: string;
       major?: string;
       age?: string;
+      academicLevel?: string;
     } = {};
 
     if (!gender) newErrors.gender = "Please select your gender.";
     if (raceEthnicity.length === 0) {
       newErrors.raceEthnicity = "Please select at least one option.";
+    }
+    if (!academicLevel) {
+      newErrors.academicLevel = "Please select your academic level.";
+    } else if (academicLevel === "Other" && !otherAcademicLevel.trim()) {
+      newErrors.academicLevel = "Please specify your academic level.";
     }
     if (!year) newErrors.year = "Please select your year in college.";
     if (!major) newErrors.major = "Please select your major/field of study.";
@@ -115,6 +124,12 @@ export default function DemographicsPage() {
         other_gender:
           gender === "Other" ? otherGender.trim() || undefined : undefined,
         race_ethnicity: raceEthnicity,
+        academic_level:
+          academicLevel === "Other" ? "Other" : academicLevel,
+        other_academic_level:
+          academicLevel === "Other"
+            ? otherAcademicLevel.trim() || undefined
+            : undefined,
         year: year,
         major: major === "Other" ? "Other" : major || undefined,
         other_major:
@@ -301,7 +316,62 @@ export default function DemographicsPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              What is your year in college?
+              Academic level<span className="text-red-500">*</span>
+            </label>
+            <select
+              value={academicLevel}
+              onChange={(e) => {
+                const value = e.target.value;
+                setAcademicLevel(value);
+                setErrors((prev) => ({ ...prev, academicLevel: undefined }));
+
+                if (value !== "Other") {
+                  setOtherAcademicLevel("");
+                }
+              }}
+              className={fieldClass(!!errors.academicLevel)}
+            >
+              <option value="">Select academic level</option>
+              <option value="Undergraduate">Undergraduate</option>
+              <option value="Masters">Masters</option>
+              <option value="PhD">PhD</option>
+              <option value="Other">Other</option>
+            </select>
+            {errors.academicLevel && academicLevel !== "Other" && (
+              <p className="mt-1 text-sm text-red-600">
+                {errors.academicLevel}
+              </p>
+            )}
+          </div>
+
+          {academicLevel === "Other" && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Please specify your academic level
+              </label>
+              <input
+                type="text"
+                value={otherAcademicLevel}
+                onChange={(e) => {
+                  setOtherAcademicLevel(e.target.value);
+                  setErrors((prev) => ({ ...prev, academicLevel: undefined }));
+                }}
+                className={fieldClass(
+                  !!errors.academicLevel && academicLevel === "Other",
+                )}
+                placeholder="e.g., Postdoctoral researcher"
+              />
+              {errors.academicLevel && academicLevel === "Other" && (
+                <p className="mt-1 text-sm text-red-600">
+                  {errors.academicLevel}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              What is your year in your program?
               <span className="text-red-500">*</span>
             </label>
             <select
@@ -312,7 +382,7 @@ export default function DemographicsPage() {
               }}
               className={fieldClass(!!errors.year)}
             >
-              <option value="">Select year in college</option>
+              <option value="">Select year in program</option>
               <option value="first">First Year</option>
               <option value="second">Second Year</option>
               <option value="third">Third Year</option>

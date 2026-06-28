@@ -161,7 +161,7 @@ export default function ConsentPage() {
 
           <section>
             <h2 className="font-semibold text-gray-900">
-              Who to contact if you have questions or injured
+              Who to contact if you have questions
             </h2>
             <p className="mt-1">
               Please contact Neha Rani at (352) 871 5080 with questions or

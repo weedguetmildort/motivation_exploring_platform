@@ -109,7 +109,7 @@ describe("SurveyPage", () => {
 
     render(<SurveyPage />);
 
-    expect(await screen.findByText("Pre-Quiz Survey")).toBeInTheDocument();
+    expect(await screen.findByText("Survey 1")).toBeInTheDocument();
     expect(await screen.findByText(likertItem.prompt)).toBeInTheDocument();
     expect(mockGetSurveyState).toHaveBeenCalledWith("pre_quiz");
 
@@ -148,7 +148,7 @@ describe("SurveyPage", () => {
     render(<SurveyPage />);
 
     expect(
-      await screen.findByText(/No survey items found for the pre-quiz survey/),
+      await screen.findByText(/No survey items found for this survey/),
     ).toBeInTheDocument();
   });
 
@@ -159,7 +159,7 @@ describe("SurveyPage", () => {
 
     render(<SurveyPage />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load the pre-quiz survey.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load this survey.");
   });
 
   it("redirects automatically when the survey is already completed", async () => {
@@ -193,7 +193,7 @@ describe("SurveyPage", () => {
     render(<SurveyPage />);
 
     await screen.findByText(likertItem.prompt);
-    fireEvent.click(screen.getByRole("button", { name: "Begin Base Quiz" }));
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz Part 1" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Please answer all required questions before continuing.",
@@ -219,7 +219,7 @@ describe("SurveyPage", () => {
     const radios = screen.getAllByRole("radio");
     fireEvent.click(radios[2]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Begin Base Quiz" }));
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz Part 1" }));
 
     await waitFor(() =>
       expect(mockSubmitSurvey).toHaveBeenCalledWith("pre_quiz", [{ item_id: "item1", value: 3 }]),
@@ -246,7 +246,7 @@ describe("SurveyPage", () => {
     const radios = screen.getAllByRole("radio");
     fireEvent.click(radios[0]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Begin Base Quiz" }));
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz Part 1" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to save your responses.");
   });
@@ -308,7 +308,7 @@ describe("SurveyPage", () => {
     });
 
     render(<SurveyPage />);
-    await screen.findByText("Pre-Quiz Survey");
+    await screen.findByText("Survey 1");
 
     fireEvent.click(screen.getByText("Dashboard"));
     expect(mockPush).toHaveBeenCalledWith("/dashboard");
@@ -326,7 +326,7 @@ describe("SurveyPage", () => {
     });
 
     render(<SurveyPage />);
-    await screen.findByText("Pre-Quiz Survey");
+    await screen.findByText("Survey 1");
 
     fireEvent.click(screen.getByText("Logout"));
 

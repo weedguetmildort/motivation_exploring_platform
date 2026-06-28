@@ -353,7 +353,7 @@ export default function QuizPage() {
         className="shrink-0"
         title={
           <>
-            {quizId ? quizId.charAt(0).toUpperCase() + quizId.slice(1) : ""} Quiz
+            {quizId === "base" ? "Quiz Part 1" : "Quiz Part 2"}
             {quizCompleted ? (
               <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
             ) : (

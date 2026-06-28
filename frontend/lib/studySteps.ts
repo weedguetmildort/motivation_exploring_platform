@@ -43,11 +43,11 @@ export type StudyStep = {
 // ── Subtitle strings (single source of truth for page headers + hero card) ──
 
 export const STEP_SUBTITLES: Record<StudyStepId, string> = {
-  survey_pre:       "Before you begin the base quiz, please answer a few quick questions.",
+  survey_pre:       "Before you begin Quiz Part 1, please answer a few quick questions.",
   quiz_base:        "Answer each of the questions using the help of the AI assistant.",
-  survey_post_base: "You've completed the base quiz. Please answer a few follow-up questions.",
+  survey_post_base: "You've completed Quiz Part 1. Please answer a few more questions.",
   quiz_variant:     "Answer each of the questions using the help of the AI assistant.",
-  survey_final:     "You've completed the variant quiz. Please answer a few final questions.",
+  survey_final:     "You've completed Quiz Part 2. Please answer a few final questions.",
 };
 
 // ── Survey stage display config (titles, UI strings per stage) ───────────────
@@ -62,25 +62,25 @@ export type StageConfig = {
 
 export const STAGE_CONFIG: Record<ActiveSurveyStage, StageConfig> = {
   pre_quiz: {
-    title: "Pre-Quiz Survey",
+    title: "Survey 1",
     description: STEP_SUBTITLES.survey_pre,
-    emptyMessage: "No survey items found for the pre-quiz survey. Add items in the Surveys Panel.",
-    submitLabel: "Begin Base Quiz",
-    loadError: "Failed to load the pre-quiz survey.",
+    emptyMessage: "No survey items found for this survey. Add items in the Surveys Panel.",
+    submitLabel: "Begin Quiz Part 1",
+    loadError: "Failed to load this survey.",
   },
   post_base: {
-    title: "Post-Base Quiz Survey",
+    title: "Survey 2",
     description: STEP_SUBTITLES.survey_post_base,
-    emptyMessage: "No survey items found for the post-base survey. Add items in the Surveys Panel.",
-    submitLabel: "Continue to Variant Quiz",
-    loadError: "Failed to load the post-base survey.",
+    emptyMessage: "No survey items found for this survey. Add items in the Surveys Panel.",
+    submitLabel: "Continue to Quiz Part 2",
+    loadError: "Failed to load this survey.",
   },
   post_variant: {
-    title: "Final Survey",
+    title: "Survey 3",
     description: STEP_SUBTITLES.survey_final,
-    emptyMessage: "No survey items found for the post-variant survey. Add items in the Surveys Panel.",
+    emptyMessage: "No survey items found for this survey. Add items in the Surveys Panel.",
     submitLabel: "Finish",
-    loadError: "Failed to load the final survey.",
+    loadError: "Failed to load this survey.",
   },
 };
 
@@ -88,20 +88,12 @@ export const STAGE_CONFIG: Record<ActiveSurveyStage, StageConfig> = {
 
 export function buildStudySteps(user: User): StudyStep[] {
   const v = user.assigned_var;
-  const variantAbbr =
-    v === "followup" ? "Follow-Up" :
-    v === "double"   ? "Dual"      :
-    v === "links"    ? "Links"     : "Variant";
-  const variantLabel =
-    v === "followup" ? "Follow-Up Questions Quiz" :
-    v === "double"   ? "Dual Agent Quiz"          :
-    v === "links"    ? "Embedded Links Quiz"      : "Variant Quiz";
 
   return [
     {
       id: "survey_pre",
-      label: "Pre-Quiz Survey",
-      abbr: "Survey",
+      label: "Survey 1",
+      abbr: "Survey 1",
       path: "/survey?stage=pre_quiz",
       time: "5 min",
       kind: "survey",
@@ -110,8 +102,8 @@ export function buildStudySteps(user: User): StudyStep[] {
     },
     {
       id: "quiz_base",
-      label: "Base Quiz",
-      abbr: "Base Quiz",
+      label: "Quiz Part 1",
+      abbr: "Quiz Part 1",
       path: "/quiz/base",
       time: "10 min",
       kind: "quiz",
@@ -120,8 +112,8 @@ export function buildStudySteps(user: User): StudyStep[] {
     },
     {
       id: "survey_post_base",
-      label: "Mid Survey",
-      abbr: "Survey",
+      label: "Survey 2",
+      abbr: "Survey 2",
       path: "/survey?stage=post_base",
       time: "5 min",
       kind: "survey",
@@ -130,8 +122,8 @@ export function buildStudySteps(user: User): StudyStep[] {
     },
     {
       id: "quiz_variant",
-      label: variantLabel,
-      abbr: variantAbbr,
+      label: "Quiz Part 2",
+      abbr: "Quiz Part 2",
       path: v ? `/quiz/${v}` : "",
       time: "10 min",
       kind: "quiz",
@@ -140,8 +132,8 @@ export function buildStudySteps(user: User): StudyStep[] {
     },
     {
       id: "survey_final",
-      label: "Final Survey",
-      abbr: "Survey",
+      label: "Survey 3",
+      abbr: "Survey 3",
       path: "/survey?stage=post_variant",
       time: "5 min",
       kind: "survey",
