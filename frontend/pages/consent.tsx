@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, logout } from "../lib/auth";
+import { getMe, invalidateMeCache, logout, recordConsentAgreement } from "../lib/auth";
 
 export default function ConsentPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
   const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const consentContentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +41,21 @@ export default function ConsentPage() {
   async function onAgree() {
     if (pending) return;
     setPending(true);
-    router.push("/dashboard");
+    setError(null);
+
+    const consentText = (consentContentRef.current?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    try {
+      await recordConsentAgreement(consentText);
+      invalidateMeCache();
+      router.push("/dashboard");
+    } catch (e) {
+      console.error(e);
+      setError("Failed to save your consent. Please try again.");
+      setPending(false);
+    }
   }
 
   async function onDecline() {
@@ -57,6 +73,7 @@ export default function ConsentPage() {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="mx-auto max-w-2xl rounded-2xl border bg-white p-6 shadow-sm">
+        <div ref={consentContentRef}>
         <h1 className="mb-4 text-xl font-semibold">Research Consent Form</h1>
 
         <div className="mb-4 space-y-1 text-sm text-gray-700">
@@ -161,7 +178,7 @@ export default function ConsentPage() {
 
           <section>
             <h2 className="font-semibold text-gray-900">
-              Who to contact if you have questions or injured
+              Who to contact if you have questions
             </h2>
             <p className="mt-1">
               Please contact Neha Rani at (352) 871 5080 with questions or
@@ -194,6 +211,13 @@ export default function ConsentPage() {
             future reference.
           </p>
         </div>
+        </div>
+
+        {error && (
+          <div className="mb-4 text-sm text-red-600" role="alert">
+            {error}
+          </div>
+        )}
 
         <div className="mt-6 border-t pt-4">
           <p className="mb-4 text-sm text-gray-700">

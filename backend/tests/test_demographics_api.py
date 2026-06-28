@@ -38,6 +38,7 @@ VALID_PAYLOAD = {
     "gender": "female",
     "race_ethnicity": ["Asian", "White"],
     "age": "18-24",
+    "academic_level": "Undergraduate",
     "year": "Junior",
     "major": "Computer Science",
     "class_name": "CS101",
@@ -86,6 +87,7 @@ class TestSaveMyDemographics:
         resp = demo_client.post("/demographics/me", json={
             "gender": "male",
             "age": "25-34",
+            "academic_level": "Masters",
             "year": "Senior",
         })
 
@@ -94,6 +96,8 @@ class TestSaveMyDemographics:
         assert set_doc["demographics"]["gender"] == "male"
         assert set_doc["demographics"]["race_ethnicity"] == []
         assert set_doc["demographics"]["other_gender"] is None
+        assert set_doc["demographics"]["academic_level"] == "Masters"
+        assert set_doc["demographics"]["other_academic_level"] is None
         assert set_doc["demographics"]["major"] is None
         assert set_doc["demographics"]["other_major"] is None
         assert set_doc["demographics"]["class_name"] is None
@@ -137,6 +141,28 @@ class TestSaveMyDemographics:
         resp = demo_client.post("/demographics/me", json=payload)
 
         assert resp.status_code == 422
+
+    def test_missing_academic_level_returns_422(self, demo_client):
+        payload = dict(VALID_PAYLOAD)
+        del payload["academic_level"]
+
+        resp = demo_client.post("/demographics/me", json=payload)
+
+        assert resp.status_code == 422
+
+    def test_other_academic_level_field(self, demo_client, mock_col):
+        mock_col.update_one.return_value = MagicMock(matched_count=1)
+
+        payload = dict(VALID_PAYLOAD)
+        payload["academic_level"] = "Other"
+        payload["other_academic_level"] = "Postdoctoral researcher"
+
+        resp = demo_client.post("/demographics/me", json=payload)
+
+        assert resp.status_code == 200
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert set_doc["demographics"]["academic_level"] == "Other"
+        assert set_doc["demographics"]["other_academic_level"] == "Postdoctoral researcher"
 
     def test_invalid_race_ethnicity_type_returns_422(self, demo_client):
         payload = dict(VALID_PAYLOAD)

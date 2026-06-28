@@ -81,37 +81,37 @@ describe("buildStudySteps", () => {
   });
 
   it.each([
-    ["followup", "Follow-Up", "Follow-Up Questions Quiz", "/quiz/followup"],
-    ["double", "Dual", "Dual Agent Quiz", "/quiz/double"],
-    ["links", "Links", "Embedded Links Quiz", "/quiz/links"],
+    ["followup", "/quiz/followup"],
+    ["double", "/quiz/double"],
+    ["links", "/quiz/links"],
   ])(
-    "builds the variant step for assigned_var=%s",
-    (assignedVar, abbr, label, path) => {
+    "builds the variant step for assigned_var=%s with a neutral label",
+    (assignedVar, path) => {
       const steps = buildStudySteps(makeUser({ assigned_var: assignedVar }));
       const variant = steps.find((s) => s.id === "quiz_variant")!;
 
-      expect(variant.abbr).toBe(abbr);
-      expect(variant.label).toBe(label);
+      expect(variant.abbr).toBe("Quiz Part 2");
+      expect(variant.label).toBe("Quiz Part 2");
       expect(variant.path).toBe(path);
       expect(variant.subtitle).toBe(STEP_SUBTITLES.quiz_variant);
     }
   );
 
-  it("falls back to generic Variant labeling when assigned_var is unset", () => {
+  it("uses the same neutral labeling when assigned_var is unset", () => {
     const steps = buildStudySteps(makeUser({ assigned_var: null }));
     const variant = steps.find((s) => s.id === "quiz_variant")!;
 
-    expect(variant.abbr).toBe("Variant");
-    expect(variant.label).toBe("Variant Quiz");
+    expect(variant.abbr).toBe("Quiz Part 2");
+    expect(variant.label).toBe("Quiz Part 2");
     expect(variant.path).toBe("");
   });
 
-  it("falls back to generic Variant labeling for an unrecognized assigned_var", () => {
+  it("uses the same neutral labeling for an unrecognized assigned_var", () => {
     const steps = buildStudySteps(makeUser({ assigned_var: "something-else" }));
     const variant = steps.find((s) => s.id === "quiz_variant")!;
 
-    expect(variant.abbr).toBe("Variant");
-    expect(variant.label).toBe("Variant Quiz");
+    expect(variant.abbr).toBe("Quiz Part 2");
+    expect(variant.label).toBe("Quiz Part 2");
     expect(variant.path).toBe("/quiz/something-else");
   });
 });

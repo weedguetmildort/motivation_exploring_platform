@@ -5,7 +5,7 @@ describe("Landing page", () => {
   it("renders the heading, sign up / log in links, and the disclaimer", () => {
     render(<Landing />);
 
-    expect(screen.getByText("Motivation Exploring Platform")).toBeInTheDocument();
+    expect(screen.getByText("AI Problem-Solving Research Study")).toBeInTheDocument();
     expect(screen.getByText("Sign up or log in to start.")).toBeInTheDocument();
 
     const signupLink = screen.getByRole("link", { name: "Sign up" });

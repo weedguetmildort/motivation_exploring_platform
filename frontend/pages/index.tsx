@@ -7,7 +7,7 @@ export default function Landing() {
       <div className="max-w-md rounded-2xl border bg-white p-6 shadow-sm">
 
         <h1 className="mb-2 text-xl font-semibold">
-          Motivation Exploring Platform
+          AI Problem-Solving Research Study
         </h1>
 
         <p className="mb-4 text-sm text-gray-600">

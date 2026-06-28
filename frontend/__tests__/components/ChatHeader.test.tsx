@@ -3,16 +3,12 @@ import ChatHeader from "../../components/ChatHeader";
 import { QUIZ_THEMES } from "../../lib/quizTheme";
 
 describe("ChatHeader", () => {
-  it("renders the AI Assistant title without a subtitle for the base quiz", () => {
+  it("renders the same AI Assistant title regardless of quiz type", () => {
     render(<ChatHeader quizId="base" />);
-
     expect(screen.getByText("AI Assistant")).toBeInTheDocument();
-    expect(screen.queryByText(QUIZ_THEMES.followup.subtitle)).not.toBeInTheDocument();
-  });
 
-  it("appends the theme subtitle for non-base quizzes", () => {
     render(<ChatHeader quizId="followup" />);
-    expect(screen.getByText(new RegExp(QUIZ_THEMES.followup.subtitle))).toBeInTheDocument();
+    expect(screen.getAllByText("AI Assistant").length).toBeGreaterThan(0);
   });
 
   it("toggles the info popover when the '?' button is clicked", () => {
@@ -22,6 +18,7 @@ describe("ChatHeader", () => {
     expect(screen.queryByText(QUIZ_THEMES.links.description)).not.toBeInTheDocument();
 
     fireEvent.click(infoButton);
+    expect(screen.getByText("How this works")).toBeInTheDocument();
     expect(screen.getByText(QUIZ_THEMES.links.description)).toBeInTheDocument();
 
     fireEvent.click(infoButton);

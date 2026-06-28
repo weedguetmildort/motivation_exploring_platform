@@ -31,7 +31,9 @@ MAX_TOKENS: int = 1000
 
 # Controls response randomness. 0.0 = fully deterministic, 2.0 = very random. Valid range: 0.0–2.0. Recommended: 0.0–1.0.
 TEMPERATURE: float = 0.5
-
+# Lower temperature for double-agent mode so stochastic answer divergence is minimised
+# and the style difference (intuitive vs. formal) is the dominant signal between agents.
+DOUBLE_TEMPERATURE: float = 0.1
 
 
 # Initialize OpenAI client with UF proxy settings (from env)
@@ -45,19 +47,33 @@ _BASE_SYSTEM_PROMPT = (
     "Go through the explanation first, and only then provide the solution at the end."
 )
 
+# Explanation-style personas for double-agent mode.
+# Appended to each agent's system prompt to create a consistent, intentional difference
+# in approach. Names stay neutral ("Agent A / B") to avoid priming students.
+_AGENT_A_STYLE = (
+    "Explain using intuition and everyday analogies — coin flips, card draws, "
+    "real-world scenarios. Avoid mathematical notation. Make the concept feel "
+    "natural and relatable before confirming the answer."
+)
+_AGENT_B_STYLE = (
+    "Explain using precise mathematical reasoning. Define terms formally, "
+    "show step-by-step logic, and use proper notation where helpful. "
+    "Prioritize rigor and exactness."
+)
+
 
 def _sse(data: dict) -> str:
     """Format a dict as a Server-Sent Event string."""
     return f"data: {json.dumps(data)}\n\n"
 
 
-async def _stream_ai(messages: list[dict]) -> AsyncGenerator[str, None]:
+async def _stream_ai(messages: list[dict], temperature: float = TEMPERATURE) -> AsyncGenerator[str, None]:
     """Streams text delta tokens from the AI. Raises on failure."""
     stream = await _client.chat.completions.create(
         model=os.getenv("UF_OPENAI_API_MODEL"),
         messages=messages,
         stream=True,
-        temperature=TEMPERATURE,
+        temperature=temperature,
         **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
     )
     async for chunk in stream:
@@ -75,41 +91,43 @@ def _save_message(
     content,
     metadata=None,
 ) -> None:
-    try:
-        doc = {
-            "conversation_id": conv_id,
-            "role": role,
-            "user_id": user.id,
-            "user_email": user.email,
-            "content": content,
-            "created_at": datetime.utcnow(),
-            "source": "web" if role == "user" else "ai",
-        }
-        if metadata is not None:
-            doc["metadata"] = metadata
-        col.insert_one(doc)
-    except Exception:
-        pass
+    """Insert one message document. Raises on failure — callers must handle/log."""
+    doc = {
+        "conversation_id": conv_id,
+        "role": role,
+        "user_id": user.id,
+        "user_email": user.email,
+        "content": content,
+        "created_at": datetime.utcnow(),
+        "source": "web" if role == "user" else "ai",
+    }
+    if metadata is not None:
+        doc["metadata"] = metadata
+    col.insert_one(doc)
 
 
-_background_tasks: set = set()
-
-
-def _schedule_exchange_save(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list, assistant_metadata: dict | None = None) -> None:
-    """Fire-and-forget: save user then assistant message in a background thread.
+async def _save_exchange(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list, assistant_metadata: dict | None = None) -> None:
+    """Persist the user message then the assistant reply, awaited before the
+    caller reports success to the client.
 
     Saves user message first so its timestamp is strictly earlier than the
     assistant message. Called only after streaming completes successfully, so a
-    failed stream leaves no partial records in the DB. Holds a strong reference
-    to the task until it completes to prevent early GC by the event loop.
+    failed stream leaves no partial records in the DB. A save failure is logged
+    loudly (with conversation/user context) rather than silently dropped — the
+    participant already saw the reply stream in, so we don't fail the request
+    over a persistence error, but it must never vanish without a trace.
     """
     def _save() -> None:
-        _save_message(col, "user", user, conv_id, user_message)
-        _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata)
+        try:
+            _save_message(col, "user", user, conv_id, user_message)
+        except Exception as e:
+            print(f"[chat] FAILED to save USER message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
+        try:
+            _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata)
+        except Exception as e:
+            print(f"[chat] FAILED to save ASSISTANT message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
 
-    task = asyncio.create_task(asyncio.to_thread(_save))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    await asyncio.to_thread(_save)
 
 def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
     if answer_incorrectly and has_choices:
@@ -193,6 +211,7 @@ def _build_standard_messages(
 async def _stream_agent_tokens(
     messages: list[dict],
     agent_tag: Optional[str] = None,
+    temperature: float = TEMPERATURE,
 ) -> AsyncGenerator[tuple[bool, str, str], None]:
     """Core token-streaming helper. Yields (is_error, delta, sse_str) tuples.
 
@@ -201,7 +220,7 @@ async def _stream_agent_tokens(
     Callers accumulate delta to reconstruct the full reply.
     """
     try:
-        async for delta in _stream_ai(messages):
+        async for delta in _stream_ai(messages, temperature=temperature):
             event: dict = {"type": "token", "content": delta}
             if agent_tag:
                 event["agent"] = agent_tag
@@ -221,6 +240,7 @@ async def _standard_stream(
     agent_tag: Optional[str] = None,
     reply_prefix: str = "",
     answer_incorrectly: bool = False,
+    temperature: float = TEMPERATURE,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done.
 
@@ -228,7 +248,7 @@ async def _standard_stream(
     reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
     """
     full_reply = ""
-    async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag):
+    async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag, temperature=temperature):
         yield sse
         if is_error:
             return
@@ -236,7 +256,7 @@ async def _standard_stream(
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
     metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly).model_dump(exclude_none=True)
-    _schedule_exchange_save(col, user, conv_id, user_message, [stored_reply], metadata)
+    await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata)
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -248,10 +268,11 @@ async def _stream_into_queue(
     messages: list[dict],
     tag: str,
     queue: asyncio.Queue,
+    temperature: float = TEMPERATURE,
 ) -> None:
     """Stream one agent's tokens into a shared queue for concurrent multi-agent rendering."""
     try:
-        async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=tag):
+        async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=tag, temperature=temperature):
             await queue.put((is_error, delta, tag, sse))
             if is_error:
                 return
@@ -299,13 +320,13 @@ async def double_chat(
     )
 
     messages_a = [
-        {"role": "system", "content": f"{system_instruction_a}\nYou are Agent A."},
+        {"role": "system", "content": f"{system_instruction_a}\nYou are Agent A.\n{_AGENT_A_STYLE}"},
         *history_a,
         {"role": "user", "content": prompt_content},
     ]
 
     messages_b = [
-        {"role": "system", "content": f"{system_instruction_b}\nYou are Agent B."},
+        {"role": "system", "content": f"{system_instruction_b}\nYou are Agent B.\n{_AGENT_B_STYLE}"},
         *history_b,
         {"role": "user", "content": prompt_content},
     ]
@@ -317,7 +338,8 @@ async def double_chat(
         return StreamingResponse(
             _standard_stream(msgs, col, user, conv_id, req.message,
                              agent_tag=tag, reply_prefix=f"[AGENT {tag}] ",
-                             answer_incorrectly=req.answer_incorrectly),
+                             answer_incorrectly=req.answer_incorrectly,
+                             temperature=DOUBLE_TEMPERATURE),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -329,8 +351,8 @@ async def double_chat(
 
         async def _run_both() -> None:
             await asyncio.gather(
-                _stream_into_queue(messages_a, "A", queue),
-                _stream_into_queue(messages_b, "B", queue),
+                _stream_into_queue(messages_a, "A", queue, temperature=DOUBLE_TEMPERATURE),
+                _stream_into_queue(messages_b, "B", queue, temperature=DOUBLE_TEMPERATURE),
             )
 
         task = asyncio.create_task(_run_both())
@@ -349,7 +371,7 @@ async def double_chat(
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
         metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
-        _schedule_exchange_save(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata)
+        await _save_exchange(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata)
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -446,7 +468,7 @@ async def chat_with_embedded_links(
 
         stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
         metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
-        _schedule_exchange_save(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata)
+        await _save_exchange(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata)
 
         yield _sse({"type": "done", "conversation_id": conv_id, "reply": stored_reply})
 

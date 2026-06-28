@@ -6,6 +6,8 @@ export type DemographicsPayload = {
   other_gender?: string;
   race_ethnicity: string[];
   year: string;
+  academic_level: string;
+  other_academic_level?: string;
   major?: string;
   other_major?: string;
   class_name?: string;

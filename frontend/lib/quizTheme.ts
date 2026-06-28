@@ -4,8 +4,6 @@ export type QuizType = "base" | "followup" | "double" | "links";
 
 export type QuizTheme = {
   id: QuizType;
-  label: string;
-  subtitle: string;
   description: string;
   dataTheme: QuizType;
 };
@@ -13,34 +11,26 @@ export type QuizTheme = {
 export const QUIZ_THEMES: Record<QuizType, QuizTheme> = {
   base: {
     id: "base",
-    label: "Default",
-    subtitle: "Default",
     description:
-      "Standard AI assistant that provides answers to quiz questions.",
+      "Ask the assistant questions about the quiz and it will respond directly.",
     dataTheme: "base",
   },
   followup: {
     id: "followup",
-    label: "Follow-Up Questions",
-    subtitle: "Follow-Up Questions",
     description:
-      "After responding to your message, the AI generates follow-up questions you can click to continue exploring the topic in more depth.",
+      "After it responds, you'll see a few suggested follow-up questions — click one to keep exploring the topic.",
     dataTheme: "followup",
   },
   double: {
     id: "double",
-    label: "Dual Response",
-    subtitle: "Dual Response",
     description:
-      "Two independent AI agents each provide their own response side by side.",
+      "You'll see two responses side by side. To reply to one specifically, start your message with @AgentA or @AgentB.",
     dataTheme: "double",
   },
   links: {
     id: "links",
-    label: "Embedded Links",
-    subtitle: "Embedded Links",
     description:
-      "The AI searches online and embeds citation links directly in its response, so you can verify sources and explore further reading.",
+      "The assistant includes source links in its response so you can verify information or read further.",
     dataTheme: "links",
   },
 };

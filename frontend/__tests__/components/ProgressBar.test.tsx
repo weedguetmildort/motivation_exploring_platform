@@ -29,22 +29,22 @@ describe("ProgressBar", () => {
 
   it("renders all step labels", () => {
     render(<ProgressBar user={makeUser()} />);
-    expect(screen.getAllByText("Pre-Quiz Survey").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Base Quiz").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Mid Survey").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Variant Quiz").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Final Survey").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Survey 1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Quiz Part 1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Survey 2").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Quiz Part 2").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Survey 3").length).toBeGreaterThan(0);
   });
 
-  it("uses the variant-specific label when assigned_var is set", () => {
+  it("uses the same neutral label regardless of assigned_var", () => {
     render(<ProgressBar user={makeUser({ assigned_var: "double" })} />);
-    expect(screen.getAllByText("Dual Agent Quiz").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Quiz Part 2").length).toBeGreaterThan(0);
   });
 
   it("does not show a collapse toggle by default and content is visible", () => {
     render(<ProgressBar user={makeUser()} />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Pre-Quiz Survey").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Survey 1").length).toBeGreaterThan(0);
   });
 
   it("toggles content visibility when collapsible", () => {
@@ -53,20 +53,20 @@ describe("ProgressBar", () => {
     const toggle = screen.getByRole("button", { name: "Collapse progress" });
     fireEvent.click(toggle);
 
-    expect(screen.queryByText("Pre-Quiz Survey")).not.toBeInTheDocument();
+    expect(screen.queryByText("Survey 1")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand progress" })).toBeInTheDocument();
   });
 
   it("marks the active step", () => {
     render(<ProgressBar user={makeUser()} activeStep="quiz_base" />);
-    const labels = screen.getAllByText("Base Quiz");
+    const labels = screen.getAllByText("Quiz Part 1");
     expect(labels[0].className).toContain("text-accent-600");
   });
 
   it("marks completed steps differently from incomplete steps", () => {
     render(<ProgressBar user={makeUser({ survey_pre_base_completed: true })} />);
-    const completedLabels = screen.getAllByText("Pre-Quiz Survey");
-    const incompleteLabels = screen.getAllByText("Base Quiz");
+    const completedLabels = screen.getAllByText("Survey 1");
+    const incompleteLabels = screen.getAllByText("Quiz Part 1");
     expect(completedLabels[0].className).toContain("text-accent-600");
     expect(incompleteLabels[0].className).toContain("text-gray-400");
   });

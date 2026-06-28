@@ -635,7 +635,7 @@ export default function ChatBox({
           <textarea
             ref={textareaRef}
             className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-base text-gray-900"
-            placeholder="Type a message…"
+            placeholder={agentFilter === "double" ? "Message both agents, or @AgentA / @AgentB to address one…" : "Type a message…"}
             value={input}
             onChange={handleInputChange}
             onKeyDown={onKeyDown}

@@ -107,6 +107,16 @@ useEffect(() => {
               <p className="text-sm text-gray-600">Manage domains approved for link discovery and health checks</p>
             </Link>
           )}
+
+          {user?.is_admin && (
+            <Link
+              href="/reports_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Issue Reports</h2>
+              <p className="text-sm text-gray-600">Review and respond to issues submitted by quiz participants</p>
+            </Link>
+          )}
         </div>
       </div>
     </div>

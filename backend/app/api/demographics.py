@@ -15,6 +15,8 @@ class DemographicsPayload(BaseModel):
     other_gender: Optional[str] = None
     race_ethnicity: List[str] = Field(default_factory=list)
     age: str
+    academic_level: str
+    other_academic_level: Optional[str] = None
     year: str
     major: Optional[str] = None
     other_major: Optional[str] = None

@@ -27,3 +27,11 @@ class AuthResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(min_length=6)
+
+
+# Payload sent by the client when the user clicks "I agree to participate" on
+# the consent page. Captures the exact text shown at that moment so the
+# research team can see what wording a participant agreed to even if the
+# consent form is edited later.
+class ConsentAgreementRequest(BaseModel):
+    consent_text: str = Field(min_length=1)

@@ -33,6 +33,8 @@ def _to_public(doc: dict) -> UserPublic:
         last_name=doc.get("last_name"),
         consent=doc.get("consent"),
         consent_given_at=doc.get("consent_given_at"),
+        consent_text=doc.get("consent_text"),
+        consent_agreed_at=doc.get("consent_agreed_at"),
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),

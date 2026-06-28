@@ -7,6 +7,7 @@ from .api.chat import router as chat_router
 from .api.auth import router as auth_router
 from .api.knowledge_links import router as knowledge_links_router
 from .api.allowlist import router as allowlist_router
+from .api.reports import router as reports_router
 from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
@@ -95,6 +96,9 @@ def _startup():
         app.state.knowledge_links = reload_knowledge_links_cache(links_col)
         app.state.allowlist_cache = load_allowlist_cache(allowlist_col)
 
+        from .services.reports import get_reports_collection, ensure_indexes as ensure_reports_indexes
+        ensure_reports_indexes(get_reports_collection(db))
+
         # Start background scheduler (last, after all caches are ready)
         from .scheduler import start_scheduler
         start_scheduler(app)
@@ -132,3 +136,4 @@ app.include_router(questions_router.router)
 app.include_router(quiz_router.router)
 app.include_router(demographics_router.router)
 app.include_router(surveys_router.router)
+app.include_router(reports_router)
