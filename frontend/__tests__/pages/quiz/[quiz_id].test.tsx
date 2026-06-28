@@ -9,6 +9,7 @@ import {
   type QuizStateResponse,
   type QuizResultsResponse,
 } from "../../../lib/quiz";
+import { createReport } from "../../../lib/reports";
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -37,6 +38,10 @@ jest.mock("../../../lib/quiz", () => ({
   getQuizResults: jest.fn(),
 }));
 
+jest.mock("../../../lib/reports", () => ({
+  createReport: jest.fn(),
+}));
+
 let lastChatBoxProps: any = null;
 jest.mock("../../../components/ChatBox", () => (props: any) => {
   lastChatBoxProps = props;
@@ -57,6 +62,7 @@ const mockGetQuizState = getQuizState as jest.Mock;
 const mockSubmitQuizAnswer = submitQuizAnswer as jest.Mock;
 const mockResetQuiz = resetQuiz as jest.Mock;
 const mockGetQuizResults = getQuizResults as jest.Mock;
+const mockCreateReport = createReport as jest.Mock;
 
 function baseUser(overrides: Partial<User> = {}): User {
   return {
@@ -187,6 +193,7 @@ describe("QuizPage ([quiz_id])", () => {
     mockSubmitQuizAnswer.mockReset();
     mockResetQuiz.mockReset();
     mockGetQuizResults.mockReset();
+    mockCreateReport.mockReset();
     lastChatBoxProps = null;
 
     setRoute("base");
@@ -438,6 +445,86 @@ describe("QuizPage ([quiz_id])", () => {
 
     expect(screen.getByText("B")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Submit answer" })).not.toBeDisabled();
+  });
+
+  it("opens the report form, submits it, and shows a success message", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockCreateReport.mockResolvedValue({ id: "r1" });
+    render(<QuizPage />);
+
+    await screen.findByText("Question 1 — What is 2+2?");
+
+    fireEvent.click(screen.getByText("Report an issue"));
+
+    const select = screen.getByDisplayValue("Other");
+    fireEvent.change(select, { target: { value: "unclear_question" } });
+
+    const textarea = screen.getByPlaceholderText("Describe the issue…");
+    fireEvent.change(textarea, { target: { value: "This question is confusing." } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit report" }));
+
+    await waitFor(() =>
+      expect(mockCreateReport).toHaveBeenCalledWith({
+        category: "unclear_question",
+        description: "This question is confusing.",
+        quiz_id: "base",
+        question_id: "q1",
+      })
+    );
+
+    expect(await screen.findByText("Report submitted — thank you!")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Describe the issue…")).not.toBeInTheDocument();
+  });
+
+  it("shows an error message when report submission fails", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockCreateReport.mockRejectedValue(new Error("server error"));
+    render(<QuizPage />);
+
+    await screen.findByText("Question 1 — What is 2+2?");
+
+    fireEvent.click(screen.getByText("Report an issue"));
+    fireEvent.change(screen.getByPlaceholderText("Describe the issue…"), {
+      target: { value: "Broken choice" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit report" }));
+
+    expect(
+      await screen.findByText("Failed to submit report. Please try again.")
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Describe the issue…")).toBeInTheDocument();
+  });
+
+  it("disables the submit report button until a description is entered", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    render(<QuizPage />);
+
+    await screen.findByText("Question 1 — What is 2+2?");
+    fireEvent.click(screen.getByText("Report an issue"));
+
+    expect(screen.getByRole("button", { name: "Submit report" })).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the issue…"), {
+      target: { value: "Broken choice" },
+    });
+
+    expect(screen.getByRole("button", { name: "Submit report" })).not.toBeDisabled();
+  });
+
+  it("closes the report form when Cancel is clicked without submitting", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    render(<QuizPage />);
+
+    await screen.findByText("Question 1 — What is 2+2?");
+    fireEvent.click(screen.getByText("Report an issue"));
+    expect(screen.getByPlaceholderText("Describe the issue…")).toBeInTheDocument();
+
+    const cancelButtons = screen.getAllByRole("button", { name: "Cancel" });
+    fireEvent.click(cancelButtons[cancelButtons.length - 1]);
+
+    expect(screen.queryByPlaceholderText("Describe the issue…")).not.toBeInTheDocument();
+    expect(mockCreateReport).not.toHaveBeenCalled();
   });
 
   it("submits the selected answer and advances to the next question", async () => {
