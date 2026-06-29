@@ -236,7 +236,46 @@ describe("sendChat", () => {
           agents: [],
           answer_incorrectly: true,
           answer_choices: [{ id: "c1", label: "Choice 1" }],
+          question_id: null,
+          trigger: null,
         }),
+      })
+    );
+  });
+
+  it("sends question_id and trigger in the request body when provided", async () => {
+    const chunks = [sseChunk([{ type: "done", conversation_id: "conv-7" }])];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    await sendChat("base", "conv-7", "hi", [], {
+      questionId: "q1",
+      trigger: "followup_chip",
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/chat/base",
+      expect.objectContaining({
+        body: expect.stringContaining('"question_id":"q1"'),
+      })
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/chat/base",
+      expect.objectContaining({
+        body: expect.stringContaining('"trigger":"followup_chip"'),
+      })
+    );
+  });
+
+  it("sends null question_id and trigger when not provided", async () => {
+    const chunks = [sseChunk([{ type: "done", conversation_id: "conv-8" }])];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    await sendChat("base", "conv-8", "hi");
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/chat/base",
+      expect.objectContaining({
+        body: expect.stringContaining('"question_id":null'),
       })
     );
   });

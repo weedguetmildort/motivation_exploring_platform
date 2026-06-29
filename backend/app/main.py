@@ -8,6 +8,8 @@ from .api.auth import router as auth_router
 from .api.knowledge_links import router as knowledge_links_router
 from .api.allowlist import router as allowlist_router
 from .api.reports import router as reports_router
+from .api.link_clicks import router as link_clicks_router
+from .api.copy_events import router as copy_events_router
 from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
@@ -99,6 +101,12 @@ def _startup():
         from .services.reports import get_reports_collection, ensure_indexes as ensure_reports_indexes
         ensure_reports_indexes(get_reports_collection(db))
 
+        from .services.link_clicks import get_link_clicks_collection, ensure_indexes as ensure_link_clicks_indexes
+        ensure_link_clicks_indexes(get_link_clicks_collection(db))
+
+        from .services.copy_events import get_copy_events_collection, ensure_indexes as ensure_copy_events_indexes
+        ensure_copy_events_indexes(get_copy_events_collection(db))
+
         # Start background scheduler (last, after all caches are ready)
         from .scheduler import start_scheduler
         start_scheduler(app)
@@ -137,3 +145,5 @@ app.include_router(quiz_router.router)
 app.include_router(demographics_router.router)
 app.include_router(surveys_router.router)
 app.include_router(reports_router)
+app.include_router(link_clicks_router)
+app.include_router(copy_events_router)

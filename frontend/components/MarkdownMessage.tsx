@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -162,13 +162,14 @@ const schema = {
   },
 };
 
-function makeComponents(dark: boolean) {
+function makeComponents(dark: boolean, onLinkClick?: (href: string) => void) {
   return {
     a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
       <a
         href={href}
         target="_blank"
         rel="noreferrer"
+        onClick={() => { if (href) onLinkClick?.(href); }}
         className={dark ? "text-white underline opacity-90 hover:opacity-100" : "text-blue-600 underline hover:text-blue-800"}
       >
         {children}
@@ -226,17 +227,28 @@ function makeComponents(dark: boolean) {
   };
 }
 
-const components = makeComponents(false);
-const darkComponents = makeComponents(true);
-
-const inlineComponents = {
-  ...components,
-  p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-};
-
-export default function MarkdownMessage({ content, inline = false, dark = false }: Readonly<{ content: string; inline?: boolean; dark?: boolean }>) {
+export default function MarkdownMessage({
+  content,
+  inline = false,
+  dark = false,
+  onLinkClick,
+}: Readonly<{
+  content: string;
+  inline?: boolean;
+  dark?: boolean;
+  onLinkClick?: (href: string) => void;
+}>) {
   const wrapped_content = wrapExpressions(content);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const baseComponents = useMemo(() => makeComponents(dark, onLinkClick), [dark, onLinkClick]);
+  const activeComponents = useMemo(() => {
+    if (!inline) return baseComponents;
+    return {
+      ...baseComponents,
+      p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+    };
+  }, [inline, baseComponents]);
 
   // Scale down display math blocks that are wider than their container so they
   // never overflow the chat bubble — even when the user changes browser zoom.
@@ -270,9 +282,6 @@ export default function MarkdownMessage({ content, inline = false, dark = false 
     fitMath();
     return () => ro.disconnect();
   }, [wrapped_content, inline]);
-
-  let activeComponents = dark ? darkComponents : components;
-  if (inline) activeComponents = inlineComponents;
 
   const rendered = (
     <ReactMarkdown

@@ -10,6 +10,7 @@ from ..schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
     ConsentAgreementRequest,
+    ConsentDeclineRequest,
 )
 from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..services.users import (
@@ -18,6 +19,7 @@ from ..services.users import (
     create_user,
     find_user_by_email,
     check_user_password,
+    maybe_touch_last_active,
 )
 from ..core.security import create_access_token, decode_token
 from ..core.config import get_settings
@@ -65,6 +67,8 @@ def build_user_public(doc: dict) -> UserPublic:
         consent_given_at=doc.get("consent_given_at"),
         consent_text=doc.get("consent_text"),
         consent_agreed_at=doc.get("consent_agreed_at"),
+        consent_declined_at=doc.get("consent_declined_at"),
+        last_active_at=doc.get("last_active_at"),
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
@@ -96,6 +100,8 @@ def get_current_user(request: Request) -> UserPublic:
     doc = find_user_by_email(users, email)
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
+
+    maybe_touch_last_active(users, doc)
 
     return build_user_public(doc)
 
@@ -170,6 +176,32 @@ def record_consent_agreement(
             "$set": {
                 "consent_text": data.consent_text,
                 "consent_agreed_at": now,
+                "updated_at": now,
+            }
+        },
+    )
+
+    return {"ok": True}
+
+
+@router.post("/decline")
+def record_consent_decline(
+    data: ConsentDeclineRequest,
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    users = get_users_collection(request.app.state.db)
+    doc = find_user_by_email(users, user.email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+    users.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {
+                "consent_text": data.consent_text,
+                "consent_declined_at": now,
                 "updated_at": now,
             }
         },

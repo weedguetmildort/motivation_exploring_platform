@@ -4,10 +4,20 @@ import type { SendChatOptions, ChatResponse } from "../../lib/chat";
 
 const mockSendChat = jest.fn();
 const mockLoadUserHistory = jest.fn();
+const mockRecordLinkClick = jest.fn();
+const mockRecordCopyEvent = jest.fn();
 
 jest.mock("../../lib/chat", () => ({
   sendChat: (...args: unknown[]) => mockSendChat(...args),
   loadUserHistory: (...args: unknown[]) => mockLoadUserHistory(...args),
+}));
+
+jest.mock("../../lib/linkClicks", () => ({
+  recordLinkClick: (...args: unknown[]) => mockRecordLinkClick(...args),
+}));
+
+jest.mock("../../lib/copyEvents", () => ({
+  recordCopyEvent: (...args: unknown[]) => mockRecordCopyEvent(...args),
 }));
 
 const PLACEHOLDER = "Type a message…";
@@ -18,6 +28,10 @@ describe("ChatBox", () => {
     mockSendChat.mockReset();
     mockLoadUserHistory.mockReset();
     mockLoadUserHistory.mockResolvedValue({ conversation_id: "", messages: [] });
+    mockRecordLinkClick.mockReset();
+    mockRecordLinkClick.mockResolvedValue(undefined);
+    mockRecordCopyEvent.mockReset();
+    mockRecordCopyEvent.mockResolvedValue(undefined);
   });
 
   it("renders the header and a disabled Send button when the input is empty", () => {
@@ -301,5 +315,152 @@ describe("ChatBox", () => {
     expect(await screen.findByText("Old question")).toBeInTheDocument();
     expect(screen.queryByText("First reply")).not.toBeInTheDocument();
     expect(mockLoadUserHistory).toHaveBeenCalledWith("conv-2");
+  });
+
+  // ── question_id / trigger plumbing ──────────────────────────────────────
+
+  it("sends trigger='manual' and the questionId prop for a manually typed message", async () => {
+    mockSendChat.mockImplementation(() => new Promise<ChatResponse>(() => {}));
+
+    render(<ChatBox quizId="base" questionId="q1" />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(mockSendChat).toHaveBeenCalledWith(
+      "base", null, "Hello", [],
+      expect.objectContaining({ questionId: "q1", trigger: "manual" })
+    );
+  });
+
+  it("sends trigger='followup_chip' when a follow-up chip is clicked", async () => {
+    let capturedOptions: SendChatOptions = {};
+    let resolveSend: (value: ChatResponse) => void = () => {};
+    mockSendChat.mockImplementationOnce((_q, _c, _m, _a, options: SendChatOptions) => {
+      capturedOptions = options;
+      return new Promise<ChatResponse>((resolve) => { resolveSend = resolve; });
+    });
+
+    render(<ChatBox quizId="base" />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    act(() => { capturedOptions.onDone?.(["Main reply"], "conv-1"); });
+    await screen.findByText("Main reply");
+
+    act(() => { capturedOptions.onFollowupToken?.("1. What is X?\n"); });
+    await screen.findByText("What is X?");
+
+    act(() => {
+      resolveSend({ replies: ["Main reply"], conversationId: "conv-1", followupQuestions: undefined });
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument());
+
+    mockSendChat.mockImplementationOnce(() => new Promise<ChatResponse>(() => {}));
+    fireEvent.click(screen.getByText("What is X?"));
+
+    await waitFor(() =>
+      expect(mockSendChat).toHaveBeenCalledWith(
+        "base", "conv-1", "What is X?", [],
+        expect.objectContaining({ trigger: "followup_chip" })
+      )
+    );
+  });
+
+  it("sends trigger='auto_question' for an externalQuestion auto-send", async () => {
+    mockSendChat.mockImplementation(() => new Promise<ChatResponse>(() => {}));
+
+    const { rerender } = render(<ChatBox quizId="base" externalQuestion={null} />);
+    rerender(<ChatBox quizId="base" externalQuestion="What is the meaning of life?" />);
+
+    await waitFor(() =>
+      expect(mockSendChat).toHaveBeenCalledWith(
+        "base", null, "What is the meaning of life?", [],
+        expect.objectContaining({ trigger: "auto_question" })
+      )
+    );
+  });
+
+  // ── link click tracking (links variant) ─────────────────────────────────
+
+  it("records a link click for an assistant message in the links variant", async () => {
+    mockSendChat.mockImplementation(async (_q, _c, _m, _a, options: SendChatOptions) => {
+      options.onDone?.(["See [source](https://example.com/article) for more."], "conv-1");
+      return { replies: ["See [source](https://example.com/article) for more."], conversationId: "conv-1", followupQuestions: undefined } as ChatResponse;
+    });
+
+    render(<ChatBox quizId="links" questionId="q1" conversationId="conv-1" />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const link = await screen.findByRole("link", { name: "source" });
+    fireEvent.click(link);
+
+    expect(mockRecordLinkClick).toHaveBeenCalledWith({
+      quiz_id: "links",
+      question_id: "q1",
+      conversation_id: "conv-1",
+      url: "https://example.com/article",
+    });
+  });
+
+  it("does not record a link click for a non-links variant", async () => {
+    mockSendChat.mockImplementation(async (_q, _c, _m, _a, options: SendChatOptions) => {
+      options.onDone?.(["See [source](https://example.com/article) for more."], "conv-1");
+      return { replies: ["See [source](https://example.com/article) for more."], conversationId: "conv-1", followupQuestions: undefined } as ChatResponse;
+    });
+
+    render(<ChatBox quizId="base" conversationId="conv-1" />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const link = await screen.findByRole("link", { name: "source" });
+    fireEvent.click(link);
+
+    expect(mockRecordLinkClick).not.toHaveBeenCalled();
+  });
+
+  // ── copy event tracking ──────────────────────────────────────────────────
+
+  it("records a copy event with the selected text from the chat pane", async () => {
+    mockSendChat.mockImplementation(async (_q, _c, _m, _a, options: SendChatOptions) => {
+      options.onDone?.(["Hi there!"], "conv-1");
+      return { replies: ["Hi there!"], conversationId: "conv-1", followupQuestions: undefined } as ChatResponse;
+    });
+
+    const { container } = render(<ChatBox quizId="base" questionId="q1" />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Hi there!");
+
+    const getSelectionSpy = jest.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "Hi there!",
+    } as Selection);
+
+    const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
+    fireEvent.copy(scroller);
+
+    expect(mockRecordCopyEvent).toHaveBeenCalledWith({
+      quiz_id: "base",
+      question_id: "q1",
+      conversation_id: "conv-1",
+      copied_text: "Hi there!",
+    });
+
+    getSelectionSpy.mockRestore();
+  });
+
+  it("does not record a copy event when there is no selected text", async () => {
+    const { container } = render(<ChatBox quizId="base" />);
+
+    const getSelectionSpy = jest.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "",
+    } as Selection);
+
+    const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
+    fireEvent.copy(scroller);
+
+    expect(mockRecordCopyEvent).not.toHaveBeenCalled();
+
+    getSelectionSpy.mockRestore();
   });
 });

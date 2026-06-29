@@ -13,6 +13,8 @@ class ChatRequest(BaseModel):
     answer_incorrectly: bool = False
     question_text: str | None = None
     answer_choices: list[QuestionChoice] = Field(default_factory=list)
+    question_id: str | None = None
+    trigger: str | None = None  # "manual" | "followup_chip" | "auto_question"
 
 
 # Returned by non-streaming chat endpoints (e.g. legacy or search-based).

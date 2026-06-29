@@ -35,3 +35,10 @@ class ChangePasswordRequest(BaseModel):
 # consent form is edited later.
 class ConsentAgreementRequest(BaseModel):
     consent_text: str = Field(min_length=1)
+
+
+# Payload sent by the client when the user clicks "I do not wish to participate"
+# on the consent page. Mirrors ConsentAgreementRequest so the team can see
+# exactly what text was shown when someone declined, not just that they did.
+class ConsentDeclineRequest(BaseModel):
+    consent_text: str = Field(min_length=1)

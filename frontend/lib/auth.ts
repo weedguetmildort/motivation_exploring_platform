@@ -19,6 +19,8 @@ export type User = {
   consent_given_at?: string;
   consent_text?: string;
   consent_agreed_at?: string;
+  consent_declined_at?: string;
+  last_active_at?: string;
   is_admin: boolean;
   assigned_var?: string | null;
   demographics_completed?: boolean;
@@ -94,6 +96,13 @@ export async function logout() {
 
 export async function recordConsentAgreement(consentText: string) {
   return apiFetch<{ ok: boolean }>("/auth/consent", {
+    method: "POST",
+    body: JSON.stringify({ consent_text: consentText }),
+  });
+}
+
+export async function recordConsentDecline(consentText: string) {
+  return apiFetch<{ ok: boolean }>("/auth/decline", {
     method: "POST",
     body: JSON.stringify({ consent_text: consentText }),
   });

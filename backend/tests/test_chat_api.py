@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.api import chat as chat_module
 from app.api.auth import get_current_user
 from app.schemas.user import UserPublic
+from app.schemas.question import QuestionChoice
 
 
 # ── Fake OpenAI streaming helpers ────────────────────────────────────────────
@@ -250,6 +251,30 @@ class TestSaveMessage:
         with pytest.raises(RuntimeError):
             chat_module._save_message(col, "user", user, "conv1", "hello")
 
+    def test_extra_fields_merged_into_doc(self):
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        chat_module._save_message(
+            col, "user", user, "conv1", "hello",
+            extra_fields={"question_id": "q1", "trigger": "followup_chip"},
+        )
+
+        doc = col.insert_one.call_args.args[0]
+        assert doc["question_id"] == "q1"
+        assert doc["trigger"] == "followup_chip"
+        bson.encode(doc)
+
+    def test_no_extra_fields_omits_them(self):
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        chat_module._save_message(col, "user", user, "conv1", "hello")
+
+        doc = col.insert_one.call_args.args[0]
+        assert "question_id" not in doc
+        assert "trigger" not in doc
+
 
 # ── _save_exchange ────────────────────────────────────────────────────────────
 
@@ -302,6 +327,36 @@ class TestSaveExchange:
 
         # Both inserts were attempted even though the first one failed.
         assert col.insert_one.call_count == 2
+
+    def test_question_id_stored_on_both_docs_trigger_only_on_user_doc(self):
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        asyncio.run(
+            chat_module._save_exchange(
+                col, user, "conv1", "hello", ["hi there"], None,
+                question_id="q1", trigger="followup_chip",
+            )
+        )
+
+        user_doc, assistant_doc = (c.args[0] for c in col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q1"
+        assert user_doc["trigger"] == "followup_chip"
+        assert assistant_doc["question_id"] == "q1"
+        assert "trigger" not in assistant_doc
+
+    def test_no_question_id_or_trigger_omits_both_fields(self):
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        asyncio.run(
+            chat_module._save_exchange(col, user, "conv1", "hello", ["hi there"], None)
+        )
+
+        user_doc, assistant_doc = (c.args[0] for c in col.insert_one.call_args_list)
+        assert "question_id" not in user_doc
+        assert "trigger" not in user_doc
+        assert "question_id" not in assistant_doc
 
 
 # ── _stream_ai ─────────────────────────────────────────────────────────────────
@@ -465,6 +520,56 @@ class TestStandardStream:
         assert events[-1] == chat_module._sse({"type": "done", "conversation_id": "conv1"})
         assert called is False
 
+    def test_question_id_and_trigger_passed_to_save(self, monkeypatch):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["foo"]))
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        async def run():
+            async for _ in chat_module._standard_stream(
+                [{"role": "user", "content": "hi"}], col, user, "conv1", "hi",
+                question_id="q1", trigger="manual",
+            ):
+                pass
+
+        asyncio.run(run())
+        user_doc, assistant_doc = (c.args[0] for c in col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q1"
+        assert user_doc["trigger"] == "manual"
+        assert assistant_doc["question_id"] == "q1"
+
+    def test_stated_choice_detected_with_answer_choices(self, monkeypatch):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["The answer is 4."]))
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+        choices = [QuestionChoice(id="a", label="3"), QuestionChoice(id="b", label="4")]
+
+        async def run():
+            async for _ in chat_module._standard_stream(
+                [{"role": "user", "content": "hi"}], col, user, "conv1", "hi",
+                answer_choices=choices,
+            ):
+                pass
+
+        asyncio.run(run())
+        assistant_doc = col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["stated_choice_id"] == {"default": "b"}
+
+    def test_no_stated_choice_field_without_answer_choices(self, monkeypatch):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["The answer is 4."]))
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        async def run():
+            async for _ in chat_module._standard_stream(
+                [{"role": "user", "content": "hi"}], col, user, "conv1", "hi",
+            ):
+                pass
+
+        asyncio.run(run())
+        assistant_doc = col.insert_one.call_args_list[1].args[0]
+        assert "stated_choice_id" not in assistant_doc.get("metadata", {})
+
 
 # ── _stream_into_queue ───────────────────────────────────────────────────────────
 
@@ -561,6 +666,32 @@ class TestDefaultChatEndpoint:
         sent_messages = create_mock.call_args.kwargs["messages"]
         assert "MUST choose an incorrect answer choice" in sent_messages[0]["content"]
 
+    def test_question_id_and_trigger_round_trip_to_stored_docs(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["hi"]))
+
+        resp = chat_client.post("/chat/quiz1", json={
+            "message": "hi", "conversation_id": "conv1",
+            "question_id": "q42", "trigger": "auto_question",
+        })
+
+        assert resp.status_code == 200
+        user_doc, assistant_doc = (c.args[0] for c in chat_col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q42"
+        assert user_doc["trigger"] == "auto_question"
+        assert assistant_doc["question_id"] == "q42"
+
+    def test_stated_choice_id_round_trips_to_stored_metadata(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["The answer is 4."]))
+
+        resp = chat_client.post("/chat/quiz1", json={
+            "message": "What is 2+2?",
+            "answer_choices": [{"id": "a", "label": "3"}, {"id": "b", "label": "4"}],
+        })
+
+        assert resp.status_code == 200
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["stated_choice_id"] == {"default": "b"}
+
 
 # ── POST /chat/double ──────────────────────────────────────────────────────────
 
@@ -620,6 +751,49 @@ class TestDoubleChatEndpoint:
         assert assistant_doc["metadata"] == {"answer_incorrectly": False}
         bson.encode(assistant_doc)
 
+    def test_both_agents_stated_choice_detected_per_agent(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(
+            chat_module._client.chat.completions, "create",
+            _agent_aware_create(["The answer is 3, intuitively."], ["The answer is 4, formally."]),
+        )
+
+        resp = chat_client.post("/chat/double", json={
+            "message": "hi", "conversation_id": "conv1", "agents": [],
+            "answer_choices": [{"id": "a", "label": "3"}, {"id": "b", "label": "4"}],
+        })
+
+        assert resp.status_code == 200
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["stated_choice_id"] == {"A": "a", "B": "b"}
+
+    def test_question_id_and_trigger_round_trip_both_agents(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _agent_aware_create(["a"], ["b"]))
+
+        resp = chat_client.post("/chat/double", json={
+            "message": "hi", "conversation_id": "conv1", "agents": [],
+            "question_id": "q7", "trigger": "manual",
+        })
+
+        assert resp.status_code == 200
+        user_doc, assistant_doc = (c.args[0] for c in chat_col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q7"
+        assert user_doc["trigger"] == "manual"
+        assert assistant_doc["question_id"] == "q7"
+
+    def test_single_agent_via_mention_question_id_round_trips(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _agent_aware_create(["solo"], ["unused"]))
+
+        resp = chat_client.post("/chat/double", json={
+            "message": "hi", "conversation_id": "conv1", "agents": ["AgentA"],
+            "question_id": "q9", "trigger": "followup_chip",
+        })
+
+        assert resp.status_code == 200
+        user_doc, assistant_doc = (c.args[0] for c in chat_col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q9"
+        assert user_doc["trigger"] == "followup_chip"
+        assert assistant_doc["question_id"] == "q9"
+
 
 # ── POST /chat/followup ─────────────────────────────────────────────────────────
 
@@ -644,6 +818,23 @@ class TestFollowupChatEndpoint:
         assert events[1] == {"type": "done", "conversation_id": "conv2"}
         followups = [e for e in events if e["type"] == "followup"]
         assert followups == [{"type": "followup", "token": "1. Q1\n2. Q2\n3. Q3"}]
+
+    def test_question_id_and_trigger_round_trip(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(
+            chat_module._client.chat.completions, "create",
+            _mock_create_sequence([["main answer"], ["1. Q1"]]),
+        )
+
+        resp = chat_client.post("/chat/followup", json={
+            "message": "explain", "conversation_id": "conv2",
+            "question_id": "q5", "trigger": "manual",
+        })
+
+        assert resp.status_code == 200
+        user_doc, assistant_doc = (c.args[0] for c in chat_col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q5"
+        assert user_doc["trigger"] == "manual"
+        assert assistant_doc["question_id"] == "q5"
 
 
 # ── POST /chat/links ──────────────────────────────────────────────────────────
@@ -705,6 +896,34 @@ class TestLinksChatEndpoint:
         events = _parse_sse(resp.text)
         assert events == [{"type": "error", "detail": "Upstream AI request failed"}]
         chat_col.insert_one.assert_not_called()
+
+    def test_question_id_and_trigger_round_trip(self, monkeypatch, chat_client, chat_app, chat_col):
+        chat_app.state.knowledge_links = []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["plain answer"]))
+
+        resp = chat_client.post("/chat/links", json={
+            "message": "hi", "conversation_id": "conv3",
+            "question_id": "q11", "trigger": "manual",
+        })
+
+        assert resp.status_code == 200
+        user_doc, assistant_doc = (c.args[0] for c in chat_col.insert_one.call_args_list)
+        assert user_doc["question_id"] == "q11"
+        assert user_doc["trigger"] == "manual"
+        assert assistant_doc["question_id"] == "q11"
+
+    def test_stated_choice_id_detected(self, monkeypatch, chat_client, chat_app, chat_col):
+        chat_app.state.knowledge_links = []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["The answer is 4."]))
+
+        resp = chat_client.post("/chat/links", json={
+            "message": "What is 2+2?", "conversation_id": "conv3",
+            "answer_choices": [{"id": "a", "label": "3"}, {"id": "b", "label": "4"}],
+        })
+
+        assert resp.status_code == 200
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["stated_choice_id"] == {"default": "b"}
 
 
 # ── GET /chat/get_history/{conversation_id} ───────────────────────────────────

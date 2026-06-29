@@ -56,6 +56,8 @@ class UserPublic(BaseModel):
     consent_given_at: Optional[datetime] = None
     consent_text: Optional[str] = None
     consent_agreed_at: Optional[datetime] = None
+    consent_declined_at: Optional[datetime] = None
+    last_active_at: Optional[datetime] = None
     assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
     demographics_completed: bool = False

@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, call
 from bson import ObjectId
 import pytest
 
-from app.services.chat import get_last_exchange
+from app.services.chat import get_last_exchange, detect_stated_choice
+from app.schemas.question import QuestionChoice
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -151,3 +152,41 @@ class TestGetLastExchange:
 
         find_call_kwargs = col.find.call_args[0][0]
         assert find_call_kwargs.get("conversation_id") == "my-conv-id-123"
+
+
+# ── detect_stated_choice ─────────────────────────────────────────────────────
+
+_CHOICES = [
+    QuestionChoice(id="a", label="3"),
+    QuestionChoice(id="b", label="4"),
+    QuestionChoice(id="c", label="5"),
+]
+
+
+class TestDetectStatedChoice:
+    def test_no_choices_returns_none(self):
+        assert detect_stated_choice("The answer is 4.", []) is None
+
+    def test_single_confident_match_returns_id(self):
+        reply = "The correct answer is 4, because 2+2=4."
+        assert detect_stated_choice(reply, _CHOICES) == "b"
+
+    def test_zero_matches_returns_none(self):
+        reply = "I'm not sure what the answer is."
+        assert detect_stated_choice(reply, _CHOICES) is None
+
+    def test_ambiguous_two_matches_returns_none(self):
+        # Both "4" and "5" appear in the leading text — never guess.
+        reply = "The answer is either 4 or 5 depending on rounding."
+        assert detect_stated_choice(reply, _CHOICES) is None
+
+    def test_match_outside_leading_window_is_not_detected(self):
+        # "4" only appears past the 300-char window the heuristic scans.
+        padding = "x" * 290
+        reply = f"{padding} the answer is 4"
+        assert detect_stated_choice(reply, _CHOICES) is None
+
+    def test_case_insensitive_match(self):
+        choices = [QuestionChoice(id="a", label="True"), QuestionChoice(id="b", label="False")]
+        reply = "TRUE — here's why."
+        assert detect_stated_choice(reply, choices) == "a"

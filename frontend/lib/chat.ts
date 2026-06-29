@@ -49,6 +49,8 @@ export async function loadUserHistory(conversationId: string): Promise<{
   return apiFetch(`/api/chat/load_user_history/${conversationId}`);
 }
 
+export type ChatTrigger = "manual" | "followup_chip" | "auto_question";
+
 export interface SendChatOptions {
   signal?: AbortSignal;
   onToken?: (delta: string, agent?: string) => void;
@@ -56,6 +58,8 @@ export interface SendChatOptions {
   onFollowupToken?: (delta: string) => void;
   answerIncorrectly?: boolean;
   answerChoices?: { id: string; label: string }[];
+  questionId?: string;
+  trigger?: ChatTrigger;
 }
 
 export async function sendChat(
@@ -65,7 +69,7 @@ export async function sendChat(
   agents: string[] = [],
   options: SendChatOptions = {},
 ): Promise<ChatResponse> {
-  const { signal, onToken, onDone, onFollowupToken, answerIncorrectly, answerChoices } = options;
+  const { signal, onToken, onDone, onFollowupToken, answerIncorrectly, answerChoices, questionId, trigger } = options;
   const resp = await fetch(`/api/chat/${quizId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -77,6 +81,8 @@ export async function sendChat(
       agents,
       answer_incorrectly: answerIncorrectly ?? false,
       answer_choices: (answerChoices ?? []).map((c) => ({ id: c.id, label: c.label })),
+      question_id: questionId ?? null,
+      trigger: trigger ?? null,
     }),
   });
 

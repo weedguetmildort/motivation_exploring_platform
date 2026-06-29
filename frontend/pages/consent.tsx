@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, invalidateMeCache, logout, recordConsentAgreement } from "../lib/auth";
+import { getMe, invalidateMeCache, logout, recordConsentAgreement, recordConsentDecline } from "../lib/auth";
 
 export default function ConsentPage() {
   const router = useRouter();
@@ -38,17 +38,19 @@ export default function ConsentPage() {
     );
   }
 
+  function getConsentText(): string {
+    return (consentContentRef.current?.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   async function onAgree() {
     if (pending) return;
     setPending(true);
     setError(null);
 
-    const consentText = (consentContentRef.current?.textContent ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
-
     try {
-      await recordConsentAgreement(consentText);
+      await recordConsentAgreement(getConsentText());
       invalidateMeCache();
       router.push("/dashboard");
     } catch (e) {
@@ -61,6 +63,11 @@ export default function ConsentPage() {
   async function onDecline() {
     if (pending) return;
     setPending(true);
+    try {
+      await recordConsentDecline(getConsentText());
+    } catch {
+      // Declining must still succeed from the user's POV even if this write fails.
+    }
     try {
       await logout();
     } catch {
