@@ -1,6 +1,6 @@
 # backend/tests/test_users_service.py
 """Unit tests for app.services.users: user CRUD/lookup helpers backed by a mocked collection."""
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +15,7 @@ from app.services.users import (
     create_user,
     find_user_by_email,
     check_user_password,
+    maybe_touch_last_active,
     _next_assigned_var,
     _normalize_stage,
     _to_public,
@@ -263,3 +264,55 @@ class TestCheckUserPassword:
     def test_wrong_password_returns_false(self):
         user_doc = {"password_hash": hash_password("correct-password")}
         assert check_user_password(user_doc, "wrong-password") is False
+
+
+# ── maybe_touch_last_active ──────────────────────────────────────────────────
+
+class TestMaybeTouchLastActive:
+    def test_missing_last_active_at_updates(self, mock_col):
+        oid = ObjectId()
+        doc = {"_id": oid}
+
+        maybe_touch_last_active(mock_col, doc)
+
+        mock_col.update_one.assert_called_once()
+        args = mock_col.update_one.call_args[0]
+        assert args[0] == {"_id": oid}
+        assert "last_active_at" in args[1]["$set"]
+
+    def test_recent_value_does_not_update(self, mock_col):
+        oid = ObjectId()
+        doc = {"_id": oid, "last_active_at": datetime.now(timezone.utc) - timedelta(seconds=5)}
+
+        maybe_touch_last_active(mock_col, doc)
+
+        mock_col.update_one.assert_not_called()
+
+    def test_stale_value_updates(self, mock_col):
+        oid = ObjectId()
+        doc = {"_id": oid, "last_active_at": datetime.now(timezone.utc) - timedelta(minutes=10)}
+
+        maybe_touch_last_active(mock_col, doc)
+
+        mock_col.update_one.assert_called_once()
+
+    def test_naive_datetime_from_mongo_round_trip_does_not_raise(self, mock_col):
+        """pymongo returns stored datetimes as naive UTC by default. A recent
+        naive value must be treated as recent, not raise on subtraction."""
+        oid = ObjectId()
+        naive_recent = datetime.utcnow() - timedelta(seconds=5)
+        assert naive_recent.tzinfo is None
+        doc = {"_id": oid, "last_active_at": naive_recent}
+
+        maybe_touch_last_active(mock_col, doc)  # must not raise
+
+        mock_col.update_one.assert_not_called()
+
+    def test_naive_stale_datetime_updates(self, mock_col):
+        oid = ObjectId()
+        naive_stale = datetime.utcnow() - timedelta(minutes=10)
+        doc = {"_id": oid, "last_active_at": naive_stale}
+
+        maybe_touch_last_active(mock_col, doc)
+
+        mock_col.update_one.assert_called_once()

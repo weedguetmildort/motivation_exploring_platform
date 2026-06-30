@@ -11,13 +11,18 @@ from fastapi.responses import StreamingResponse
 
 from ..schemas.user import UserPublic
 from ..schemas.message import AIMessageMetadata
+from ..schemas.question import QuestionChoice
 from ..schemas.chat import (
     ChatRequest, ChatResponse, FollowupChatResponse, FollowupResponse,
     UserMessageData, UserConversationHistoryResponse,
     ConversationMessageData, ConversationHistoryResponse,
 )
 from .auth import get_current_user
-from ..services.chat import get_last_exchange, get_conversation_history as fetch_conversation_history
+from ..services.chat import (
+    get_last_exchange,
+    get_conversation_history as fetch_conversation_history,
+    detect_stated_choice,
+)
 from ..services.search import _build_search_context, _inject_citation_links
 # from ..services.search import _run_search, _filter_valid_urls  # external search disabled
 from ..services.followup import generate_followup_questions
@@ -90,6 +95,7 @@ def _save_message(
     conv_id: str,
     content,
     metadata=None,
+    extra_fields: dict | None = None,
 ) -> None:
     """Insert one message document. Raises on failure — callers must handle/log."""
     doc = {
@@ -103,10 +109,21 @@ def _save_message(
     }
     if metadata is not None:
         doc["metadata"] = metadata
+    if extra_fields:
+        doc.update(extra_fields)
     col.insert_one(doc)
 
 
-async def _save_exchange(col, user: UserPublic, conv_id: str, user_message: str, assistant_reply: list, assistant_metadata: dict | None = None) -> None:
+async def _save_exchange(
+    col,
+    user: UserPublic,
+    conv_id: str,
+    user_message: str,
+    assistant_reply: list,
+    assistant_metadata: dict | None = None,
+    question_id: Optional[str] = None,
+    trigger: Optional[str] = None,
+) -> None:
     """Persist the user message then the assistant reply, awaited before the
     caller reports success to the client.
 
@@ -116,14 +133,25 @@ async def _save_exchange(col, user: UserPublic, conv_id: str, user_message: str,
     loudly (with conversation/user context) rather than silently dropped — the
     participant already saw the reply stream in, so we don't fail the request
     over a persistence error, but it must never vanish without a trace.
+
+    question_id/trigger are stored as top-level fields (not nested in metadata)
+    since they identify the message itself, analogous to conversation_id.
+    trigger only applies to the user message — an assistant reply has no "trigger".
     """
     def _save() -> None:
+        user_extra = {}
+        if question_id is not None:
+            user_extra["question_id"] = question_id
+        if trigger is not None:
+            user_extra["trigger"] = trigger
         try:
-            _save_message(col, "user", user, conv_id, user_message)
+            _save_message(col, "user", user, conv_id, user_message, extra_fields=user_extra or None)
         except Exception as e:
             print(f"[chat] FAILED to save USER message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
+
+        assistant_extra = {"question_id": question_id} if question_id is not None else None
         try:
-            _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata)
+            _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata, extra_fields=assistant_extra)
         except Exception as e:
             print(f"[chat] FAILED to save ASSISTANT message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
 
@@ -241,11 +269,16 @@ async def _standard_stream(
     reply_prefix: str = "",
     answer_incorrectly: bool = False,
     temperature: float = TEMPERATURE,
+    question_id: Optional[str] = None,
+    trigger: Optional[str] = None,
+    answer_choices: Optional[list[QuestionChoice]] = None,
 ) -> AsyncGenerator[str, None]:
-    """Stream tokens, fire-and-forget saves, emit done, then optionally yield from after_done.
+    """Stream tokens, await the save, emit done, then optionally yield from after_done.
 
     agent_tag: if set, each token SSE includes an "agent" field (used by double quiz).
     reply_prefix: prepended to the stored reply (e.g. "[AGENT A] " for double quiz).
+    answer_choices: if provided, the leading text of the reply is scanned to detect
+    which choice the AI named, recorded in metadata.stated_choice_id["default"].
     """
     full_reply = ""
     async for is_error, delta, sse in _stream_agent_tokens(messages, agent_tag=agent_tag, temperature=temperature):
@@ -255,8 +288,10 @@ async def _standard_stream(
         full_reply += delta
 
     stored_reply = f"{reply_prefix}{full_reply}" if reply_prefix else full_reply
-    metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly).model_dump(exclude_none=True)
-    await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata)
+    choices = answer_choices or []
+    stated = {"default": detect_stated_choice(full_reply, choices)} if choices else None
+    metadata = AIMessageMetadata(answer_incorrectly=answer_incorrectly, stated_choice_id=stated).model_dump(exclude_none=True)
+    await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata, question_id=question_id, trigger=trigger)
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -339,7 +374,9 @@ async def double_chat(
             _standard_stream(msgs, col, user, conv_id, req.message,
                              agent_tag=tag, reply_prefix=f"[AGENT {tag}] ",
                              answer_incorrectly=req.answer_incorrectly,
-                             temperature=DOUBLE_TEMPERATURE),
+                             temperature=DOUBLE_TEMPERATURE,
+                             question_id=req.question_id, trigger=req.trigger,
+                             answer_choices=req.answer_choices),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -370,8 +407,16 @@ async def double_chat(
             replies[tag] += delta
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
-        metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
-        await _save_exchange(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata)
+        stated = (
+            {
+                "A": detect_stated_choice(replies["A"], req.answer_choices),
+                "B": detect_stated_choice(replies["B"], req.answer_choices),
+            }
+            if req.answer_choices else None
+        )
+        metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly, stated_choice_id=stated).model_dump(exclude_none=True)
+        await _save_exchange(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata,
+                              question_id=req.question_id, trigger=req.trigger)
         yield _sse({"type": "done", "conversation_id": conv_id})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -400,7 +445,9 @@ async def followup_quiz_chat(
             yield _sse({"type": "followup", "token": delta})
 
     return StreamingResponse(
-        _standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request, answer_incorrectly=req.answer_incorrectly),
+        _standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request,
+                         answer_incorrectly=req.answer_incorrectly,
+                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -467,8 +514,10 @@ async def chat_with_embedded_links(
         # valid_citations = [c for c in citations if c["url"] in valid_urls]  # disabled with search
 
         stored_reply = _inject_citation_links(full_reply, citations) if citations else full_reply
-        metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly).model_dump(exclude_none=True)
-        await _save_exchange(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata)
+        stated = {"default": detect_stated_choice(full_reply, req.answer_choices)} if req.answer_choices else None
+        metadata = AIMessageMetadata(answer_incorrectly=req.answer_incorrectly, stated_choice_id=stated).model_dump(exclude_none=True)
+        await _save_exchange(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata,
+                              question_id=req.question_id, trigger=req.trigger)
 
         yield _sse({"type": "done", "conversation_id": conv_id, "reply": stored_reply})
 
@@ -496,7 +545,8 @@ async def chat(
     messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
     return StreamingResponse(
-        _standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly),
+        _standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly,
+                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

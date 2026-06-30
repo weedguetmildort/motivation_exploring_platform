@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import MarkdownMessage from "../../components/MarkdownMessage";
 
 describe("MarkdownMessage", () => {
@@ -149,5 +149,37 @@ describe("MarkdownMessage", () => {
     expect(container.querySelector("span")).not.toBeNull();
     expect(container.querySelector("p")).toBeNull();
     expect(container.textContent).toBe("just text");
+  });
+
+  it("calls onLinkClick with the href when a link is clicked", () => {
+    const onLinkClick = jest.fn();
+    render(<MarkdownMessage content="[Example](https://example.com)" onLinkClick={onLinkClick} />);
+
+    fireEvent.click(screen.getByRole("link", { name: "Example" }));
+
+    expect(onLinkClick).toHaveBeenCalledWith("https://example.com");
+  });
+
+  it("calls onLinkClick in dark mode too", () => {
+    const onLinkClick = jest.fn();
+    render(<MarkdownMessage content="[Example](https://example.com)" dark onLinkClick={onLinkClick} />);
+
+    fireEvent.click(screen.getByRole("link", { name: "Example" }));
+
+    expect(onLinkClick).toHaveBeenCalledWith("https://example.com");
+  });
+
+  it("calls onLinkClick in inline mode too", () => {
+    const onLinkClick = jest.fn();
+    render(<MarkdownMessage content="[Example](https://example.com)" inline onLinkClick={onLinkClick} />);
+
+    fireEvent.click(screen.getByRole("link", { name: "Example" }));
+
+    expect(onLinkClick).toHaveBeenCalledWith("https://example.com");
+  });
+
+  it("does not throw when a link is clicked and no onLinkClick is provided", () => {
+    render(<MarkdownMessage content="[Example](https://example.com)" />);
+    expect(() => fireEvent.click(screen.getByRole("link", { name: "Example" }))).not.toThrow();
   });
 });

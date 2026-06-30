@@ -5,6 +5,8 @@ import {
   getMe,
   invalidateMeCache,
   changePassword,
+  recordConsentAgreement,
+  recordConsentDecline,
 } from "../../lib/auth";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -70,6 +72,34 @@ describe("auth lib", () => {
     expect(global.fetch).toHaveBeenCalledWith(
       "/auth/logout",
       expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("recordConsentAgreement posts consent_text to /auth/consent", async () => {
+    mockFetchOnce({ ok: true });
+
+    await recordConsentAgreement("Research Consent Form ... I agree to participate");
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/auth/consent",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ consent_text: "Research Consent Form ... I agree to participate" }),
+      })
+    );
+  });
+
+  it("recordConsentDecline posts consent_text to /auth/decline", async () => {
+    mockFetchOnce({ ok: true });
+
+    await recordConsentDecline("Research Consent Form ... I do not wish to participate");
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/auth/decline",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ consent_text: "Research Consent Form ... I do not wish to participate" }),
+      })
     );
   });
 

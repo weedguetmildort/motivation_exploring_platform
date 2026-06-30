@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ConsentPage from "../../pages/consent";
-import { getMe, invalidateMeCache, logout, recordConsentAgreement } from "../../lib/auth";
+import { getMe, invalidateMeCache, logout, recordConsentAgreement, recordConsentDecline } from "../../lib/auth";
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -13,12 +13,14 @@ jest.mock("../../lib/auth", () => ({
   logout: jest.fn(),
   invalidateMeCache: jest.fn(),
   recordConsentAgreement: jest.fn(),
+  recordConsentDecline: jest.fn(),
 }));
 
 const mockGetMe = getMe as jest.Mock;
 const mockLogout = logout as jest.Mock;
 const mockInvalidateMeCache = invalidateMeCache as jest.Mock;
 const mockRecordConsentAgreement = recordConsentAgreement as jest.Mock;
+const mockRecordConsentDecline = recordConsentDecline as jest.Mock;
 
 const authedUser = { id: "1", email: "user@example.com", is_admin: false };
 
@@ -31,6 +33,8 @@ describe("ConsentPage", () => {
     mockInvalidateMeCache.mockReset();
     mockRecordConsentAgreement.mockReset();
     mockRecordConsentAgreement.mockResolvedValue({ ok: true });
+    mockRecordConsentDecline.mockReset();
+    mockRecordConsentDecline.mockResolvedValue({ ok: true });
   });
 
   it("shows a loading state before the session check resolves", () => {
@@ -123,13 +127,18 @@ describe("ConsentPage", () => {
     expect(agreeButton).not.toBeDisabled();
   });
 
-  it("logs out and redirects to login when the user declines", async () => {
+  it("saves the displayed consent text, then logs out and redirects to login when the user declines", async () => {
     mockGetMe.mockResolvedValue({ user: authedUser });
     mockLogout.mockResolvedValue(undefined);
     render(<ConsentPage />);
 
     const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
     fireEvent.click(declineButton);
+
+    await waitFor(() => expect(mockRecordConsentDecline).toHaveBeenCalled());
+    const savedText = mockRecordConsentDecline.mock.calls[0][0] as string;
+    expect(savedText).toContain("Research Consent Form");
+    expect(savedText).not.toContain("I do not wish to participate");
 
     await waitFor(() => expect(mockLogout).toHaveBeenCalled());
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
@@ -144,6 +153,19 @@ describe("ConsentPage", () => {
     const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
     fireEvent.click(declineButton);
 
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  it("still logs out and redirects even if saving the decline record fails", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockLogout.mockResolvedValue(undefined);
+    mockRecordConsentDecline.mockRejectedValue(new Error("network error"));
+    render(<ConsentPage />);
+
+    const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(mockLogout).toHaveBeenCalled());
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
   });
 });

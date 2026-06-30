@@ -53,6 +53,14 @@ class AIMessageMetadata(BaseModel):
         default=None,
         description="Whether the AI was instructed to answer incorrectly"
     )
+    stated_choice_id: Optional[dict[str, Optional[str]]] = Field(
+        default=None,
+        description=(
+            "Maps an agent tag to the answer-choice id the reply named. "
+            "Single-agent endpoints use the key 'default'; dual-agent mode uses "
+            "'A'/'B'. A None value means no single choice could be confidently detected."
+        )
+    )
     custom_metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Flexible field for any additional metadata or analysis data"

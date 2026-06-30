@@ -3,6 +3,21 @@ import re
 from typing import Optional
 from pymongo.collection import Collection
 
+from ..schemas.question import QuestionChoice
+
+
+def detect_stated_choice(reply_text: str, choices: list[QuestionChoice]) -> Optional[str]:
+    """Heuristic: case-insensitive substring match of each choice's label against
+    the leading 300 chars of reply_text (the system prompt forces the AI to name
+    its choice up front). Returns the id only on exactly one confident match;
+    returns None on zero or ambiguous (2+) matches — never guesses.
+    """
+    if not choices:
+        return None
+    window = reply_text[:300].lower()
+    matches = [c.id for c in choices if c.label.strip().lower() in window]
+    return matches[0] if len(matches) == 1 else None
+
 
 def _format_assistant(content) -> str:
     """Combine agent replies into a single assistant message string.

@@ -252,6 +252,23 @@ class TestMe:
         assert resp.status_code == 200
         assert resp.json()["user"]["email"] == "student@test.edu"
 
+    def test_touches_last_active_at_on_request(self, auth_client, auth_mock_col):
+        """get_current_user runs on every authenticated request and should
+        record a heartbeat (subject to the debounce — see test_users_service.py
+        for the debounce logic itself)."""
+        settings = get_settings()
+        doc = make_user_doc(email="student@test.edu")  # no last_active_at set
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(settings.COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        auth_client.get("/auth/me")
+
+        auth_mock_col.update_one.assert_called_once()
+        args = auth_mock_col.update_one.call_args[0]
+        assert args[0] == {"_id": doc["_id"]}
+        assert "last_active_at" in args[1]["$set"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # POST /auth/logout
@@ -333,6 +350,66 @@ class TestRecordConsentAgreement:
         assert resp.status_code == 200
         assert resp.json()["user"]["consent_text"] == "Research Consent Form ... I agree to participate"
         assert resp.json()["user"]["consent_agreed_at"] is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# POST /auth/decline
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRecordConsentDecline:
+    def test_saves_consent_text_and_timestamp(self, overridden_client, auth_mock_col, regular_user):
+        doc = make_user_doc(email=regular_user.email)
+        auth_mock_col.find_one.return_value = doc
+
+        resp = overridden_client.post("/auth/decline", json={
+            "consent_text": "Research Consent Form ... I do not wish to participate",
+        })
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        args, kwargs = auth_mock_col.update_one.call_args
+        assert args[0] == {"_id": doc["_id"]}
+        set_doc = args[1]["$set"]
+        assert set_doc["consent_text"] == "Research Consent Form ... I do not wish to participate"
+        assert "consent_declined_at" in set_doc
+        assert "updated_at" in set_doc
+
+    def test_empty_consent_text_returns_422(self, overridden_client):
+        resp = overridden_client.post("/auth/decline", json={"consent_text": ""})
+        assert resp.status_code == 422
+
+    def test_missing_field_returns_422(self, overridden_client):
+        resp = overridden_client.post("/auth/decline", json={})
+        assert resp.status_code == 422
+
+    def test_user_not_found_returns_404(self, overridden_client, auth_mock_col):
+        auth_mock_col.find_one.return_value = None
+
+        resp = overridden_client.post("/auth/decline", json={"consent_text": "Some text"})
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "User not found"
+
+    def test_requires_authentication(self, auth_client):
+        resp = auth_client.post("/auth/decline", json={"consent_text": "Some text"})
+        assert resp.status_code == 401
+
+    def test_me_returns_saved_decline_timestamp(self, auth_client, auth_mock_col):
+        settings = get_settings()
+        doc = make_user_doc(
+            email="student@test.edu",
+            consent_text="Research Consent Form ... I do not wish to participate",
+            consent_declined_at=datetime.now(timezone.utc),
+        )
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(settings.COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        resp = auth_client.get("/auth/me")
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["consent_declined_at"] is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

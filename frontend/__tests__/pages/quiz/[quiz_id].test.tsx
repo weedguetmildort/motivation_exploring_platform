@@ -396,6 +396,7 @@ describe("QuizPage ([quiz_id])", () => {
     expect(screen.getByText("Ask the assistant about this question")).toBeInTheDocument();
     expect(screen.getByText("(none)")).toBeInTheDocument();
     expect(lastChatBoxProps.answerIncorrectly).toBe(false);
+    expect(lastChatBoxProps.questionId).toBe("q1");
   });
 
   it("shows an error message when loading the quiz state fails", async () => {

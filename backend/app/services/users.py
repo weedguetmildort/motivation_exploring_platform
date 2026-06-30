@@ -1,11 +1,13 @@
 # backend/app/services/users.py
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pymongo.collection import Collection
 from pymongo import ReturnDocument
 
 from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..core.security import hash_password, verify_password
+
+_HEARTBEAT_DEBOUNCE = timedelta(minutes=2)
 
 
 def _normalize_stage(raw) -> SurveyStage:
@@ -35,6 +37,8 @@ def _to_public(doc: dict) -> UserPublic:
         consent_given_at=doc.get("consent_given_at"),
         consent_text=doc.get("consent_text"),
         consent_agreed_at=doc.get("consent_agreed_at"),
+        consent_declined_at=doc.get("consent_declined_at"),
+        last_active_at=doc.get("last_active_at"),
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
@@ -113,6 +117,25 @@ def create_user(
     doc["assigned_var"] = assigned_var
 
     return _to_public(doc)
+
+
+def maybe_touch_last_active(users: Collection, user_doc: dict) -> None:
+    """Update last_active_at only if more than _HEARTBEAT_DEBOUNCE has passed
+    since the last recorded value, to avoid a write on every single
+    authenticated request (get_current_user runs on every one).
+    """
+    now = datetime.now(timezone.utc)
+    last = user_doc.get("last_active_at")
+    if last is not None:
+        # pymongo returns stored datetimes as naive UTC by default (no tz_aware
+        # codec option on this client) — attach tzinfo before subtracting, or a
+        # round-tripped value would raise "can't subtract offset-naive and
+        # offset-aware datetimes" on every second heartbeat check.
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if (now - last) < _HEARTBEAT_DEBOUNCE:
+            return
+    users.update_one({"_id": user_doc["_id"]}, {"$set": {"last_active_at": now}})
 
 
 def find_user_by_email(users: Collection, email: str) -> Optional[dict]:

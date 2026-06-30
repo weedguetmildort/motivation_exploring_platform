@@ -1,6 +1,8 @@
 // frontend/components/ChatBox.tsx
-import { memo, useEffect, useRef, useState } from "react";
-import { sendChat, loadUserHistory } from "../lib/chat";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { sendChat, loadUserHistory, type ChatTrigger } from "../lib/chat";
+import { recordLinkClick } from "../lib/linkClicks";
+import { recordCopyEvent } from "../lib/copyEvents";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
 import ChatHeader from "./ChatHeader";
@@ -39,6 +41,7 @@ const MessageBubble = memo(function MessageBubble({
   assistantAlign = "left",
   showLabel = true,
   labelAlign,
+  onLinkClick,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -46,6 +49,7 @@ const MessageBubble = memo(function MessageBubble({
   assistantAlign?: "left" | "right";
   showLabel?: boolean;
   labelAlign?: "left" | "right" | "center";
+  onLinkClick?: (href: string) => void;
 }) {
   const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
   const bubbleClass =
@@ -67,7 +71,7 @@ const MessageBubble = memo(function MessageBubble({
       )}
       <div className={`flex ${isRightAligned ? "justify-end" : "justify-start"}`}>
         <div className={`max-w-[95%] rounded-2xl px-4 py-2 ${bubbleClass}`}>
-          <MarkdownMessage content={content} dark={role === "user"} />
+          <MarkdownMessage content={content} dark={role === "user"} onLinkClick={onLinkClick} />
         </div>
       </div>
     </div>
@@ -87,6 +91,7 @@ type ChatBoxProps = {
   onToggleQuestion?: () => void;
   answerIncorrectly?: boolean;
   answerChoices?: { id: string; label: string }[];
+  questionId?: string;
 };
 
 export default function ChatBox({
@@ -102,6 +107,7 @@ export default function ChatBox({
   onToggleQuestion,
   answerIncorrectly = false,
   answerChoices,
+  questionId,
 }: ChatBoxProps) {
   const agentFilter: AgentFilter = quizId === "double" ? "double" : "base";
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -118,6 +124,18 @@ export default function ChatBox({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const historyFetched = useRef(false);
+
+  // Only meaningful for the links variant — citation links are the only links
+  // the AI ever embeds. useCallback keeps the reference stable across renders
+  // so it doesn't defeat MessageBubble's memoization.
+  const handleLinkClick = useCallback((href: string) => {
+    recordLinkClick({
+      quiz_id: quizId,
+      question_id: questionId,
+      conversation_id: activeConvId ?? undefined,
+      url: href,
+    }).catch(() => {});
+  }, [quizId, questionId, activeConvId]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [filteredAgents, setFilteredAgents] = useState<string[]>([]);
@@ -193,6 +211,26 @@ export default function ChatBox({
     onLoadingChange?.(pending);
   }, [pending]);
 
+  // Tracks any text copied out of the chat pane (any bubble, not just assistant
+  // ones — simpler than walking up to find the nearest message's role, and
+  // avoids losing data; filter by role at analysis time if needed).
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    function onCopy() {
+      const text = window.getSelection()?.toString() ?? "";
+      if (!text.trim()) return;
+      recordCopyEvent({
+        quiz_id: quizId,
+        question_id: questionId,
+        conversation_id: activeConvId ?? undefined,
+        copied_text: text.slice(0, 2000),
+      }).catch(() => {});
+    }
+    el.addEventListener("copy", onCopy);
+    return () => el.removeEventListener("copy", onCopy);
+  }, [quizId, questionId, activeConvId]);
+
   // Add a chip for each newly completed question line (\n-terminated).
   // processedNewlinesRef tracks how many lines have already been turned into chips,
   // so we only look at the new lines on each run — no re-parsing of existing chips.
@@ -216,7 +254,7 @@ export default function ChatBox({
     processedNewlinesRef.current = completedCount;
   }, [followupStreamText]);
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, trigger: ChatTrigger = "manual") {
     const trimmed = content.trim();
     if (!trimmed) return;
 
@@ -294,6 +332,8 @@ export default function ChatBox({
           signal: controller.signal,
           answerIncorrectly,
           answerChoices,
+          questionId,
+          trigger,
           // onToken — streams main text at 60fps
           onToken: (delta, agent) => {
             const key = agent ?? "default";
@@ -442,12 +482,12 @@ export default function ChatBox({
     }
     if (externalQuestion === lastSentExternalRef.current) return;
     lastSentExternalRef.current = externalQuestion;
-    sendMessage(externalQuestion);
+    sendMessage(externalQuestion, "auto_question");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuestion]);
 
   function handleFollowupClick(question: string) {
-    void sendMessage(question);
+    void sendMessage(question, "followup_chip");
   }
 
   // Current in-progress follow-up question text (the incomplete last line).
@@ -471,7 +511,13 @@ export default function ChatBox({
   const renderMessages = () => {
     if (agentFilter !== "double") {
       return messages.map((m) => (
-        <MessageBubble key={m.id} role={m.role} content={m.content} bot={m.bot} />
+        <MessageBubble
+          key={m.id}
+          role={m.role}
+          content={m.content}
+          bot={m.bot}
+          onLinkClick={m.role === "assistant" && quizId === "links" ? handleLinkClick : undefined}
+        />
       ));
     }
 
@@ -482,7 +528,13 @@ export default function ChatBox({
 
       if (current.role !== "assistant" || !currentBot) {
         rows.push(
-          <MessageBubble key={current.id} role={current.role} content={current.content} bot={current.bot} />,
+          <MessageBubble
+            key={current.id}
+            role={current.role}
+            content={current.content}
+            bot={current.bot}
+            onLinkClick={current.role === "assistant" && quizId === "links" ? handleLinkClick : undefined}
+          />,
         );
         continue;
       }
@@ -501,12 +553,12 @@ export default function ChatBox({
         <div key={`pair-${pair.A?.id ?? "none"}-${pair.B?.id ?? "none"}`} className="grid grid-cols-2 gap-3">
           <div>
             {pair.A ? (
-              <MessageBubble role="assistant" content={pair.A.content} bot="A" assistantAlign="left" showLabel labelAlign="center" />
+              <MessageBubble role="assistant" content={pair.A.content} bot="A" assistantAlign="left" showLabel labelAlign="center" onLinkClick={quizId === "links" ? handleLinkClick : undefined} />
             ) : null}
           </div>
           <div>
             {pair.B ? (
-              <MessageBubble role="assistant" content={pair.B.content} bot="B" assistantAlign="right" showLabel labelAlign="center" />
+              <MessageBubble role="assistant" content={pair.B.content} bot="B" assistantAlign="right" showLabel labelAlign="center" onLinkClick={quizId === "links" ? handleLinkClick : undefined} />
             ) : null}
           </div>
         </div>,

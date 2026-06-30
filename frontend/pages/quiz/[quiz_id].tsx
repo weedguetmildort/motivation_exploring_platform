@@ -572,6 +572,7 @@ export default function QuizPage() {
                         onToggleQuestion={() => setQuestionCollapsed((c: boolean) => !c)}
                         answerIncorrectly={answerIncorrectly}
                         answerChoices={current?.choices}
+                        questionId={current?.id}
                       />
                     </div>
                   )}
