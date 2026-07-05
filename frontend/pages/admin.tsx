@@ -117,6 +117,16 @@ useEffect(() => {
               <p className="text-sm text-gray-600">Review and respond to issues submitted by quiz participants</p>
             </Link>
           )}
+
+          {user?.is_admin && (
+            <Link
+              href="/participants_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Participants Panel</h2>
+              <p className="text-sm text-gray-600">View participant progress, study stage, and attrition signals</p>
+            </Link>
+          )}
         </div>
       </div>
     </div>
