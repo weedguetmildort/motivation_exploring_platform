@@ -38,6 +38,17 @@ class TestKnowledgeLinksAuth:
         resp = unauthed_client.post(f"/knowledge-links/{ObjectId()}/reject")
         assert resp.status_code == 403
 
+    def test_explore_requires_admin(self, unauthed_client):
+        resp = unauthed_client.post(f"/knowledge-links/{ObjectId()}/explore")
+        assert resp.status_code == 403
+
+    def test_explore_apply_requires_admin(self, unauthed_client):
+        resp = unauthed_client.post(
+            f"/knowledge-links/{ObjectId()}/explore/apply",
+            json={"title": "T", "description": "D"},
+        )
+        assert resp.status_code == 403
+
 
 class TestGetKnowledgeLinks:
     def test_returns_list_of_links(self, client, mock_col):
@@ -220,6 +231,194 @@ class TestTriggerHealthCheck:
         # Must NOT call find_one (which would happen if treated as /{link_id}/...)
         mock_col.find_one.assert_not_called()
         assert resp.status_code == 200
+
+
+class TestExploreLink:
+    """POST /knowledge-links/{id}/explore — preview only, never writes to the DB."""
+
+    def test_explore_invalid_id_returns_404(self, client):
+        resp = client.post("/knowledge-links/not-an-objectid/explore")
+        assert resp.status_code == 404
+
+    def test_explore_not_found_returns_404(self, client, mock_col):
+        mock_col.find_one.return_value = None
+        resp = client.post(f"/knowledge-links/{ObjectId()}/explore")
+        assert resp.status_code == 404
+
+    def test_explore_rejected_link_returns_404(self, client, mock_col):
+        doc = make_link_doc(status="REJECTED")
+        mock_col.find_one.return_value = doc
+        resp = client.post(f"/knowledge-links/{doc['_id']}/explore")
+        assert resp.status_code == 404
+
+    def test_explore_returns_preview_without_writing(self, client, mock_col):
+        doc = make_link_doc(status="READY")
+        mock_col.find_one.return_value = doc
+
+        with patch(
+            "app.services.link_health.fetch_page_metadata",
+            return_value=("Fetched Title", "Fetched desc", "Excerpt", 200),
+        ), patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            resp = client.post(f"/knowledge-links/{doc['_id']}/explore")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {
+            "proposed_title": "Fetched Title",
+            "proposed_description": "Fetched desc",
+            "article_excerpt": "Excerpt",
+            "http_code": 200,
+            "relevant": True,
+            "relevance_reason": None,
+        }
+        mock_col.update_one.assert_not_called()
+        mock_col.insert_one.assert_not_called()
+
+    def test_explore_not_relevant_includes_reason(self, client, mock_col):
+        doc = make_link_doc(status="NOT_READY")
+        mock_col.find_one.return_value = doc
+
+        with patch(
+            "app.services.link_health.fetch_page_metadata", return_value=("T", "D", "", 200)
+        ), patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
+            resp = client.post(f"/knowledge-links/{doc['_id']}/explore")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["relevant"] is False
+        assert data["relevance_reason"] == "irrelevant"
+
+    def test_explore_passes_configured_timeout(self, client, test_app, mock_col):
+        doc = make_link_doc(status="READY")
+        mock_col.find_one.return_value = doc
+        test_app.state.settings = MagicMock(LINK_REQUEST_TIMEOUT=42)
+
+        with patch(
+            "app.services.link_health.fetch_page_metadata", return_value=("T", "D", "", 200)
+        ) as mock_fetch, patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            client.post(f"/knowledge-links/{doc['_id']}/explore")
+
+        mock_fetch.assert_called_once_with(doc["url"], timeout=42)
+
+
+class TestApplyExplore:
+    """POST /knowledge-links/{id}/explore/apply — saves the admin-confirmed content."""
+
+    def test_apply_invalid_id_returns_404(self, client):
+        resp = client.post(
+            "/knowledge-links/not-an-objectid/explore/apply",
+            json={"title": "T", "description": "D"},
+        )
+        assert resp.status_code == 404
+
+    def test_apply_not_found_returns_404(self, client, mock_col):
+        mock_col.find_one.return_value = None
+        resp = client.post(
+            f"/knowledge-links/{ObjectId()}/explore/apply",
+            json={"title": "T", "description": "D"},
+        )
+        assert resp.status_code == 404
+
+    def test_apply_rejected_link_returns_404(self, client, mock_col):
+        doc = make_link_doc(status="REJECTED")
+        mock_col.find_one.return_value = doc
+        resp = client.post(
+            f"/knowledge-links/{doc['_id']}/explore/apply",
+            json={"title": "T", "description": "D"},
+        )
+        assert resp.status_code == 404
+
+    def test_apply_missing_title_returns_422(self, client):
+        resp = client.post(
+            f"/knowledge-links/{ObjectId()}/explore/apply",
+            json={"description": "D"},
+        )
+        assert resp.status_code == 422
+
+    def test_apply_missing_description_returns_422(self, client):
+        resp = client.post(
+            f"/knowledge-links/{ObjectId()}/explore/apply",
+            json={"title": "T"},
+        )
+        assert resp.status_code == 422
+
+    def test_apply_saves_confirmed_title_and_description(self, client, mock_col):
+        oid = ObjectId()
+        original = make_link_doc(status="READY", _id=oid)
+        updated = make_link_doc(status="READY", _id=oid, title="New Title", description="New description")
+        mock_col.find_one.side_effect = [original, updated]
+
+        with patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            resp = client.post(
+                f"/knowledge-links/{oid}/explore/apply",
+                json={"title": "New Title", "description": "New description"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "New Title"
+        assert data["description"] == "New description"
+        update_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert update_doc["title"] == "New Title"
+        assert update_doc["description"] == "New description"
+
+    def test_apply_ready_link_demoted_is_removed_from_cache(self, client, test_app, mock_col):
+        oid = ObjectId()
+        test_app.state.knowledge_links = [
+            {"id": str(oid), "title": "Old", "url": "https://khanacademy.org/math/probability", "description": "Old"}
+        ]
+        original = make_link_doc(status="READY", _id=oid)
+        demoted = make_link_doc(status="NOT_READY", _id=oid)
+        mock_col.find_one.side_effect = [original, demoted]
+
+        with patch("app.services.link_health.is_relevant", return_value=(False, "irrelevant")):
+            resp = client.post(
+                f"/knowledge-links/{oid}/explore/apply",
+                json={"title": "T", "description": "D"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "NOT_READY"
+        cached_ids = [l["id"] for l in test_app.state.knowledge_links]
+        assert str(oid) not in cached_ids
+
+    def test_apply_not_ready_link_promoted_to_needs_review_not_cached(self, client, test_app, mock_col):
+        oid = ObjectId()
+        original = make_link_doc(status="NOT_READY", _id=oid)
+        promoted = make_link_doc(status="NEEDS_REVIEW", _id=oid)
+        mock_col.find_one.side_effect = [original, promoted]
+
+        with patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            resp = client.post(
+                f"/knowledge-links/{oid}/explore/apply",
+                json={"title": "T", "description": "D"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "NEEDS_REVIEW"
+        # NEEDS_REVIEW is not READY — must not be surfaced to the chatbot yet.
+        cached_ids = [l["id"] for l in test_app.state.knowledge_links]
+        assert str(oid) not in cached_ids
+
+    def test_apply_ready_link_stays_ready_refreshes_cache(self, client, test_app, mock_col):
+        oid = ObjectId()
+        original = make_link_doc(status="READY", _id=oid, title="Old Title", description="Old desc")
+        refreshed = make_link_doc(status="READY", _id=oid, title="New Title", description="New desc")
+        mock_col.find_one.side_effect = [original, refreshed]
+        test_app.state.knowledge_links = [
+            {"id": str(oid), "title": "Old Title", "url": original["url"], "description": "Old desc"}
+        ]
+
+        with patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            resp = client.post(
+                f"/knowledge-links/{oid}/explore/apply",
+                json={"title": "New Title", "description": "New desc"},
+            )
+
+        assert resp.status_code == 200
+        cached = next(l for l in test_app.state.knowledge_links if l["id"] == str(oid))
+        assert cached["title"] == "New Title"
+        assert cached["description"] == "New desc"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

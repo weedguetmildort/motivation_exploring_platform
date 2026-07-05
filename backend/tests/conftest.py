@@ -66,6 +66,7 @@ def test_app(admin_user, mock_db):
     app.state.db = mock_db
     app.state.knowledge_links = []
     app.state.allowlist_cache = set()
+    app.state.settings = MagicMock(LINK_REQUEST_TIMEOUT=10)
 
     app.dependency_overrides[get_current_user] = lambda: admin_user
     return app
@@ -90,6 +91,7 @@ def unauthed_app(regular_user, mock_db):
     app.state.db = mock_db
     app.state.knowledge_links = []
     app.state.allowlist_cache = set()
+    app.state.settings = MagicMock(LINK_REQUEST_TIMEOUT=10)
 
     app.dependency_overrides[get_current_user] = lambda: regular_user
     return app
