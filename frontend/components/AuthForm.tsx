@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
-import { login, signup } from "../lib/auth";
+import { login, signup, getMe } from "../lib/auth";
 
 type Props = {
   mode: "login" | "signup";
@@ -10,6 +10,7 @@ const MIN_PASSWORD_LENGTH = 6;
 
 export default function AuthForm({ mode }: Props) {
   const router = useRouter();
+  const [checking, setChecking] = useState(true);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -17,6 +18,14 @@ export default function AuthForm({ mode }: Props) {
   const [consent, setConsent] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMe()
+      .then(() => { if (!cancelled) router.replace("/dashboard"); })
+      .catch(() => { if (!cancelled) setChecking(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   const passwordTooShort =
     mode === "signup" &&
@@ -69,6 +78,8 @@ export default function AuthForm({ mode }: Props) {
       setPending(false);
     }
   }
+
+  if (checking) return null;
 
   return (
     <form
