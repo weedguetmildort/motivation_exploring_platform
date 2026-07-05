@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import LinkPanelPage from "../../pages/links_panel";
 import { getMe, logout } from "../../lib/auth";
 import { apiFetch } from "../../lib/fetcher";
@@ -62,6 +62,14 @@ const rejectedLink = {
   description: "Rejected",
   status: "REJECTED" as const,
 };
+
+// The "Explore Preview" panel renders: a header div (title text + relevance badge),
+// then the title/description fields. Walking up two parents from the heading text
+// gets the panel's root container so queries can be scoped with `within(...)`.
+function getExplorePanel(): HTMLElement {
+  const heading = screen.getByText("Explore Preview");
+  return heading.parentElement!.parentElement as HTMLElement;
+}
 
 describe("LinkPanelPage", () => {
   beforeEach(() => {
@@ -676,5 +684,379 @@ describe("LinkPanelPage", () => {
 
     await waitFor(() => expect(mockLogout).toHaveBeenCalled());
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  describe("Explore flow", () => {
+    it("fetches and displays an explore preview when Explore is clicked", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Fetched description from the live page.",
+            article_excerpt: "Article excerpt text.",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/knowledge-links/link2/explore",
+          expect.objectContaining({ method: "POST" }),
+        ),
+      );
+
+      await screen.findByText("Explore Preview");
+      const panel = getExplorePanel();
+      expect(within(panel).getByText("Relevant")).toBeInTheDocument();
+
+      const [titleInput, descInput] = within(panel).getAllByRole("textbox");
+      expect(titleInput).toHaveValue("Fetched Title");
+      expect(descInput).toHaveValue("Fetched description from the live page.");
+    });
+
+    it("shows the not-relevant badge with the mapped reason", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Off-topic content.",
+            article_excerpt: "",
+            http_code: 200,
+            relevant: false,
+            relevance_reason: "irrelevant",
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+      const panel = await waitFor(() => getExplorePanel());
+      expect(within(panel).getByText("Not relevant · AI judged content off-topic")).toBeInTheDocument();
+    });
+
+    it("shows an alternative excerpt panel and switches to it when 'Use this instead' is clicked", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Meta description.",
+            article_excerpt: "A different excerpt from the article body.",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+      await screen.findByText("Alternative from article body:");
+      expect(screen.getByText("A different excerpt from the article body.")).toBeInTheDocument();
+
+      const panel = getExplorePanel();
+      fireEvent.click(within(panel).getByRole("button", { name: "Use this instead" }));
+
+      const [, descInput] = within(panel).getAllByRole("textbox");
+      expect(descInput).toHaveValue("A different excerpt from the article body.");
+    });
+
+    it("hides the alternative excerpt panel when the excerpt matches the chosen description", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "",
+            article_excerpt: "Same text used for both.",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+      await screen.findByText("Explore Preview");
+      expect(screen.queryByText("Alternative from article body:")).not.toBeInTheDocument();
+    });
+
+    it("falls back to the link's existing title and description when nothing is fetched", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "",
+            proposed_description: "",
+            article_excerpt: "",
+            http_code: 403,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+      await screen.findByText("Explore Preview");
+      const panel = getExplorePanel();
+      const [titleInput, descInput] = within(panel).getAllByRole("textbox");
+      expect(titleInput).toHaveValue(reviewLink.title);
+      expect(descInput).toHaveValue(reviewLink.description);
+    });
+
+    it("applies the explore changes, closes the preview, and updates the link list", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      const applied = {
+        ...reviewLink,
+        title: "Fetched Title",
+        description: "Fetched description.",
+        status: "NEEDS_REVIEW" as const,
+      };
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Fetched description.",
+            article_excerpt: "",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore/apply") {
+          return Promise.resolve(applied);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+      await screen.findByText("Explore Preview");
+
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/knowledge-links/link2/explore/apply",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ title: "Fetched Title", description: "Fetched description." }),
+          }),
+        ),
+      );
+
+      expect(screen.queryByText("Explore Preview")).not.toBeInTheDocument();
+      expect(await screen.findByText("Fetched Title")).toBeInTheDocument();
+      expect(screen.getByText("Fetched description.")).toBeInTheDocument();
+    });
+
+    it("applies edited draft title and description rather than the original fetched values", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Fetched description.",
+            article_excerpt: "",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore/apply") {
+          return Promise.resolve({ ...reviewLink, title: "Edited Title", description: "Edited description." });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+      await screen.findByText("Explore Preview");
+
+      const panel = getExplorePanel();
+      const [titleInput, descInput] = within(panel).getAllByRole("textbox");
+      fireEvent.change(titleInput, { target: { value: "Edited Title" } });
+      fireEvent.change(descInput, { target: { value: "Edited description." } });
+
+      fireEvent.click(within(panel).getByRole("button", { name: "Apply" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/knowledge-links/link2/explore/apply",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ title: "Edited Title", description: "Edited description." }),
+          }),
+        ),
+      );
+    });
+
+    it("shows an alert when fetching the explore preview fails", async () => {
+      const alertSpy = jest.spyOn(window, "alert").mockImplementation(() => {});
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.reject(new Error("server error"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+
+      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Failed to fetch page preview."));
+      expect(screen.queryByText("Explore Preview")).not.toBeInTheDocument();
+
+      alertSpy.mockRestore();
+    });
+
+    it("shows an alert when applying explore changes fails", async () => {
+      const alertSpy = jest.spyOn(window, "alert").mockImplementation(() => {});
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Fetched description.",
+            article_excerpt: "",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore/apply") {
+          return Promise.reject(new Error("server error"));
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+      await screen.findByText("Explore Preview");
+
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Failed to apply explore changes."));
+      expect(screen.getByText("Explore Preview")).toBeInTheDocument();
+
+      alertSpy.mockRestore();
+    });
+
+    it("cancels the explore preview without applying", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Fetched description.",
+            article_excerpt: "",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+      const panel = await waitFor(() => getExplorePanel());
+
+      fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByText("Explore Preview")).not.toBeInTheDocument();
+      expect(mockApiFetch).not.toHaveBeenCalledWith(
+        "/api/knowledge-links/link2/explore/apply",
+        expect.anything(),
+      );
+    });
+
+    it("disables Apply when the draft title or description is cleared", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        const method = init?.method ?? "GET";
+        if (method === "GET") return Promise.resolve([reviewLink]);
+        if (method === "POST" && url === "/api/knowledge-links/link2/explore") {
+          return Promise.resolve({
+            proposed_title: "Fetched Title",
+            proposed_description: "Fetched description.",
+            article_excerpt: "",
+            http_code: 200,
+            relevant: true,
+            relevance_reason: null,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(<LinkPanelPage />);
+      await screen.findByText("New Discovery");
+      fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+      await screen.findByText("Explore Preview");
+
+      const panel = getExplorePanel();
+      const [titleInput, descInput] = within(panel).getAllByRole("textbox");
+      const applyButton = within(panel).getByRole("button", { name: "Apply" });
+      expect(applyButton).not.toBeDisabled();
+
+      fireEvent.change(titleInput, { target: { value: "   " } });
+      expect(applyButton).toBeDisabled();
+
+      fireEvent.change(titleInput, { target: { value: "Fetched Title" } });
+      expect(applyButton).not.toBeDisabled();
+
+      fireEvent.change(descInput, { target: { value: "   " } });
+      expect(applyButton).toBeDisabled();
+    });
   });
 });

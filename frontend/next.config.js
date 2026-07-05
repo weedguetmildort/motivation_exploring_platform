@@ -47,6 +47,18 @@ const nextConfig = {
         destination: `${backend}/allowlist/:path*`,
       },
       {
+        source: "/api/copy-events/:path*",
+        destination: `${backend}/copy-events/:path*`,
+      },
+      {
+        source: "/api/copy-events",
+        destination: `${backend}/copy-events`,
+      },
+      {
+        source: "/api/links/:path*",
+        destination: `${backend}/links/:path*`,
+      },
+      {
         source: "/api/:path*",
         destination: `${backend}/api/:path*`,
       },
