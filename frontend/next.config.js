@@ -67,6 +67,14 @@ const nextConfig = {
         destination: `${backend}/users`,
       },
       {
+        source: "/api/messages/:path*",
+        destination: `${backend}/messages/:path*`,
+      },
+      {
+        source: "/api/messages",
+        destination: `${backend}/messages`,
+      },
+      {
         source: "/api/:path*",
         destination: `${backend}/api/:path*`,
       },

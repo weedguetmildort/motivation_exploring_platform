@@ -109,3 +109,16 @@ class ConversationHistory(BaseModel):
     """Full conversation history with optional metadata."""
     conversation_id: str
     messages: list[ConversationMessage]
+
+
+class MessageSummary(BaseModel):
+    """Admin-facing flattened view of an assistant message."""
+    id: str
+    conversation_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    question_id: Optional[str] = None
+    trigger: Optional[str] = None
+    stated_choice_id: Optional[dict[str, Optional[str]]] = None
+    answer_incorrectly: Optional[bool] = None
+    created_at: datetime

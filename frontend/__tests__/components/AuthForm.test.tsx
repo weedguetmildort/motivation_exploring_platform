@@ -1,32 +1,38 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AuthForm from "../../components/AuthForm";
-import { login, signup } from "../../lib/auth";
+import { login, signup, getMe } from "../../lib/auth";
 
-const mockPush = jest.fn();
+const mockPush    = jest.fn();
+const mockReplace = jest.fn();
 jest.mock("next/router", () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
 
 jest.mock("../../lib/auth", () => ({
-  login: jest.fn(),
+  login:  jest.fn(),
   signup: jest.fn(),
+  getMe:  jest.fn(),
 }));
 
-const mockLogin = login as jest.Mock;
-const mockSignup = signup as jest.Mock;
+const mockLogin   = login   as jest.Mock;
+const mockSignup  = signup  as jest.Mock;
+const mockGetMe   = getMe   as jest.Mock;
 
 describe("AuthForm", () => {
   beforeEach(() => {
     mockPush.mockClear();
+    mockReplace.mockClear();
     mockLogin.mockReset();
     mockSignup.mockReset();
+    // No active session by default — let the form render.
+    mockGetMe.mockRejectedValue(new Error("not authenticated"));
   });
 
   describe("login mode", () => {
-    it("renders only email and password fields", () => {
+    it("renders only email and password fields", async () => {
       render(<AuthForm mode="login" />);
 
-      expect(screen.getByText("Log in", { selector: "h1" })).toBeInTheDocument();
+      expect(await screen.findByText("Log in", { selector: "h1" })).toBeInTheDocument();
       expect(screen.getByPlaceholderText("you@example.com")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("••••••••")).toBeInTheDocument();
       expect(screen.queryByPlaceholderText("John")).not.toBeInTheDocument();
@@ -34,11 +40,19 @@ describe("AuthForm", () => {
       expect(screen.queryByText(/I consent/)).not.toBeInTheDocument();
     });
 
+    it("redirects to /dashboard when a session already exists", async () => {
+      mockGetMe.mockResolvedValue({ user: { id: "1" } });
+      render(<AuthForm mode="login" />);
+
+      await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+      expect(screen.queryByText("Log in", { selector: "h1" })).not.toBeInTheDocument();
+    });
+
     it("submits credentials and redirects to /dashboard on success", async () => {
       mockLogin.mockResolvedValue({ user: { id: "1" } });
       render(<AuthForm mode="login" />);
 
-      fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      fireEvent.change(await screen.findByPlaceholderText("you@example.com"), {
         target: { value: "ada@example.com" },
       });
       fireEvent.change(screen.getByPlaceholderText("••••••••"), {
@@ -54,7 +68,7 @@ describe("AuthForm", () => {
       mockLogin.mockRejectedValue(new Error("Invalid credentials"));
       render(<AuthForm mode="login" />);
 
-      fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      fireEvent.change(await screen.findByPlaceholderText("you@example.com"), {
         target: { value: "ada@example.com" },
       });
       fireEvent.change(screen.getByPlaceholderText("••••••••"), {
@@ -70,7 +84,7 @@ describe("AuthForm", () => {
       mockLogin.mockRejectedValue({});
       render(<AuthForm mode="login" />);
 
-      fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      fireEvent.change(await screen.findByPlaceholderText("you@example.com"), {
         target: { value: "ada@example.com" },
       });
       fireEvent.change(screen.getByPlaceholderText("••••••••"), {
@@ -86,7 +100,7 @@ describe("AuthForm", () => {
       mockLogin.mockReturnValue(new Promise((resolve) => { resolveLogin = resolve; }));
       render(<AuthForm mode="login" />);
 
-      fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      fireEvent.change(await screen.findByPlaceholderText("you@example.com"), {
         target: { value: "ada@example.com" },
       });
       fireEvent.change(screen.getByPlaceholderText("••••••••"), {
@@ -101,15 +115,17 @@ describe("AuthForm", () => {
       await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/dashboard"));
     });
 
-    it("renders a link to the signup page", () => {
+    it("renders a link to the signup page", async () => {
       render(<AuthForm mode="login" />);
+      await screen.findByText("Log in", { selector: "h1" });
       const link = screen.getByRole("link", { name: "Sign up" });
       expect(link).toHaveAttribute("href", "/signup");
     });
   });
 
   describe("signup mode", () => {
-    function fillRequiredFields(overrides: Partial<{ first: string; last: string; email: string; password: string }> = {}) {
+    async function fillRequiredFields(overrides: Partial<{ first: string; last: string; email: string; password: string }> = {}) {
+      await screen.findByText("Create an account", { selector: "h1" });
       fireEvent.change(screen.getByPlaceholderText("John"), {
         target: { value: overrides.first ?? "Ada" },
       });
@@ -124,10 +140,10 @@ describe("AuthForm", () => {
       });
     }
 
-    it("renders the signup-specific fields", () => {
+    it("renders the signup-specific fields", async () => {
       render(<AuthForm mode="signup" />);
 
-      expect(screen.getByText("Create an account", { selector: "h1" })).toBeInTheDocument();
+      expect(await screen.findByText("Create an account", { selector: "h1" })).toBeInTheDocument();
       expect(screen.getByPlaceholderText("John")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("Doe")).toBeInTheDocument();
       expect(screen.getByText(/I consent/)).toBeInTheDocument();
@@ -135,7 +151,7 @@ describe("AuthForm", () => {
 
     it("requires first and last name", async () => {
       const { container } = render(<AuthForm mode="signup" />);
-      fillRequiredFields({ first: "", last: "" });
+      await fillRequiredFields({ first: "", last: "" });
       fireEvent.click(screen.getByRole("checkbox"));
       // bypass native HTML5 required-field validation so onSubmit runs
       fireEvent.submit(container.querySelector("form")!);
@@ -148,7 +164,7 @@ describe("AuthForm", () => {
 
     it("requires the password to meet the minimum length", async () => {
       render(<AuthForm mode="signup" />);
-      fillRequiredFields({ password: "abc" });
+      await fillRequiredFields({ password: "abc" });
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByRole("button", { name: "Sign up" }));
 
@@ -158,8 +174,9 @@ describe("AuthForm", () => {
       expect(mockSignup).not.toHaveBeenCalled();
     });
 
-    it("shows the password hint in red once a too-short password is entered", () => {
+    it("shows the password hint in red once a too-short password is entered", async () => {
       render(<AuthForm mode="signup" />);
+      await screen.findByText("Create an account", { selector: "h1" });
       fireEvent.change(screen.getByPlaceholderText("••••••••"), {
         target: { value: "abc" },
       });
@@ -169,7 +186,7 @@ describe("AuthForm", () => {
 
     it("requires consent before submitting", async () => {
       const { container } = render(<AuthForm mode="signup" />);
-      fillRequiredFields();
+      await fillRequiredFields();
       // bypass native HTML5 required-field validation so onSubmit runs
       fireEvent.submit(container.querySelector("form")!);
 
@@ -182,7 +199,7 @@ describe("AuthForm", () => {
     it("submits signup data and redirects on success", async () => {
       mockSignup.mockResolvedValue({ user: { id: "1" } });
       render(<AuthForm mode="signup" />);
-      fillRequiredFields();
+      await fillRequiredFields();
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByRole("button", { name: "Sign up" }));
 
@@ -198,8 +215,9 @@ describe("AuthForm", () => {
       await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/consent"));
     });
 
-    it("renders a link to the login page", () => {
+    it("renders a link to the login page", async () => {
       render(<AuthForm mode="signup" />);
+      await screen.findByText("Create an account", { selector: "h1" });
       const link = screen.getByRole("link", { name: "Log in" });
       expect(link).toHaveAttribute("href", "/login");
     });
