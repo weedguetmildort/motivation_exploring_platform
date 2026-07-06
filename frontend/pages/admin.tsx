@@ -137,6 +137,16 @@ useEffect(() => {
               <p className="text-sm text-gray-600">Browse copy events, link clicks, and chat interaction data</p>
             </Link>
           )}
+
+          {user?.is_admin && (
+            <Link
+              href="/export_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Export Data</h2>
+              <p className="text-sm text-gray-600">Download participants, quiz answers, survey responses, events, and chat messages as CSV</p>
+            </Link>
+          )}
         </div>
       </div>
     </div>

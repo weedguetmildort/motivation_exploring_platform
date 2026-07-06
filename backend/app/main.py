@@ -12,6 +12,7 @@ from .api.link_clicks import router as link_clicks_router
 from .api.copy_events import router as copy_events_router
 from .api.users import router as users_router
 from .api.messages import router as messages_router
+from .api.export import router as export_router
 from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
@@ -151,3 +152,4 @@ app.include_router(link_clicks_router)
 app.include_router(copy_events_router)
 app.include_router(users_router)
 app.include_router(messages_router)
+app.include_router(export_router)
