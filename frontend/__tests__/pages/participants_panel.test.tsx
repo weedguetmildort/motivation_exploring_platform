@@ -136,7 +136,7 @@ describe("ParticipantsPanelPage", () => {
     render(<ParticipantsPanelPage />);
 
     await screen.findByText("Participants Panel");
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
   });
 
   it("shows an error message when loading participants fails", async () => {

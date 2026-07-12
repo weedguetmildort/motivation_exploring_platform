@@ -437,13 +437,18 @@ describe("ChatBox", () => {
     } as Selection);
 
     const scroller = container.querySelector(".overflow-y-auto") as HTMLElement;
-    fireEvent.copy(scroller);
-
-    expect(mockRecordCopyEvent).toHaveBeenCalledWith({
-      quiz_id: "base",
-      question_id: "q1",
-      conversation_id: "conv-1",
-      copied_text: "Hi there!",
+    // The returned conversationId is applied one microtask after the reply renders
+    // (setActiveConvId runs post-await), and the copy listener re-binds via a
+    // passive effect keyed on it. Retry the copy until that re-bind lands so the
+    // recorded event carries conversation_id instead of racing the effect flush.
+    await waitFor(() => {
+      fireEvent.copy(scroller);
+      expect(mockRecordCopyEvent).toHaveBeenCalledWith({
+        quiz_id: "base",
+        question_id: "q1",
+        conversation_id: "conv-1",
+        copied_text: "Hi there!",
+      });
     });
 
     getSelectionSpy.mockRestore();

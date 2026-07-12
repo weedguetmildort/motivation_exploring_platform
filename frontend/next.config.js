@@ -51,10 +51,6 @@ const nextConfig = {
         destination: `${backend}/copy-events/:path*`,
       },
       {
-        source: "/api/copy-events",
-        destination: `${backend}/copy-events`,
-      },
-      {
         source: "/api/links/:path*",
         destination: `${backend}/links/:path*`,
       },
@@ -63,24 +59,18 @@ const nextConfig = {
         destination: `${backend}/users/:path*`,
       },
       {
-        source: "/api/users",
-        destination: `${backend}/users`,
-      },
-      {
         source: "/api/messages/:path*",
         destination: `${backend}/messages/:path*`,
-      },
-      {
-        source: "/api/messages",
-        destination: `${backend}/messages`,
       },
       {
         source: "/api/export/:path*",
         destination: `${backend}/export/:path*`,
       },
+      // Catch-all: strips the /api prefix so any backend route works without
+      // needing a dedicated rule above. Backend routes all live at root level.
       {
         source: "/api/:path*",
-        destination: `${backend}/api/:path*`,
+        destination: `${backend}/:path*`,
       },
     ];
   },

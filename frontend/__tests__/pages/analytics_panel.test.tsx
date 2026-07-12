@@ -107,7 +107,7 @@ describe("AnalyticsPanelPage", () => {
     render(<AnalyticsPanelPage />);
 
     await screen.findByText("Analytics Panel");
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
   });
 
   it("shows an error when copy events fail to load", async () => {
