@@ -35,6 +35,38 @@ describe("ChatHeader", () => {
     expect(screen.queryByText(QUIZ_THEMES.double.description)).not.toBeInTheDocument();
   });
 
+  it("computes an in-viewport popover position when opened", () => {
+    const rafSpy = jest
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => { cb(0); return 0; });
+
+    render(<ChatHeader quizId="links" />);
+    fireEvent.click(screen.getByRole("button", { name: "About this assistant type" }));
+
+    // The rAF positioning callback ran synchronously; popover is shown.
+    expect(screen.getByText("How this works")).toBeInTheDocument();
+    rafSpy.mockRestore();
+  });
+
+  it("repositions the popover when it would overflow the viewport edges", () => {
+    const rafSpy = jest
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => { cb(0); return 0; });
+    // Force the button + popover rects to overflow the right and bottom edges,
+    // exercising the clamp branches in the positioning effect.
+    const rectSpy = jest.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 900, right: 1300, top: 700, bottom: 730, width: 400, height: 300, x: 900, y: 700,
+      toJSON: () => {},
+    } as DOMRect);
+
+    render(<ChatHeader quizId="double" />);
+    fireEvent.click(screen.getByRole("button", { name: "About this assistant type" }));
+
+    expect(screen.getByText("How this works")).toBeInTheDocument();
+    rectSpy.mockRestore();
+    rafSpy.mockRestore();
+  });
+
   it("does not render the question toggle button when onToggleQuestion is not provided", () => {
     render(<ChatHeader quizId="base" />);
     expect(screen.queryByLabelText(/question/i)).not.toBeInTheDocument();

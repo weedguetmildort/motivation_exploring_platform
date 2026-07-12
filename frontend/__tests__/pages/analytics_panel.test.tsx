@@ -334,6 +334,53 @@ describe("AnalyticsPanelPage", () => {
     });
   });
 
+  it("truncates long copied text and shows an em dash for a missing question id", async () => {
+    const longCopy = { ...copyEvent, id: "c9", question_id: null, copied_text: "x".repeat(100) };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([longCopy]);
+    render(<AnalyticsPanelPage />);
+
+    await screen.findByText("Analytics Panel");
+    expect(await screen.findByText("x".repeat(80) + "…")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("shows an em dash for a link click with no question id", async () => {
+    const noQ = { ...linkClick, id: "l9", question_id: null };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([noQ]);
+    render(<AnalyticsPanelPage />);
+
+    await screen.findByText("Analytics Panel");
+    fireEvent.click(screen.getByRole("button", { name: "Link Clicks" }));
+
+    await screen.findByText("bob@test.edu");
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("renders 'none' for null stated-choice values and an em dash for unknown correctness", async () => {
+    const nullChoice = {
+      ...chatMessage,
+      id: "m9",
+      stated_choice_id: { default: null, A: null },
+      answer_incorrectly: null,
+    };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([nullChoice]);
+    render(<AnalyticsPanelPage />);
+
+    await screen.findByText("Analytics Panel");
+    fireEvent.click(screen.getByRole("button", { name: "Chat Interactions" }));
+
+    await screen.findByText("carol@test.edu");
+    expect(screen.getByText("none, A:none")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+
   it("navigates to the dashboard when the Dashboard button is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     mockApiFetch.mockResolvedValue([]);

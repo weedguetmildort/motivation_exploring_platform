@@ -156,6 +156,58 @@ describe("ChatBox", () => {
     expect(screen.queryByRole("button", { name: "@agentb" })).not.toBeInTheDocument();
   });
 
+  it("navigates mention suggestions with ArrowUp and selects with Tab", () => {
+    render(<ChatBox quizId="double" />);
+    const textarea = screen.getByPlaceholderText(DOUBLE_PLACEHOLDER);
+
+    fireEvent.change(textarea, { target: { value: "@" } });
+    // ArrowUp from index 0 wraps to the last agent (agentb).
+    fireEvent.keyDown(textarea, { key: "ArrowUp" });
+    expect(screen.getByText("@agentb").closest("button")?.className).toContain("bg-accent-500");
+
+    // Tab selects the highlighted agent (same effect as Enter).
+    fireEvent.keyDown(textarea, { key: "Tab" });
+    expect(textarea).toHaveValue("@agentb ");
+  });
+
+  it("closes mention suggestions on Escape", () => {
+    render(<ChatBox quizId="double" />);
+    const textarea = screen.getByPlaceholderText(DOUBLE_PLACEHOLDER);
+
+    fireEvent.change(textarea, { target: { value: "@" } });
+    expect(screen.getByText("@agenta")).toBeInTheDocument();
+
+    fireEvent.keyDown(textarea, { key: "Escape" });
+    expect(screen.queryByText("@agenta")).not.toBeInTheDocument();
+  });
+
+  it("hides mention suggestions once the partial matches a single agent", () => {
+    render(<ChatBox quizId="double" />);
+    const textarea = screen.getByPlaceholderText(DOUBLE_PLACEHOLDER);
+
+    fireEvent.change(textarea, { target: { value: "@" } });
+    expect(screen.getByText("@agenta")).toBeInTheDocument();
+
+    // Narrowing to exactly one matching agent closes the dropdown.
+    fireEvent.change(textarea, { target: { value: "@agenta" } });
+    expect(screen.queryByText("@agentb")).not.toBeInTheDocument();
+  });
+
+  it("commits replies and follow-up questions when the stream never fires onDone", async () => {
+    // onDone is intentionally never called → the post-stream fallback commits.
+    mockSendChat.mockImplementation(
+      async () =>
+        ({ replies: ["Fallback reply"], conversationId: "conv-1", followupQuestions: ["Follow up?"] } as ChatResponse),
+    );
+
+    render(<ChatBox quizId="base" />);
+    fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: "Hi" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Fallback reply")).toBeInTheDocument();
+    expect(await screen.findByText("Follow up?")).toBeInTheDocument();
+  });
+
   it("strips mentions from the outgoing message and routes agents to sendChat", async () => {
     mockSendChat.mockImplementation(async (_q, _c, _m, _a, options: SendChatOptions) => {
       options.onDone?.(["Reply A", "Reply B"], "conv-1");

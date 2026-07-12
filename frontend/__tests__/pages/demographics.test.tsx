@@ -163,6 +163,101 @@ describe("DemographicsPage", () => {
     expect(mockSaveMyDemographics).not.toHaveBeenCalled();
   });
 
+  it("rejects an integer age below the minimum", async () => {
+    mockGetMe.mockResolvedValue({ user: incompleteUser });
+    const { container } = render(<DemographicsPage />);
+    await screen.findByText("Demographics");
+
+    fillRequiredFields(container);
+    fireEvent.change(screen.getByPlaceholderText("e.g., 18"), { target: { value: "15" } });
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(await screen.findByText("Please enter a valid age between 16 and 120.")).toBeInTheDocument();
+    expect(mockSaveMyDemographics).not.toHaveBeenCalled();
+  });
+
+  it("adds and removes a race/ethnicity selection", async () => {
+    mockGetMe.mockResolvedValue({ user: incompleteUser });
+    const { container } = render(<DemographicsPage />);
+    await screen.findByText("Demographics");
+
+    const firstRace = container.querySelectorAll('input[type="checkbox"]')[0] as HTMLInputElement;
+    fireEvent.click(firstRace);
+    expect(firstRace.checked).toBe(true);
+    fireEvent.click(firstRace);
+    expect(firstRace.checked).toBe(false);
+  });
+
+  it("captures a self-described gender and submits it", async () => {
+    mockGetMe.mockResolvedValue({ user: incompleteUser });
+    mockSaveMyDemographics.mockResolvedValue({ ok: true });
+    const { container } = render(<DemographicsPage />);
+    await screen.findByText("Demographics");
+
+    fillRequiredFields(container);
+    fireEvent.change(container.querySelectorAll("select")[0], { target: { value: "Other" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g., Non-binary"), { target: { value: "Non-binary" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(mockSaveMyDemographics).toHaveBeenCalledWith(
+        expect.objectContaining({ gender: "Other", other_gender: "Non-binary" }),
+      ),
+    );
+  });
+
+  it("requires and captures a self-described academic level when Other is chosen", async () => {
+    mockGetMe.mockResolvedValue({ user: incompleteUser });
+    mockSaveMyDemographics.mockResolvedValue({ ok: true });
+    const { container } = render(<DemographicsPage />);
+    await screen.findByText("Demographics");
+
+    fillRequiredFields(container);
+    fireEvent.change(container.querySelectorAll("select")[1], { target: { value: "Other" } });
+
+    // Blank specify field → dedicated validation message.
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText("Please specify your academic level.")).toBeInTheDocument();
+    expect(mockSaveMyDemographics).not.toHaveBeenCalled();
+
+    // Filling it in clears the error and submits with the Other payload.
+    fireEvent.change(screen.getByPlaceholderText("e.g., Postdoctoral researcher"), {
+      target: { value: "Postdoctoral researcher" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(mockSaveMyDemographics).toHaveBeenCalledWith(
+        expect.objectContaining({
+          academic_level: "Other",
+          other_academic_level: "Postdoctoral researcher",
+        }),
+      ),
+    );
+  });
+
+  it("captures an other major and submits it", async () => {
+    mockGetMe.mockResolvedValue({ user: incompleteUser });
+    mockSaveMyDemographics.mockResolvedValue({ ok: true });
+    const { container } = render(<DemographicsPage />);
+    await screen.findByText("Demographics");
+
+    fillRequiredFields(container);
+    fireEvent.change(container.querySelectorAll("select")[3], { target: { value: "Other" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g., Computer Science"), {
+      target: { value: "Linguistics" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(mockSaveMyDemographics).toHaveBeenCalledWith(
+        expect.objectContaining({ major: "Other", other_major: "Linguistics" }),
+      ),
+    );
+  });
+
   it("submits valid data and redirects to the dashboard", async () => {
     mockGetMe.mockResolvedValue({ user: incompleteUser });
     mockSaveMyDemographics.mockResolvedValue({ ok: true });
