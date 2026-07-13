@@ -335,6 +335,169 @@ describe("QuestionPanelPage", () => {
     alertSpy.mockRestore();
   });
 
+  const qStatsEasy = {
+    id: "qs1", stem: "Statistics", subtitle: "s1",
+    choices: [{ id: "a", label: "1" }, { id: "b", label: "2" }], correct_choice_id: "a",
+    set: "a", difficulty: "easy", difficulty_source: "ai", difficulty_checked: true,
+  };
+  const qStatsHard = {
+    id: "qs2", stem: "Statistics", subtitle: "s2",
+    choices: [{ id: "a", label: "1" }, { id: "b", label: "2" }], correct_choice_id: "b",
+    set: "b", difficulty: "hard", difficulty_source: "manual", difficulty_checked: true,
+  };
+  const qPermUnjudged = {
+    id: "qp1", stem: "Permutations", subtitle: "s3",
+    choices: [{ id: "a", label: "1" }, { id: "b", label: "2" }], correct_choice_id: "a",
+    set: null, difficulty: null, difficulty_source: null, difficulty_checked: false,
+  };
+
+  it("renders topic, difficulty, and set count rows", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([qStatsEasy, qStatsHard, qPermUnjudged]);
+    render(<QuestionPanelPage />);
+
+    // Topic counts (grouped by stem)
+    expect(await screen.findByText("Statistics 2")).toBeInTheDocument();
+    expect(screen.getByText("Permutations 1")).toBeInTheDocument();
+    // Difficulty counts
+    expect(screen.getByText("Easy 1")).toBeInTheDocument();
+    expect(screen.getByText("Medium 0")).toBeInTheDocument();
+    expect(screen.getByText("Hard 1")).toBeInTheDocument();
+    expect(screen.getByText("Unjudged 1")).toBeInTheDocument();
+    // Set counts
+    expect(screen.getByText("A 1")).toBeInTheDocument();
+    expect(screen.getByText("B 1")).toBeInTheDocument();
+    expect(screen.getByText("C 0")).toBeInTheDocument();
+    expect(screen.getByText("D 0")).toBeInTheDocument();
+    expect(screen.getByText("Unassigned 1")).toBeInTheDocument();
+  });
+
+  it("shows difficulty and set badges with source labels on each card", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([qStatsEasy, qStatsHard, qPermUnjudged]);
+    render(<QuestionPanelPage />);
+
+    await screen.findByText("Statistics 2");
+    expect(screen.getByText("Easy · AI")).toBeInTheDocument();
+    expect(screen.getByText("Hard · manual")).toBeInTheDocument();
+    expect(screen.getByText("Set A")).toBeInTheDocument();
+    expect(screen.getByText("Set B")).toBeInTheDocument();
+    expect(screen.getByText("Set —")).toBeInTheDocument();
+  });
+
+  it("assigns a set via the inline dropdown", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([question1]);
+      if (method === "PATCH") return Promise.resolve({ ...question1, set: "c" });
+      return Promise.resolve(undefined);
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("What is 2+2?");
+
+    fireEvent.change(screen.getByLabelText("Set for What is 2+2?"), { target: { value: "c" } });
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/questions/q1/set",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ set: "c" }) }),
+      ),
+    );
+    expect(await screen.findByText("Set C")).toBeInTheDocument();
+  });
+
+  it("overrides difficulty via the inline dropdown", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([question1]);
+      if (method === "PATCH")
+        return Promise.resolve({ ...question1, difficulty: "hard", difficulty_source: "manual", difficulty_checked: true });
+      return Promise.resolve(undefined);
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("What is 2+2?");
+
+    fireEvent.change(screen.getByLabelText("Difficulty for What is 2+2?"), { target: { value: "hard" } });
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/questions/q1/difficulty",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ difficulty: "hard" }) }),
+      ),
+    );
+    expect(await screen.findByText("Hard · manual")).toBeInTheDocument();
+  });
+
+  it("shows an alert when assigning a set fails", async () => {
+    const alertSpy = jest.spyOn(window, "alert").mockImplementation(() => {});
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([question1]);
+      if (method === "PATCH") return Promise.reject(new Error("server error"));
+      return Promise.resolve(undefined);
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("What is 2+2?");
+
+    fireEvent.change(screen.getByLabelText("Set for What is 2+2?"), { target: { value: "a" } });
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Failed to assign set."));
+    alertSpy.mockRestore();
+  });
+
+  it("runs difficulty judging and reloads the list", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    let getCount = 0;
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (url === "/api/questions/judge-difficulty") return Promise.resolve({ judged: 2, skipped: 0 });
+      if (method === "GET") {
+        getCount += 1;
+        return Promise.resolve(
+          getCount === 1
+            ? [qPermUnjudged]
+            : [{ ...qPermUnjudged, difficulty: "medium", difficulty_source: "ai", difficulty_checked: true }],
+        );
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("Permutations");
+
+    fireEvent.click(screen.getByRole("button", { name: "Judge difficulty now" }));
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/questions/judge-difficulty",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(await screen.findByText(/Judged 2 questions\./)).toBeInTheDocument();
+    expect(await screen.findByText("Medium · AI")).toBeInTheDocument();
+  });
+
+  it("shows an error when difficulty judging fails", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      if (url === "/api/questions/judge-difficulty") return Promise.reject(new Error("server error"));
+      return Promise.resolve([qPermUnjudged]);
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("Permutations");
+
+    fireEvent.click(screen.getByRole("button", { name: "Judge difficulty now" }));
+
+    expect(await screen.findByText("Failed to run difficulty judging.")).toBeInTheDocument();
+  });
+
   it("navigates to the dashboard when Back to Dashboard is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     mockApiFetch.mockResolvedValue([]);

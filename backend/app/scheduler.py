@@ -1,5 +1,4 @@
 # backend/app/scheduler.py
-import os
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -16,15 +15,12 @@ def run_jobs_now(app) -> None:
     from .services.link_health import run_health_check, run_discovery
     from .services.allowlist import get_allowlist_collection, load_allowlist_cache
     from .services.knowledge_links import get_knowledge_links_collection, reload_knowledge_links_cache
-    from openai import OpenAI
+    from .core.llm import get_sync_llm_client
 
     db = app.state.db
     settings = app.state.settings
 
-    openai_client = OpenAI(
-        api_key=os.getenv("UF_OPENAI_API_KEY"),
-        base_url=os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu"),
-    )
+    openai_client = get_sync_llm_client()
 
     allowlist_col = get_allowlist_collection(db)
     allowlist_cache = load_allowlist_cache(allowlist_col)
@@ -34,6 +30,11 @@ def run_jobs_now(app) -> None:
 
     summary_discovery = run_discovery(db, settings, openai_client, allowlist_cache)
     print(f"[scheduler] discovery: {summary_discovery}")
+
+    # AI difficulty estimation for any questions not yet judged.
+    from .services.question_difficulty import run_difficulty_judging
+    summary_difficulty = run_difficulty_judging(db, openai_client)
+    print(f"[scheduler] difficulty_judging: {summary_difficulty}")
 
     # Reload chatbot cache to reflect any status changes
     links_col = get_knowledge_links_collection(db)

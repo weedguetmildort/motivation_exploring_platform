@@ -1,7 +1,7 @@
 # backend/tests/test_questions.py
 """Unit tests for app/services/questions.py and API tests for app/api/questions.py."""
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from bson import ObjectId
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -13,6 +13,8 @@ from app.services.questions import (
     list_questions,
     update_question,
     delete_question,
+    assign_set,
+    override_difficulty,
 )
 from app.schemas.question import QuestionCreate, QuestionChoice, QuestionUpdate
 from app.api.questions import router as questions_router
@@ -228,6 +230,162 @@ class TestUpdateQuestion:
         assert result.correct_choice_id == ""
 
 
+class TestCreateQuestionSetAndDifficultyDefaults:
+    def test_new_question_defaults_unassigned_and_unjudged(self):
+        col = MagicMock()
+        col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+        data = QuestionCreate(
+            stem="Stats",
+            choices=[QuestionChoice(id="a", label="1"), QuestionChoice(id="b", label="2")],
+            correct_choice_id="a",
+        )
+
+        result = create_question(col, data)
+
+        assert result.set is None
+        assert result.difficulty is None
+        assert result.difficulty_source is None
+        assert result.difficulty_checked is False
+        inserted = col.insert_one.call_args[0][0]
+        assert inserted["difficulty_checked"] is False
+        assert inserted["set"] is None
+
+    def test_create_persists_assigned_set(self):
+        col = MagicMock()
+        col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+        data = QuestionCreate(
+            stem="Stats",
+            choices=[QuestionChoice(id="a", label="1"), QuestionChoice(id="b", label="2")],
+            correct_choice_id="a",
+            set="b",
+        )
+        result = create_question(col, data)
+        assert result.set == "b"
+
+
+class TestAssignSet:
+    def test_assigns_set(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Q", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a", "set": "c",
+        }
+        result = assign_set(mock_col, str(oid), "c")
+        assert result.set == "c"
+        assert mock_col.find_one_and_update.call_args[0][1] == {"$set": {"set": "c"}}
+
+    def test_clear_set(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Q", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a", "set": None,
+        }
+        result = assign_set(mock_col, str(oid), None)
+        assert result.set is None
+
+    def test_invalid_id_raises_400(self, mock_col):
+        with pytest.raises(HTTPException) as exc:
+            assign_set(mock_col, "nope", "a")
+        assert exc.value.status_code == 400
+
+    def test_not_found_raises_404(self, mock_col):
+        mock_col.find_one_and_update.return_value = None
+        with pytest.raises(HTTPException) as exc:
+            assign_set(mock_col, str(ObjectId()), "a")
+        assert exc.value.status_code == 404
+
+
+class TestOverrideDifficulty:
+    def test_manual_override_marks_source_and_checked(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Q", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a",
+            "difficulty": "hard", "difficulty_source": "manual", "difficulty_checked": True,
+        }
+        result = override_difficulty(mock_col, str(oid), "hard")
+        assert result.difficulty == "hard"
+        assert result.difficulty_source == "manual"
+        assert result.difficulty_checked is True
+        set_doc = mock_col.find_one_and_update.call_args[0][1]["$set"]
+        assert set_doc == {"difficulty": "hard", "difficulty_source": "manual", "difficulty_checked": True}
+
+    def test_clearing_difficulty_returns_to_unjudged(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Q", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a",
+            "difficulty": None, "difficulty_source": None, "difficulty_checked": False,
+        }
+        override_difficulty(mock_col, str(oid), None)
+        set_doc = mock_col.find_one_and_update.call_args[0][1]["$set"]
+        assert set_doc == {"difficulty": None, "difficulty_source": None, "difficulty_checked": False}
+
+    def test_invalid_id_raises_400(self, mock_col):
+        with pytest.raises(HTTPException) as exc:
+            override_difficulty(mock_col, "nope", "easy")
+        assert exc.value.status_code == 400
+
+    def test_not_found_raises_404(self, mock_col):
+        mock_col.find_one_and_update.return_value = None
+        with pytest.raises(HTTPException) as exc:
+            override_difficulty(mock_col, str(ObjectId()), "easy")
+        assert exc.value.status_code == 404
+
+
+class TestUpdateResetsDifficultyOnEdit:
+    def _payload(self):
+        return QuestionUpdate(
+            stem="Edited",
+            choices=[QuestionChoice(id="a", label="A")],
+            correct_choice_id="a",
+        )
+
+    def test_ai_difficulty_is_reset_on_content_edit(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one.return_value = {"_id": oid, "difficulty_source": "ai"}
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Edited", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a",
+        }
+        update_question(mock_col, str(oid), self._payload())
+        set_doc = mock_col.find_one_and_update.call_args[0][1]["$set"]
+        assert set_doc["difficulty"] is None
+        assert set_doc["difficulty_source"] is None
+        assert set_doc["difficulty_checked"] is False
+
+    def test_manual_difficulty_is_preserved_on_edit(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one.return_value = {"_id": oid, "difficulty_source": "manual"}
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Edited", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a",
+        }
+        update_question(mock_col, str(oid), self._payload())
+        set_doc = mock_col.find_one_and_update.call_args[0][1]["$set"]
+        assert "difficulty" not in set_doc
+        assert "difficulty_source" not in set_doc
+        assert "difficulty_checked" not in set_doc
+
+    def test_edit_does_not_write_set(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one.return_value = {"_id": oid, "difficulty_source": "manual"}
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Edited", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a",
+        }
+        update_question(mock_col, str(oid), self._payload())
+        set_doc = mock_col.find_one_and_update.call_args[0][1]["$set"]
+        assert "set" not in set_doc
+
+    def test_missing_question_raises_404(self, mock_col):
+        mock_col.find_one.return_value = None
+        with pytest.raises(HTTPException) as exc:
+            update_question(mock_col, str(ObjectId()), self._payload())
+        assert exc.value.status_code == 404
+        mock_col.find_one_and_update.assert_not_called()
+
+
 class TestDeleteQuestion:
     def test_deletes_existing_question(self, mock_col):
         mock_col.delete_one.return_value = MagicMock(deleted_count=1)
@@ -425,3 +583,66 @@ class TestDeleteQuestionEndpoint:
         resp = questions_client.delete(f"/questions/{ObjectId()}")
 
         assert resp.status_code == 404
+
+
+class TestAssignSetEndpoint:
+    def test_admin_can_assign_set(self, questions_client, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Q", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a", "set": "b",
+        }
+        resp = questions_client.patch(f"/questions/{oid}/set", json={"set": "b"})
+        assert resp.status_code == 200
+        assert resp.json()["set"] == "b"
+
+    def test_rejects_invalid_set_value(self, questions_client):
+        resp = questions_client.patch(f"/questions/{ObjectId()}/set", json={"set": "z"})
+        assert resp.status_code == 422
+
+    def test_non_admin_forbidden(self, questions_client_unauthed):
+        resp = questions_client_unauthed.patch(f"/questions/{ObjectId()}/set", json={"set": "a"})
+        assert resp.status_code == 403
+
+
+class TestOverrideDifficultyEndpoint:
+    def test_admin_can_override_difficulty(self, questions_client, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {
+            "_id": oid, "stem": "Q", "choices": [{"id": "a", "label": "A"}],
+            "correct_choice_id": "a",
+            "difficulty": "medium", "difficulty_source": "manual", "difficulty_checked": True,
+        }
+        resp = questions_client.patch(f"/questions/{oid}/difficulty", json={"difficulty": "medium"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["difficulty"] == "medium"
+        assert body["difficulty_source"] == "manual"
+
+    def test_rejects_invalid_difficulty_value(self, questions_client):
+        resp = questions_client.patch(f"/questions/{ObjectId()}/difficulty", json={"difficulty": "trivial"})
+        assert resp.status_code == 422
+
+    def test_non_admin_forbidden(self, questions_client_unauthed):
+        resp = questions_client_unauthed.patch(f"/questions/{ObjectId()}/difficulty", json={"difficulty": "easy"})
+        assert resp.status_code == 403
+
+
+class TestJudgeDifficultyEndpoint:
+    def test_admin_triggers_judging_with_shared_gateway_client(self, questions_client, mock_db):
+        fake_client = MagicMock()
+        with patch("app.api.questions.get_sync_llm_client", return_value=fake_client) as mock_factory, \
+             patch("app.api.questions.run_difficulty_judging", return_value={"judged": 3, "skipped": 1}) as mock_run:
+            resp = questions_client.post("/questions/judge-difficulty")
+        assert resp.status_code == 200
+        assert resp.json() == {"judged": 3, "skipped": 1}
+        # The endpoint builds its client from the central UF gateway factory and
+        # passes it straight through to the judging pass.
+        mock_factory.assert_called_once()
+        mock_run.assert_called_once_with(mock_db, fake_client)
+
+    def test_non_admin_forbidden(self, questions_client_unauthed):
+        with patch("app.api.questions.run_difficulty_judging") as mock_run:
+            resp = questions_client_unauthed.post("/questions/judge-difficulty")
+        assert resp.status_code == 403
+        mock_run.assert_not_called()
