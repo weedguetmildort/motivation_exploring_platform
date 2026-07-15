@@ -297,6 +297,211 @@ describe("SurveyPage", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
+  it("auto-resolves the pre_quiz stage from user flags when no stage is given", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetSurveyState.mockResolvedValue({
+      stage: "pre_quiz",
+      status: "not_started",
+      items: [likertItem],
+      answers: [],
+    });
+
+    render(<SurveyPage />);
+
+    expect(await screen.findByText("Survey 1")).toBeInTheDocument();
+    expect(mockGetSurveyState).toHaveBeenCalledWith("pre_quiz");
+  });
+
+  it("auto-resolves the post_base stage when the base quiz is done", async () => {
+    mockGetMe.mockResolvedValue({
+      user: { ...baseUser, survey_pre_base_completed: true, quiz_base_completed: true },
+    });
+    mockGetSurveyState.mockResolvedValue({
+      stage: "post_base",
+      status: "not_started",
+      items: [likertItem],
+      answers: [],
+    });
+
+    render(<SurveyPage />);
+
+    expect(await screen.findByText("Survey 2")).toBeInTheDocument();
+    expect(await screen.findByText("Step 3 of 5")).toBeInTheDocument();
+    expect(mockGetSurveyState).toHaveBeenCalledWith("post_base");
+  });
+
+  it("auto-resolves the post_variant stage when the variant quiz is done", async () => {
+    mockGetMe.mockResolvedValue({
+      user: {
+        ...baseUser,
+        survey_pre_base_completed: true,
+        quiz_base_completed: true,
+        survey_post_base_completed: true,
+        quiz_variant_completed: true,
+      },
+    });
+    mockGetSurveyState.mockImplementation((s: string) =>
+      Promise.resolve({
+        stage: s,
+        status: "not_started",
+        items: s === "post_base" ? [likertItem] : [],
+        answers: [],
+      }),
+    );
+
+    render(<SurveyPage />);
+
+    expect(await screen.findByText("Survey 3")).toBeInTheDocument();
+    expect(await screen.findByText("Step 5 of 5")).toBeInTheDocument();
+    expect(mockGetSurveyState).toHaveBeenCalledWith("post_base");
+    expect(mockGetSurveyState).toHaveBeenCalledWith("post_variant");
+  });
+
+  it("redirects to the variant quiz when it is the next pending step", async () => {
+    mockGetMe.mockResolvedValue({
+      user: {
+        ...baseUser,
+        assigned_var: "links",
+        survey_pre_base_completed: true,
+        quiz_base_completed: true,
+        survey_post_base_completed: true,
+        quiz_variant_completed: false,
+      },
+    });
+
+    render(<SurveyPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/links"));
+    expect(mockGetSurveyState).not.toHaveBeenCalled();
+  });
+
+  it("redirects to the dashboard when the variant quiz is pending but no variant is assigned", async () => {
+    mockGetMe.mockResolvedValue({
+      user: {
+        ...baseUser,
+        assigned_var: null,
+        survey_pre_base_completed: true,
+        quiz_base_completed: true,
+        survey_post_base_completed: true,
+        quiz_variant_completed: false,
+      },
+    });
+
+    render(<SurveyPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+  });
+
+  it("redirects to the dashboard when the whole study is complete", async () => {
+    mockGetMe.mockResolvedValue({
+      user: {
+        ...baseUser,
+        survey_pre_base_completed: true,
+        quiz_base_completed: true,
+        survey_post_base_completed: true,
+        quiz_variant_completed: true,
+        survey_post_variant_completed: true,
+      },
+    });
+
+    render(<SurveyPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+  });
+
+  it("treats empty-array values as unanswered and other value types as answered", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockQuery = { stage: "pre_quiz" };
+    const reqA = { ...likertItem, id: "reqA", required: true };
+    const reqB = { ...likertItem, id: "reqB", required: true };
+    mockGetSurveyState.mockResolvedValue({
+      stage: "pre_quiz",
+      status: "in_progress",
+      items: [reqA, reqB],
+      // reqA seeded with an empty array (unanswered branch),
+      // reqB seeded with a boolean (the non-string/number/array fall-through).
+      answers: [
+        { item_id: "reqA", value: [] },
+        { item_id: "reqB", value: true },
+      ],
+    });
+
+    render(<SurveyPage />);
+
+    // Wait for the items to load (submit button appears only then).
+    const submit = await screen.findByRole("button", { name: "Begin Quiz Part 1" });
+    // reqA is still unanswered → submitting surfaces the validation error.
+    fireEvent.click(submit);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Please answer all required questions before continuing.",
+    );
+  });
+
+  it("redirects to a quiz-scoped survey URL when pre-base is still incomplete after submit", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser }); // survey_pre_base_completed: false
+    mockQuery = { stage: "post_base", quiz_id: "base" };
+    mockGetSurveyState.mockResolvedValue({
+      stage: "post_base",
+      status: "not_started",
+      items: [likertItem],
+      answers: [],
+    });
+    mockSubmitSurvey.mockResolvedValue({ ok: true });
+
+    render(<SurveyPage />);
+
+    await screen.findByText(likertItem.prompt);
+    fireEvent.click(screen.getAllByRole("radio")[2]);
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Quiz Part 2" }));
+
+    await waitFor(() => expect(mockSubmitSurvey).toHaveBeenCalledWith("post_base", [{ item_id: "item1", value: 3 }]));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey?quiz_id=base"));
+  });
+
+  it("redirects to /survey when a completed post_base survey leaves the flag unset", async () => {
+    const lagging = { ...baseUser, survey_pre_base_completed: true, quiz_base_completed: true };
+    mockGetMe
+      .mockResolvedValueOnce({ user: lagging })
+      .mockResolvedValueOnce({ user: lagging }); // post_base still false after refresh
+    mockQuery = { stage: "post_base" };
+    mockGetSurveyState.mockResolvedValue({
+      stage: "post_base",
+      status: "completed",
+      items: [likertItem],
+      answers: [],
+    });
+
+    render(<SurveyPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
+  });
+
+  it("redirects to /survey when a completed post_variant survey leaves the flag unset", async () => {
+    const lagging = {
+      ...baseUser,
+      survey_pre_base_completed: true,
+      quiz_base_completed: true,
+      survey_post_base_completed: true,
+      quiz_variant_completed: true,
+    };
+    mockGetMe
+      .mockResolvedValueOnce({ user: lagging })
+      .mockResolvedValueOnce({ user: lagging }); // post_variant still false after refresh
+    mockQuery = { stage: "post_variant" };
+    mockGetSurveyState.mockImplementation((s: string) =>
+      Promise.resolve({
+        stage: s,
+        status: s === "post_variant" ? "completed" : "not_started",
+        items: s === "post_base" ? [likertItem] : [],
+        answers: [],
+      }),
+    );
+
+    render(<SurveyPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
+  });
+
   it("navigates to the dashboard when the Dashboard button is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser });
     mockQuery = { stage: "pre_quiz" };

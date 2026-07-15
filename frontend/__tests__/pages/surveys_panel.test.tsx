@@ -500,6 +500,251 @@ describe("SurveyPanelPage", () => {
     alertSpy.mockRestore();
   });
 
+  it("changes stage, scale labels, and bounds when creating a likert item", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    const created = { ...likertItem, id: "itemX", stage: "post_base", prompt: "P" };
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([]);
+      if (method === "POST") return Promise.resolve(created);
+      return Promise.resolve(undefined);
+    });
+
+    render(<SurveyPanelPage />);
+    await screen.findByText("No survey items yet.");
+
+    // Stage select (create form, first combobox)
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "post_base" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g., TRUST, NFC, AI Literacy"), { target: { value: "TRUST" } });
+    const textareas = screen.getAllByRole("textbox").filter((el) => el.tagName === "TEXTAREA");
+    fireEvent.change(textareas[0], { target: { value: "P" } });
+
+    // Scale left/right labels (only the create-form inputs carry these values while no items exist)
+    fireEvent.change(screen.getByDisplayValue("Strongly disagree"), { target: { value: "Low" } });
+    fireEvent.change(screen.getByDisplayValue("Strongly agree"), { target: { value: "High" } });
+
+    const spin = screen.getAllByRole("spinbutton");
+    fireEvent.change(spin[0], { target: { value: "0" } });
+    fireEvent.change(spin[1], { target: { value: "6" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save survey item" }));
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/surveys/items",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            stage: "post_base",
+            category: "TRUST",
+            prompt: "P",
+            type: "likert",
+            required: true,
+            reverse_scored: false,
+            order: 0,
+            active: true,
+            scale: { min: 0, max: 6, anchors: ["Low", "High"] },
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("edits every field of a likert item and saves the changes", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    const updated = { ...likertItem, prompt: "I feel motivated to learn." };
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([likertItem]);
+      if (method === "PUT") return Promise.resolve(updated);
+      return Promise.resolve(undefined);
+    });
+
+    render(<SurveyPanelPage />);
+    await screen.findByText("I feel motivated to learn.");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    // Stage (edit form renders it as a text input valued "pre_quiz")
+    fireEvent.change(screen.getByDisplayValue("pre_quiz"), { target: { value: "post_base" } });
+    // Category (edit input valued "Motivation")
+    fireEvent.change(screen.getByDisplayValue("Motivation"), { target: { value: "TRUST" } });
+
+    // Min/Max (edit spinbuttons are the last two)
+    const spin = screen.getAllByRole("spinbutton");
+    fireEvent.change(spin[spin.length - 2], { target: { value: "2" } });
+    fireEvent.change(spin[spin.length - 1], { target: { value: "7" } });
+
+    // Anchors (edit inputs are the last occurrence of each default value)
+    const lefts = screen.getAllByDisplayValue("Strongly disagree");
+    fireEvent.change(lefts[lefts.length - 1], { target: { value: "Nope" } });
+    const rights = screen.getAllByDisplayValue("Strongly agree");
+    fireEvent.change(rights[rights.length - 1], { target: { value: "Yep" } });
+
+    // Flags (edit checkboxes are the last three)
+    const checks = screen.getAllByRole("checkbox");
+    fireEvent.click(checks[checks.length - 3]); // required: true -> false
+    fireEvent.click(checks[checks.length - 2]); // reverse_scored: false -> true
+    fireEvent.click(checks[checks.length - 1]); // active: true -> false
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/surveys/items/item1",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    const putCall = mockApiFetch.mock.calls.find(([, init]) => init?.method === "PUT");
+    const body = JSON.parse(putCall![1].body);
+    expect(body).toMatchObject({
+      stage: "post_base",
+      category: "TRUST",
+      type: "likert",
+      required: false,
+      reverse_scored: true,
+      active: false,
+      scale: { min: 2, max: 7, anchors: ["Nope", "Yep"] },
+      options: null,
+    });
+  });
+
+  it("edits a single-select item's options and saves successfully", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    const updated = { ...singleSelectItem, options: [{ id: "a", label: "AA" }, { id: "b", label: "Hard" }] };
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([singleSelectItem]);
+      if (method === "PUT") return Promise.resolve(updated);
+      return Promise.resolve(undefined);
+    });
+
+    render(<SurveyPanelPage />);
+    await screen.findByText("Which best describes your experience?");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    fireEvent.change(screen.getByDisplayValue("Easy"), { target: { value: "AA" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/surveys/items/item2",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    const putCall = mockApiFetch.mock.calls.find(([, init]) => init?.method === "PUT");
+    const body = JSON.parse(putCall![1].body);
+    expect(body).toMatchObject({
+      type: "single_select",
+      options: [{ id: "a", label: "AA" }, { id: "b", label: "Hard" }],
+      scale: null,
+    });
+  });
+
+  it("switches an item's type within the edit form", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([likertItem]);
+
+    render(<SurveyPanelPage />);
+    await screen.findByText("I feel motivated to learn.");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const combos = screen.getAllByRole("combobox");
+    const editType = combos[combos.length - 1];
+
+    fireEvent.change(editType, { target: { value: "single_select" } });
+    expect(screen.getByText("Options (at least 2)")).toBeInTheDocument();
+
+    fireEvent.change(editType, { target: { value: "likert" } });
+    expect(screen.getAllByRole("spinbutton").length).toBeGreaterThan(0);
+  });
+
+  it("creates an item with a blank category and empty scale labels via fallbacks", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    const created = { ...likertItem, id: "itemY" };
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([]);
+      if (method === "POST") return Promise.resolve(created);
+      return Promise.resolve(undefined);
+    });
+    const { container } = render(<SurveyPanelPage />);
+    await screen.findByText("No survey items yet.");
+
+    const textareas = screen.getAllByRole("textbox").filter((el) => el.tagName === "TEXTAREA");
+    fireEvent.change(textareas[0], { target: { value: "P" } });
+    // Empty both scale labels so the anchor `|| fallback` branches are taken.
+    fireEvent.change(screen.getByDisplayValue("Strongly disagree"), { target: { value: "" } });
+    fireEvent.change(screen.getByDisplayValue("Strongly agree"), { target: { value: "" } });
+    // Submit via the form element to bypass the HTML `required` category field (left blank → null).
+    fireEvent.submit(container.querySelector("form")!);
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        "/api/surveys/items",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            stage: "pre_quiz",
+            category: null,
+            prompt: "P",
+            type: "likert",
+            required: true,
+            reverse_scored: false,
+            order: 0,
+            active: true,
+            scale: { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] },
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("renders a likert item with missing scale as optional and reverse-scored via display fallbacks", async () => {
+    const sparse = {
+      id: "sparse1",
+      stage: "pre_quiz",
+      prompt: "Sparse likert prompt",
+      type: "likert" as const,
+      required: false,
+      order: 0,
+      active: true,
+      category: null,
+      reverse_scored: true,
+      // no scale field → display uses ?? fallbacks
+    };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([sparse]);
+    render(<SurveyPanelPage />);
+
+    await screen.findByText("Sparse likert prompt");
+    // The full display line uniquely identifies the fallbacks: 1–5 scale, default
+    // anchors, reverse-scored (R), and optional (required=false).
+    expect(
+      screen.getByText(/Scale: 1–5 • Strongly disagree ↔ Strongly agree • \(R\) • optional/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a single-select item with no options array", async () => {
+    const sparse = {
+      id: "sparse2",
+      stage: "post_base",
+      prompt: "Sparse select prompt",
+      type: "single_select" as const,
+      required: true,
+      order: 0,
+      active: true,
+      category: null,
+      reverse_scored: false,
+      // no options field → list uses ?? [] fallback
+    };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([sparse]);
+    render(<SurveyPanelPage />);
+
+    expect(await screen.findByText("Sparse select prompt")).toBeInTheDocument();
+  });
+
   it("navigates to the dashboard when Back to Dashboard is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     mockApiFetch.mockResolvedValue([]);

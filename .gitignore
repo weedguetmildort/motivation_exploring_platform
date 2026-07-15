@@ -36,4 +36,4 @@ __pycache__
 # Claude files
 claude/
 .claude/
-
+credentials.md

@@ -210,6 +210,50 @@ describe("sendChat", () => {
     expect(result.replies).toEqual(["See [1](https://example.com) for more."]);
   });
 
+  it("skips malformed SSE data lines and keeps streaming", async () => {
+    const chunks = [
+      "data: {not valid json\n\n",
+      sseChunk([{ type: "token", content: "Hello" }]),
+      sseChunk([{ type: "done", conversation_id: "conv-x" }]),
+    ];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    const result = await sendChat("base", null, "hi");
+
+    expect(result.replies).toEqual(["Hello"]);
+    expect(result.conversationId).toBe("conv-x");
+  });
+
+  it("passes per-agent replies to onDone when no backend reply is provided", async () => {
+    const chunks = [
+      sseChunk([{ type: "token", content: "A hi", agent: "agenta" }]),
+      sseChunk([{ type: "token", content: "B hi", agent: "agentb" }]),
+      sseChunk([{ type: "done", conversation_id: "conv-y" }]),
+    ];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    const onDone = jest.fn();
+    await sendChat("double", null, "hi", ["agenta", "agentb"], { onDone });
+
+    expect(onDone).toHaveBeenCalledWith(["A hi", "B hi"], "conv-y");
+  });
+
+  it("injects citation links into token-built replies passed to onDone", async () => {
+    const chunks = [
+      sseChunk([{ type: "token", content: "See [1] now." }]),
+      sseChunk([
+        { type: "citations", citations: [{ n: 1, title: "Docs", url: "https://ex.com" }] },
+      ]),
+      sseChunk([{ type: "done", conversation_id: "conv-z" }]),
+    ];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    const onDone = jest.fn();
+    await sendChat("links", null, "hi", [], { onDone });
+
+    expect(onDone).toHaveBeenCalledWith(["See [1](https://ex.com) now."], "conv-z");
+  });
+
   it("throws when the stream emits an error event", async () => {
     const chunks = [sseChunk([{ type: "error", detail: "Upstream failure" }])];
     (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));

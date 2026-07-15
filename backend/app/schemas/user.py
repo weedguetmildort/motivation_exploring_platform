@@ -69,6 +69,25 @@ class UserPublic(BaseModel):
     survey_stage: SurveyStage = SurveyStage.pre_base
 
 
+# Admin-facing view of a participant — adds created_at, omits password_hash.
+class ParticipantSummary(BaseModel):
+    id: str
+    email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    assigned_var: AssignedVar = AssignedVar.followup
+    survey_stage: SurveyStage = SurveyStage.pre_base
+    demographics_completed: bool = False
+    survey_pre_base_completed: bool = False
+    quiz_base_completed: bool = False
+    survey_post_base_completed: bool = False
+    quiz_variant_completed: bool = False
+    survey_post_variant_completed: bool = False
+    last_active_at: Optional[datetime] = None
+    consent_declined_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
 # Full document shape as stored in MongoDB, including all study-progress flags.
 # Used internally when reading from the users collection.
 class UserDBDoc(BaseModel):
