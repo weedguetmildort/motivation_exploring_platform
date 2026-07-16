@@ -68,6 +68,8 @@ def build_user_public(doc: dict) -> UserPublic:
         consent_text=doc.get("consent_text"),
         consent_agreed_at=doc.get("consent_agreed_at"),
         consent_declined_at=doc.get("consent_declined_at"),
+        consent_viewed_at=doc.get("consent_viewed_at"),
+        consent_abandoned_at=doc.get("consent_abandoned_at"),
         last_active_at=doc.get("last_active_at"),
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
@@ -205,6 +207,64 @@ def record_consent_decline(
                 "updated_at": now,
             }
         },
+    )
+
+    return {"ok": True}
+
+
+@router.post("/consent-viewed")
+def record_consent_viewed(
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    """Funnel telemetry (step 5): the participant reached the consent page.
+
+    Records the first-view timestamp and clears any prior ``consent_abandoned_at``
+    marker — being back on the page means an earlier "left without deciding"
+    signal no longer reflects reality.
+    """
+    users = get_users_collection(request.app.state.db)
+    doc = find_user_by_email(users, user.email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+    set_fields = {"updated_at": now}
+    # Keep the earliest view time so it reads as the funnel-entry timestamp.
+    if not doc.get("consent_viewed_at"):
+        set_fields["consent_viewed_at"] = now
+    users.update_one(
+        {"_id": doc["_id"]},
+        {"$set": set_fields, "$unset": {"consent_abandoned_at": ""}},
+    )
+
+    return {"ok": True}
+
+
+@router.post("/consent-abandoned")
+def record_consent_abandoned(
+    request: Request,
+    user: UserPublic = Depends(get_current_user),
+):
+    """Funnel telemetry (step 6c): the participant left the consent page without
+    agreeing or declining (e.g. closed the tab).
+
+    Sent via ``navigator.sendBeacon`` on page unload, so it is best-effort and
+    may race the agree/decline write. No-op if a decision was already recorded.
+    """
+    users = get_users_collection(request.app.state.db)
+    doc = find_user_by_email(users, user.email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # A decision already exists → this is a stale/racing beacon; ignore it.
+    if doc.get("consent_agreed_at") or doc.get("consent_declined_at"):
+        return {"ok": True}
+
+    now = datetime.now(timezone.utc)
+    users.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {"consent_abandoned_at": now, "updated_at": now}},
     )
 
     return {"ok": True}

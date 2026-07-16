@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, invalidateMeCache, logout, recordConsentAgreement, recordConsentDecline } from "../lib/auth";
+import {
+  getMe,
+  invalidateMeCache,
+  logout,
+  recordConsentAgreement,
+  recordConsentDecline,
+  recordConsentViewed,
+  sendConsentAbandonedBeacon,
+} from "../lib/auth";
 
 export default function ConsentPage() {
   const router = useRouter();
@@ -8,6 +16,10 @@ export default function ConsentPage() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const consentContentRef = useRef<HTMLDivElement>(null);
+  // Funnel telemetry: only beacon "abandoned" once we know the participant is
+  // authenticated and viewing, and never after they've made a decision.
+  const authedRef = useRef(false);
+  const respondedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -15,6 +27,11 @@ export default function ConsentPage() {
     (async () => {
       try {
         await getMe();
+        if (cancelled) return;
+        authedRef.current = true;
+        // Step 5 — participant reached the consent page. Best-effort; a failed
+        // telemetry write must never block the form from rendering.
+        recordConsentViewed().catch(() => {});
       } catch {
         if (!cancelled) {
           router.replace("/login");
@@ -25,8 +42,19 @@ export default function ConsentPage() {
       }
     })();
 
+    // Step 6c — participant leaves without agreeing/declining (e.g. closes the
+    // tab). pagehide fires on real unloads, not on in-app (SPA) navigation, so
+    // agree/decline routing does not trip this; respondedRef guards the rest.
+    const handlePageHide = () => {
+      if (authedRef.current && !respondedRef.current) {
+        sendConsentAbandonedBeacon();
+      }
+    };
+    window.addEventListener("pagehide", handlePageHide);
+
     return () => {
       cancelled = true;
+      window.removeEventListener("pagehide", handlePageHide);
     };
   }, []);
 
@@ -46,6 +74,9 @@ export default function ConsentPage() {
 
   async function onAgree() {
     if (pending) return;
+    // Mark responded before any await so a racing pagehide can't beacon
+    // "abandoned" while the agreement request is in flight.
+    respondedRef.current = true;
     setPending(true);
     setError(null);
 
@@ -62,6 +93,8 @@ export default function ConsentPage() {
 
   async function onDecline() {
     if (pending) return;
+    // A decline is a response, not an abandonment — suppress the beacon.
+    respondedRef.current = true;
     setPending(true);
     try {
       await recordConsentDecline(getConsentText());

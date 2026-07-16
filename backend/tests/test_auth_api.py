@@ -413,6 +413,141 @@ class TestRecordConsentDecline:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# POST /auth/consent-viewed  (funnel telemetry — step 5)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRecordConsentViewed:
+    def test_records_first_view_and_clears_abandoned(self, overridden_client, auth_mock_col, regular_user):
+        doc = make_user_doc(email=regular_user.email)  # no consent_viewed_at yet
+        auth_mock_col.find_one.return_value = doc
+
+        resp = overridden_client.post("/auth/consent-viewed")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        args, _ = auth_mock_col.update_one.call_args
+        assert args[0] == {"_id": doc["_id"]}
+        assert "consent_viewed_at" in args[1]["$set"]
+        assert "updated_at" in args[1]["$set"]
+        # Being back on the page retracts any earlier "left without deciding".
+        assert args[1]["$unset"] == {"consent_abandoned_at": ""}
+
+    def test_keeps_existing_view_timestamp(self, overridden_client, auth_mock_col, regular_user):
+        first_view = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        doc = make_user_doc(email=regular_user.email, consent_viewed_at=first_view)
+        auth_mock_col.find_one.return_value = doc
+
+        resp = overridden_client.post("/auth/consent-viewed")
+
+        assert resp.status_code == 200
+        # A re-view must not overwrite the funnel-entry timestamp.
+        set_doc = auth_mock_col.update_one.call_args[0][1]["$set"]
+        assert "consent_viewed_at" not in set_doc
+        assert "updated_at" in set_doc
+
+    def test_user_not_found_returns_404(self, overridden_client, auth_mock_col):
+        auth_mock_col.find_one.return_value = None
+
+        resp = overridden_client.post("/auth/consent-viewed")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "User not found"
+
+    def test_requires_authentication(self, auth_client):
+        resp = auth_client.post("/auth/consent-viewed")
+        assert resp.status_code == 401
+
+    def test_me_returns_viewed_timestamp(self, auth_client, auth_mock_col):
+        settings = get_settings()
+        doc = make_user_doc(
+            email="student@test.edu",
+            consent_viewed_at=datetime.now(timezone.utc),
+        )
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(settings.COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        resp = auth_client.get("/auth/me")
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["consent_viewed_at"] is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# POST /auth/consent-abandoned  (funnel telemetry — step 6c)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRecordConsentAbandoned:
+    def test_records_abandonment_when_no_decision(self, overridden_client, auth_mock_col, regular_user):
+        doc = make_user_doc(email=regular_user.email)  # neither agreed nor declined
+        auth_mock_col.find_one.return_value = doc
+
+        resp = overridden_client.post("/auth/consent-abandoned")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        args, _ = auth_mock_col.update_one.call_args
+        assert args[0] == {"_id": doc["_id"]}
+        assert "consent_abandoned_at" in args[1]["$set"]
+        assert "updated_at" in args[1]["$set"]
+
+    def test_noop_when_already_agreed(self, overridden_client, auth_mock_col, regular_user):
+        doc = make_user_doc(
+            email=regular_user.email,
+            consent_agreed_at=datetime.now(timezone.utc),
+        )
+        auth_mock_col.find_one.return_value = doc
+
+        resp = overridden_client.post("/auth/consent-abandoned")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        # A racing beacon after agreement must not stamp an abandonment.
+        auth_mock_col.update_one.assert_not_called()
+
+    def test_noop_when_already_declined(self, overridden_client, auth_mock_col, regular_user):
+        doc = make_user_doc(
+            email=regular_user.email,
+            consent_declined_at=datetime.now(timezone.utc),
+        )
+        auth_mock_col.find_one.return_value = doc
+
+        resp = overridden_client.post("/auth/consent-abandoned")
+
+        assert resp.status_code == 200
+        auth_mock_col.update_one.assert_not_called()
+
+    def test_user_not_found_returns_404(self, overridden_client, auth_mock_col):
+        auth_mock_col.find_one.return_value = None
+
+        resp = overridden_client.post("/auth/consent-abandoned")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "User not found"
+
+    def test_requires_authentication(self, auth_client):
+        resp = auth_client.post("/auth/consent-abandoned")
+        assert resp.status_code == 401
+
+    def test_me_returns_abandoned_timestamp(self, auth_client, auth_mock_col):
+        settings = get_settings()
+        doc = make_user_doc(
+            email="student@test.edu",
+            consent_abandoned_at=datetime.now(timezone.utc),
+        )
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(settings.COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        resp = auth_client.get("/auth/me")
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["consent_abandoned_at"] is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # POST /auth/change-password
 # ═══════════════════════════════════════════════════════════════════════════
 

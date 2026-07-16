@@ -77,6 +77,8 @@ def export_participants(
             "consent_given_at": _fmt(doc.get("consent_given_at")),
             "consent_agreed_at": _fmt(doc.get("consent_agreed_at")),
             "consent_declined_at": _fmt(doc.get("consent_declined_at")),
+            "consent_viewed_at": _fmt(doc.get("consent_viewed_at")),
+            "consent_abandoned_at": _fmt(doc.get("consent_abandoned_at")),
             "last_active_at": _fmt(doc.get("last_active_at")),
             "created_at": _fmt(doc.get("created_at")),
         })

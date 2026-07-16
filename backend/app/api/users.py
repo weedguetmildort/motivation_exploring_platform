@@ -37,6 +37,8 @@ def _to_summary(doc: dict) -> ParticipantSummary:
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         last_active_at=doc.get("last_active_at"),
         consent_declined_at=doc.get("consent_declined_at"),
+        consent_viewed_at=doc.get("consent_viewed_at"),
+        consent_abandoned_at=doc.get("consent_abandoned_at"),
         created_at=doc.get("created_at"),
     )
 

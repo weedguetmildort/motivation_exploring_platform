@@ -165,6 +165,24 @@ describe("MyReportsPage", () => {
     expect(screen.queryByPlaceholderText("Add a follow-up comment…")).not.toBeInTheDocument();
   });
 
+  it("preserves the comment draft when posting a comment fails", async () => {
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockGetMe.mockResolvedValue({ user: regularUser });
+    mockGetMyReports.mockResolvedValue([openReport]);
+    mockAddComment.mockRejectedValue(new Error("nope"));
+    render(<MyReportsPage />);
+
+    fireEvent.click(await screen.findByText("The submit button did nothing."));
+    const textarea = await screen.findByPlaceholderText("Add a follow-up comment…");
+    fireEvent.change(textarea, { target: { value: "Still broken." } });
+    fireEvent.click(screen.getByRole("button", { name: "Post comment" }));
+
+    await waitFor(() => expect(mockAddComment).toHaveBeenCalledWith("r1", "Still broken."));
+    await waitFor(() => expect(errSpy).toHaveBeenCalled());
+    expect((textarea as HTMLTextAreaElement).value).toBe("Still broken.");
+    errSpy.mockRestore();
+  });
+
   it("logs out and redirects to login when Logout is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: regularUser });
     mockGetMyReports.mockResolvedValue([]);

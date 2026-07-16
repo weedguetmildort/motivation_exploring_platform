@@ -1,4 +1,5 @@
 # backend/app/services/surveys.py
+import random
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 from bson.objectid import ObjectId
@@ -59,6 +60,20 @@ def _question_stage_for_stage(stage: SurveyStage) -> SurveyStage:
         SurveyStage.post_variant: SurveyStage.post_base,
         SurveyStage.complete: SurveyStage.complete,
     }[stage]
+
+
+def _seeded_shuffle(items: List, seed_str: str) -> List:
+    """Return a copy of ``items`` shuffled deterministically from ``seed_str``.
+
+    Each participant sees a stable, randomized question order: ``random.Random``
+    seeds strings via SHA-512, so the same seed always yields the same order
+    across processes (independent of PYTHONHASHSEED). Because it is a pure
+    function of the seed, the presented order is reproducible offline from the
+    seed alone if order-effect analysis is ever needed — nothing is stored.
+    """
+    shuffled = list(items)
+    random.Random(seed_str).shuffle(shuffled)
+    return shuffled
 
 # ---------- survey items (admin CRUD) ----------
 
@@ -193,6 +208,12 @@ def build_survey_state(db, user_id: str, user_email: str, stage: str) -> SurveyS
 
     # load items from question source stage
     items = list_survey_items(db, stage=question_stage, active_only=True)
+
+    # Randomize question order per participant to control for order/anchoring
+    # effects. Seed on the actual response `stage` (not question_stage) so that
+    # post_base and post_variant — which reuse the same question set — get
+    # different orders for the same participant. Stable across refreshes.
+    items = _seeded_shuffle(items, f"{user_id}:{stage}")
 
     # load or create attempt doc from actual response stage
     doc = _load_or_create_response_doc(db, user_id, user_email, stage)

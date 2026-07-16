@@ -90,6 +90,19 @@ describe("MarkdownMessage", () => {
     expect(container.querySelectorAll(".katex").length).toBeGreaterThan(0);
   });
 
+  it("normalizes a bracket-delimited [\\n...\\n] block into display math", () => {
+    const { container } = render(<MarkdownMessage content={"[\nx^2 + y^2\n]"} />);
+    // The [\n…\n] form is rewritten to $$…$$ and rendered as a display equation.
+    expect(container.querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it("collapses inline $...$ math that the model split across a newline", () => {
+    // remark-math only parses single-line inline math; without the collapse this
+    // would not render as math at all. Its presence proves the newline was folded.
+    const { container } = render(<MarkdownMessage content={"value is $a\nb$ today"} />);
+    expect(container.querySelector(".katex")).not.toBeNull();
+  });
+
   it("wraps a bare \\begin{align}...\\end{align} block in display math", () => {
     const content = "\\begin{align} a &= b \\\\ c &= d \\end{align}";
     const { container } = render(<MarkdownMessage content={content} />);

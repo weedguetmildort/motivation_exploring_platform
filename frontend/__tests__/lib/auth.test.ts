@@ -7,6 +7,8 @@ import {
   changePassword,
   recordConsentAgreement,
   recordConsentDecline,
+  recordConsentViewed,
+  sendConsentAbandonedBeacon,
 } from "../../lib/auth";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -118,6 +120,51 @@ describe("auth lib", () => {
         }),
       })
     );
+  });
+
+  it("recordConsentViewed posts to /auth/consent-viewed", async () => {
+    mockFetchOnce({ ok: true });
+
+    await recordConsentViewed();
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/auth/consent-viewed",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  describe("sendConsentAbandonedBeacon", () => {
+    const originalSendBeacon = (navigator as any).sendBeacon;
+
+    afterEach(() => {
+      (navigator as any).sendBeacon = originalSendBeacon;
+    });
+
+    it("uses navigator.sendBeacon (not fetch) when it is available", () => {
+      const beacon = jest.fn();
+      (navigator as any).sendBeacon = beacon;
+
+      sendConsentAbandonedBeacon();
+
+      expect(beacon).toHaveBeenCalledWith("/auth/consent-abandoned");
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it("falls back to a keepalive POST when sendBeacon is unavailable", () => {
+      (navigator as any).sendBeacon = undefined;
+      mockFetchOnce({ ok: true });
+
+      sendConsentAbandonedBeacon();
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/auth/consent-abandoned",
+        expect.objectContaining({
+          method: "POST",
+          keepalive: true,
+          credentials: "include",
+        })
+      );
+    });
   });
 
   describe("getMe", () => {
