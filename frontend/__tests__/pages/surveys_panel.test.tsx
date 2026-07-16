@@ -745,6 +745,75 @@ describe("SurveyPanelPage", () => {
     expect(await screen.findByText("Sparse select prompt")).toBeInTheDocument();
   });
 
+  it("renders likert items with missing scale/anchors using fallback defaults", async () => {
+    const noAnchors = { ...likertItem, id: "na", category: null, reverse_scored: true, required: false, scale: { min: 2, max: 6 } };
+    const noScale = { ...likertItem, id: "ns", prompt: "No scale item", scale: null };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([noAnchors, noScale]);
+    render(<SurveyPanelPage />);
+
+    await screen.findByText("No scale item");
+    // noAnchors: explicit 2–6 bounds, default anchor labels, reverse (R) + optional
+    expect(screen.getByText(/Scale: 2–6 • Strongly disagree ↔ Strongly agree • \(R\) • optional/)).toBeInTheDocument();
+    // noScale: min/max fall back to 1–5
+    expect(screen.getByText(/Scale: 1–5/)).toBeInTheDocument();
+  });
+
+  it("edits a likert item that has no anchors and saves with fallback anchors", async () => {
+    const noAnchors = { ...likertItem, id: "na", category: null, scale: { min: 2, max: 6 } };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([noAnchors]);
+      if (method === "PUT") return Promise.resolve({ ...noAnchors });
+      return Promise.resolve(undefined);
+    });
+
+    render(<SurveyPanelPage />);
+    await screen.findByText("I feel motivated to learn.");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith("/api/surveys/items/na", expect.objectContaining({ method: "PUT" })),
+    );
+    const putCall = mockApiFetch.mock.calls.find(([, init]) => init?.method === "PUT");
+    const body = JSON.parse(putCall![1].body);
+    expect(body.scale.anchors).toEqual(["Strongly disagree", "Strongly agree"]);
+    expect(body.category).toBeNull();
+  });
+
+  it("renders a single-select item that has no options array", async () => {
+    const noOptions = { ...singleSelectItem, id: "no", prompt: "No options item", options: null };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([noOptions]);
+    render(<SurveyPanelPage />);
+
+    expect(await screen.findByText("No options item")).toBeInTheDocument();
+  });
+
+  it("updates only the edited item when multiple are present", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      const method = init?.method ?? "GET";
+      if (method === "GET") return Promise.resolve([likertItem, singleSelectItem]);
+      if (method === "PUT") return Promise.resolve({ ...singleSelectItem, prompt: "Edited single" });
+      return Promise.resolve(undefined);
+    });
+
+    render(<SurveyPanelPage />);
+    await screen.findByText("Which best describes your experience?");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(mockApiFetch).toHaveBeenCalledWith("/api/surveys/items/item2", expect.objectContaining({ method: "PUT" })),
+    );
+    expect(screen.getByText("I feel motivated to learn.")).toBeInTheDocument();
+    expect(await screen.findByText("Edited single")).toBeInTheDocument();
+  });
+
   it("navigates to the dashboard when Back to Dashboard is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     mockApiFetch.mockResolvedValue([]);

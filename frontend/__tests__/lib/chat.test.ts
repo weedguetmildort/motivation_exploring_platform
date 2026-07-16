@@ -261,6 +261,58 @@ describe("sendChat", () => {
     await expect(sendChat("base", null, "hi")).rejects.toThrow("Upstream failure");
   });
 
+  it("throws a default message when the error event has no detail", async () => {
+    const chunks = [sseChunk([{ type: "error" }])];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    await expect(sendChat("base", null, "hi")).rejects.toThrow("Upstream AI request failed");
+  });
+
+  it("tolerates a token event with no content and a done event with no conversation id", async () => {
+    const chunks = [
+      sseChunk([{ type: "token" }]),                 // no content → defaults to ""
+      sseChunk([{ type: "done" }]),                  // no conversation_id → keeps the passed one
+    ];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    const onDone = jest.fn();
+    const result = await sendChat("base", "conv-init", "hi", [], { onDone });
+
+    expect(result.conversationId).toBe("conv-init");
+    expect(onDone).toHaveBeenCalledWith([""], "conv-init");
+  });
+
+  it("tolerates a citations event with no citations field", async () => {
+    const chunks = [
+      sseChunk([{ type: "token", content: "Answer" }]),
+      sseChunk([{ type: "citations" }]),             // no citations array → defaults to []
+      sseChunk([{ type: "done", conversation_id: "conv-c" }]),
+    ];
+    (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
+
+    const result = await sendChat("links", null, "hi");
+
+    expect(result.replies).toEqual(["Answer"]);
+  });
+
+  it("falls back to the response message, then status text, on a failed request", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      json: async () => ({ message: "message only" }),
+    });
+    await expect(sendChat("base", null, "hi")).rejects.toThrow("message only");
+
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      json: async () => ({}),
+    });
+    await expect(sendChat("base", null, "hi")).rejects.toThrow("400 Bad Request");
+  });
+
   it("sends answer_incorrectly and answer_choices in the request body", async () => {
     const chunks = [sseChunk([{ type: "done", conversation_id: "conv-6" }])];
     (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));

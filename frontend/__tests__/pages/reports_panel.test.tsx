@@ -201,6 +201,83 @@ describe("ReportsPanelPage", () => {
     expect(screen.getByRole("button", { name: "Post comment" })).toBeDisabled();
   });
 
+  it("renders unknown categories, plural comment counts, and non-admin comments", async () => {
+    const richReport = {
+      id: "r9",
+      user_email: "rich@example.com",
+      quiz_id: null,
+      question_id: null,
+      category: "weird_unknown_category" as any,
+      description: "Rich report.",
+      status: "in_progress" as const,
+      comments: [
+        { id: "ca", author_email: "admin@example.com", is_admin: true, body: "admin note", created_at: "2024-01-05T00:00:00.000Z" },
+        { id: "cb", author_email: "user@example.com", is_admin: false, body: "user note", created_at: "2024-01-06T00:00:00.000Z" },
+      ],
+      created_at: "2024-01-05T00:00:00.000Z",
+      updated_at: "2024-01-06T00:00:00.000Z",
+    };
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockGetAllReports.mockResolvedValue([richReport]);
+    render(<ReportsPanelPage />);
+
+    // Unknown category falls back to the raw value; plural comment count in header.
+    expect(await screen.findByText("weird_unknown_category")).toBeInTheDocument();
+    expect(screen.getByText("2 comments")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Rich report."));
+    expect(await screen.findByText("admin note")).toBeInTheDocument();
+    expect(screen.getByText("user note")).toBeInTheDocument();
+  });
+
+  it("updates only the changed report when multiple are shown", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockGetAllReports.mockResolvedValue([openReport, resolvedReportWithComment]);
+    mockUpdateStatus.mockResolvedValue({ ...openReport, status: "resolved" });
+    render(<ReportsPanelPage />);
+
+    fireEvent.click(await screen.findByText("The submit button did nothing."));
+    fireEvent.change(await screen.findByDisplayValue("Open"), { target: { value: "resolved" } });
+
+    await waitFor(() => expect(mockUpdateStatus).toHaveBeenCalledWith("r1", "resolved"));
+    expect(screen.getByText("Just a note.")).toBeInTheDocument(); // other report kept by the map
+  });
+
+  it("keeps the status control unchanged when a status update fails", async () => {
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockGetAllReports.mockResolvedValue([openReport]);
+    mockUpdateStatus.mockRejectedValue(new Error("nope"));
+    render(<ReportsPanelPage />);
+
+    fireEvent.click(await screen.findByText("The submit button did nothing."));
+    fireEvent.change(await screen.findByDisplayValue("Open"), { target: { value: "in_progress" } });
+
+    await waitFor(() => expect(mockUpdateStatus).toHaveBeenCalledWith("r1", "in_progress"));
+    // Failure must not advance the UI — the controlled select still shows "Open".
+    expect(screen.getByDisplayValue("Open")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("In Progress")).not.toBeInTheDocument();
+    errSpy.mockRestore();
+  });
+
+  it("preserves the comment draft when posting a comment fails", async () => {
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockGetAllReports.mockResolvedValue([openReport]);
+    mockAddComment.mockRejectedValue(new Error("nope"));
+    render(<ReportsPanelPage />);
+
+    fireEvent.click(await screen.findByText("The submit button did nothing."));
+    const textarea = await screen.findByPlaceholderText("Add a comment…");
+    fireEvent.change(textarea, { target: { value: "On it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Post comment" }));
+
+    await waitFor(() => expect(mockAddComment).toHaveBeenCalledWith("r1", "On it."));
+    // The draft is kept so the user doesn't lose their text on a transient failure.
+    expect((textarea as HTMLTextAreaElement).value).toBe("On it.");
+    errSpy.mockRestore();
+  });
+
   it("logs out and redirects to login when Logout is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     mockGetAllReports.mockResolvedValue([]);
