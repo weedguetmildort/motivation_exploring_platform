@@ -1,6 +1,14 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ConsentPage from "../../pages/consent";
-import { getMe, invalidateMeCache, logout, recordConsentAgreement, recordConsentDecline } from "../../lib/auth";
+import {
+  getMe,
+  invalidateMeCache,
+  logout,
+  recordConsentAgreement,
+  recordConsentDecline,
+  recordConsentViewed,
+  sendConsentAbandonedBeacon,
+} from "../../lib/auth";
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -14,6 +22,8 @@ jest.mock("../../lib/auth", () => ({
   invalidateMeCache: jest.fn(),
   recordConsentAgreement: jest.fn(),
   recordConsentDecline: jest.fn(),
+  recordConsentViewed: jest.fn(),
+  sendConsentAbandonedBeacon: jest.fn(),
 }));
 
 const mockGetMe = getMe as jest.Mock;
@@ -21,6 +31,8 @@ const mockLogout = logout as jest.Mock;
 const mockInvalidateMeCache = invalidateMeCache as jest.Mock;
 const mockRecordConsentAgreement = recordConsentAgreement as jest.Mock;
 const mockRecordConsentDecline = recordConsentDecline as jest.Mock;
+const mockRecordConsentViewed = recordConsentViewed as jest.Mock;
+const mockSendConsentAbandonedBeacon = sendConsentAbandonedBeacon as jest.Mock;
 
 const authedUser = { id: "1", email: "user@example.com", is_admin: false };
 
@@ -35,6 +47,9 @@ describe("ConsentPage", () => {
     mockRecordConsentAgreement.mockResolvedValue({ ok: true });
     mockRecordConsentDecline.mockReset();
     mockRecordConsentDecline.mockResolvedValue({ ok: true });
+    mockRecordConsentViewed.mockReset();
+    mockRecordConsentViewed.mockResolvedValue({ ok: true });
+    mockSendConsentAbandonedBeacon.mockReset();
   });
 
   it("shows a loading state before the session check resolves", () => {
@@ -167,5 +182,78 @@ describe("ConsentPage", () => {
 
     await waitFor(() => expect(mockLogout).toHaveBeenCalled());
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  // ── Funnel telemetry (steps 5 and 6c) ─────────────────────────────────────
+
+  it("records that the consent page was viewed once authenticated (step 5)", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    await screen.findByText("Research Consent Form");
+    await waitFor(() => expect(mockRecordConsentViewed).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not record a view when the session check fails", async () => {
+    mockGetMe.mockRejectedValue(new Error("not authenticated"));
+    render(<ConsentPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+    expect(mockRecordConsentViewed).not.toHaveBeenCalled();
+  });
+
+  it("renders even if recording the view fails (telemetry is best-effort)", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockRecordConsentViewed.mockRejectedValue(new Error("network error"));
+    render(<ConsentPage />);
+
+    // The form still appears despite the rejected telemetry write.
+    expect(await screen.findByText("Research Consent Form")).toBeInTheDocument();
+  });
+
+  it("beacons abandonment when the page is hidden before the user responds (step 6c)", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    await screen.findByText("Research Consent Form");
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not beacon abandonment before the session check resolves", () => {
+    mockGetMe.mockReturnValue(new Promise(() => {})); // never resolves
+    render(<ConsentPage />);
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).not.toHaveBeenCalled();
+  });
+
+  it("does not beacon abandonment after the user agrees", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    const agreeButton = await screen.findByRole("button", { name: "I agree to participate" });
+    fireEvent.click(agreeButton);
+    await waitFor(() => expect(mockRecordConsentAgreement).toHaveBeenCalled());
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).not.toHaveBeenCalled();
+  });
+
+  it("does not beacon abandonment after the user declines", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockLogout.mockResolvedValue(undefined);
+    render(<ConsentPage />);
+
+    const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
+    fireEvent.click(declineButton);
+    await waitFor(() => expect(mockRecordConsentDecline).toHaveBeenCalled());
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).not.toHaveBeenCalled();
   });
 });

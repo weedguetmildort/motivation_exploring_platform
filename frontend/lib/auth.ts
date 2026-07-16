@@ -20,6 +20,8 @@ export type User = {
   consent_text?: string;
   consent_agreed_at?: string;
   consent_declined_at?: string;
+  consent_viewed_at?: string;
+  consent_abandoned_at?: string;
   last_active_at?: string;
   is_admin: boolean;
   assigned_var?: string | null;
@@ -106,6 +108,29 @@ export async function recordConsentDecline(consentText: string) {
     method: "POST",
     body: JSON.stringify({ consent_text: consentText }),
   });
+}
+
+// Funnel telemetry (step 5): the participant reached the consent page.
+export async function recordConsentViewed() {
+  return apiFetch<{ ok: boolean }>("/auth/consent-viewed", { method: "POST" });
+}
+
+// Funnel telemetry (step 6c): the participant is leaving the consent page
+// without agreeing/declining. Uses navigator.sendBeacon so the request survives
+// the page being torn down (tab close, navigation); the session cookie is sent
+// automatically for this same-origin request. Falls back to a keepalive fetch
+// where sendBeacon is unavailable. Fire-and-forget — never throws.
+export function sendConsentAbandonedBeacon() {
+  const url = "/auth/consent-abandoned";
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      navigator.sendBeacon(url);
+      return;
+    }
+    fetch(url, { method: "POST", credentials: "include", keepalive: true }).catch(() => {});
+  } catch {
+    /* on unload there is nothing more we can do */
+  }
 }
 
 export async function changePassword(currentPassword: string, newPassword: string) {

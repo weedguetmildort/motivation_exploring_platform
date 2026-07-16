@@ -31,6 +31,9 @@ const VARIANT_LABELS: Record<string, { label: string; color: string }> = {
   links:     { label: "Links",      color: "bg-green-100 text-green-800" },
 };
 
+// The three study conditions ("cases"), in a fixed display order.
+const VARIANT_ORDER: Participant["assigned_var"][] = ["followup", "double", "links"];
+
 const STEPS = [
   { key: "demographics_completed",        label: "Demo" },
   { key: "survey_pre_base_completed",     label: "Pre-Survey" },
@@ -154,6 +157,20 @@ export default function ParticipantsPanelPage() {
     { key: "declined", label: `Declined (${counts.declined})` },
   ];
 
+  // Cases per study condition: how many participants we have in each arm.
+  // "Enrolled" excludes anyone who declined consent (not a usable case);
+  // "complete" is those who finished the full study.
+  const caseCounts = VARIANT_ORDER.map((variant) => {
+    const inVariant = participants.filter((p) => p.assigned_var === variant);
+    return {
+      variant,
+      label: VARIANT_LABELS[variant].label,
+      color: VARIANT_LABELS[variant].color,
+      enrolled: inVariant.filter((p) => p.consent_declined_at == null).length,
+      complete: inVariant.filter((p) => p.survey_stage === "complete").length,
+    };
+  });
+
   return (
     <div className="min-h-screen bg-gray-50">
       <PageHeader
@@ -179,6 +196,29 @@ export default function ParticipantsPanelPage() {
               {t.label}
             </button>
           ))}
+        </div>
+
+        {/* Cases by condition — usable N per study arm */}
+        <div
+          role="group"
+          aria-label="Cases by condition"
+          className="mb-4 rounded-lg border bg-white px-4 py-3 shadow-sm"
+        >
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Cases by condition
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {caseCounts.map((c) => (
+              <div key={c.variant} className="flex items-center gap-2 text-sm">
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.color}`}>
+                  {c.label}
+                </span>
+                <span className="text-gray-700">{c.enrolled} enrolled</span>
+                <span className="text-gray-300">·</span>
+                <span className="text-gray-700">{c.complete} complete</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         {loading && <p className="text-gray-500">Loading…</p>}

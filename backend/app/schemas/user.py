@@ -57,6 +57,11 @@ class UserPublic(BaseModel):
     consent_text: Optional[str] = None
     consent_agreed_at: Optional[datetime] = None
     consent_declined_at: Optional[datetime] = None
+    # Funnel telemetry: when the participant first reached the consent page
+    # (viewed) and, if they left without agreeing/declining, when they did so
+    # (abandoned — e.g. closed the tab). See app/api/auth.py consent endpoints.
+    consent_viewed_at: Optional[datetime] = None
+    consent_abandoned_at: Optional[datetime] = None
     last_active_at: Optional[datetime] = None
     assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
@@ -85,6 +90,8 @@ class ParticipantSummary(BaseModel):
     survey_post_variant_completed: bool = False
     last_active_at: Optional[datetime] = None
     consent_declined_at: Optional[datetime] = None
+    consent_viewed_at: Optional[datetime] = None
+    consent_abandoned_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
 

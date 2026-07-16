@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import ParticipantsPanelPage from "../../pages/participants_panel";
 import { getMe, logout } from "../../lib/auth";
 import { apiFetch } from "../../lib/fetcher";
@@ -23,6 +23,14 @@ const mockLogout  = logout  as jest.Mock;
 const mockApiFetch = apiFetch as jest.Mock;
 
 const adminUser = { id: "1", email: "admin@example.com", is_admin: true };
+
+// Scope a query to a single participant's card. Variant labels (Follow-up etc.)
+// also appear in the "Cases by condition" summary, so bare getByText would be
+// ambiguous — scope to the card that contains the participant's name.
+function participantCard(name: string) {
+  const card = screen.getByText(name).closest("div.rounded-lg") as HTMLElement;
+  return within(card);
+}
 
 const now = new Date().toISOString();
 const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
@@ -127,7 +135,7 @@ describe("ParticipantsPanelPage", () => {
     expect(await screen.findByText("Participants Panel")).toBeInTheDocument();
     expect(await screen.findByText("Alice Smith")).toBeInTheDocument();
     expect(screen.getByText("active@test.edu")).toBeInTheDocument();
-    expect(screen.getByText("Links")).toBeInTheDocument();
+    expect(participantCard("Alice Smith").getByText("Links")).toBeInTheDocument();
   });
 
   it("shows a loading indicator while fetching participants", async () => {
@@ -162,9 +170,9 @@ describe("ParticipantsPanelPage", () => {
     render(<ParticipantsPanelPage />);
 
     await screen.findByText("Alice Smith");
-    expect(screen.getByText("Links")).toBeInTheDocument();
-    expect(screen.getByText("Follow-up")).toBeInTheDocument();
-    expect(screen.getByText("Dual-Agent")).toBeInTheDocument();
+    expect(participantCard("Alice Smith").getByText("Links")).toBeInTheDocument();
+    expect(participantCard("Bob Jones").getByText("Follow-up")).toBeInTheDocument();
+    expect(participantCard("Carol White").getByText("Dual-Agent")).toBeInTheDocument();
   });
 
   it("shows Complete and Declined badges on the appropriate cards", async () => {
@@ -283,5 +291,62 @@ describe("ParticipantsPanelPage", () => {
 
     await waitFor(() => expect(mockLogout).toHaveBeenCalled());
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  describe("cases by condition", () => {
+    // Roster with distinct per-condition tallies:
+    //   followup: 2 enrolled, 1 complete
+    //   double:   1 enrolled (+1 declined, excluded), 0 complete
+    //   links:    1 enrolled, 0 complete
+    const followupComplete = { ...completeParticipant, id: "f1", assigned_var: "followup", survey_stage: "complete" };
+    const followupActive   = { ...activeParticipant,   id: "f2", assigned_var: "followup", survey_stage: "post_base" };
+    const doubleActive     = { ...activeParticipant,   id: "d1", assigned_var: "double" };
+    const doubleDeclined   = { ...declinedParticipant, id: "d2", assigned_var: "double" };
+    const linksActive      = { ...activeParticipant,   id: "l1", assigned_var: "links" };
+
+    function conditionRow(label: string) {
+      const card = screen.getByRole("group", { name: "Cases by condition" });
+      const row = within(card).getByText(label).closest("div") as HTMLElement;
+      return within(row);
+    }
+
+    beforeEach(() => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockResolvedValue([
+        followupComplete, followupActive, doubleActive, doubleDeclined, linksActive,
+      ]);
+    });
+
+    it("shows enrolled and complete counts per study condition", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+
+      expect(conditionRow("Follow-up").getByText("2 enrolled")).toBeInTheDocument();
+      expect(conditionRow("Follow-up").getByText("1 complete")).toBeInTheDocument();
+
+      expect(conditionRow("Links").getByText("1 enrolled")).toBeInTheDocument();
+      expect(conditionRow("Links").getByText("0 complete")).toBeInTheDocument();
+    });
+
+    it("excludes a participant who declined consent from the enrolled count", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+
+      // Dual-Agent has one active + one declined → 1 enrolled, not 2.
+      expect(conditionRow("Dual-Agent").getByText("1 enrolled")).toBeInTheDocument();
+      expect(conditionRow("Dual-Agent").getByText("0 complete")).toBeInTheDocument();
+    });
+
+    it("shows every condition even when the tab filter hides participant cards", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+
+      // Switch to the Declined tab (only the declined double participant shows).
+      fireEvent.click(screen.getByRole("button", { name: /Declined/ }));
+
+      // Case counts are computed from the full roster, not the filtered view.
+      expect(conditionRow("Follow-up").getByText("2 enrolled")).toBeInTheDocument();
+      expect(conditionRow("Links").getByText("1 enrolled")).toBeInTheDocument();
+    });
   });
 });

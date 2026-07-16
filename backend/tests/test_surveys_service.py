@@ -538,6 +538,66 @@ class TestBuildSurveyState:
         assert state.answers[0].shown_at == now.isoformat()
 
 
+# ── build_survey_state: per-participant randomization ─────────────────────────
+
+def _likert_item_doc(oid: ObjectId, order: int) -> dict:
+    return {
+        "_id": oid, "stage": "pre_quiz", "prompt": f"Q{order}", "type": "likert",
+        "required": True, "order": order, "active": True, "category": None,
+        "reverse_scored": False,
+        "scale": {"min": 1, "max": 5, "anchors": None}, "options": None,
+    }
+
+
+class TestBuildSurveyStateRandomization:
+    def _run(self, mock_db, mock_col, item_docs, user_id="user1", stage="pre_quiz"):
+        mock_col.find.return_value.sort.return_value = item_docs
+        mock_col.find_one.return_value = {
+            "_id": ObjectId(), "user_id": user_id, "user_email": "u@test.edu",
+            "stage": stage, "status": "in_progress", "answers": [],
+            "started_at": datetime.now(timezone.utc), "completed_at": None,
+            "updated_at": datetime.now(timezone.utc),
+        }
+        state = build_survey_state(mock_db, user_id, "u@test.edu", stage)
+        return [i.id for i in state.items]
+
+    def test_preserves_the_full_item_set(self, mock_db, mock_col):
+        oids = [ObjectId() for _ in range(6)]
+        docs = [_likert_item_doc(oid, i) for i, oid in enumerate(oids)]
+
+        order = self._run(mock_db, mock_col, docs)
+
+        # Every item is still present exactly once — nothing dropped or duplicated.
+        assert sorted(order) == sorted(str(o) for o in oids)
+        assert len(order) == 6
+
+    def test_order_is_deterministic_for_same_user_and_stage(self, mock_db, mock_col):
+        oids = [ObjectId() for _ in range(6)]
+        docs = [_likert_item_doc(oid, i) for i, oid in enumerate(oids)]
+
+        first = self._run(mock_db, mock_col, docs, user_id="userX", stage="pre_quiz")
+        second = self._run(mock_db, mock_col, docs, user_id="userX", stage="pre_quiz")
+
+        # A refresh must not reshuffle: same seed → identical order.
+        assert first == second
+
+    def test_order_varies_across_users_and_stages(self, mock_db, mock_col):
+        oids = [ObjectId() for _ in range(6)]
+        docs = [_likert_item_doc(oid, i) for i, oid in enumerate(oids)]
+
+        orders = {
+            tuple(self._run(mock_db, mock_col, docs, user_id="userA", stage="pre_quiz")),
+            tuple(self._run(mock_db, mock_col, docs, user_id="userB", stage="pre_quiz")),
+            # Same user, different stage — post_base/post_variant reuse the same
+            # question set and must get different orders (seed includes stage).
+            tuple(self._run(mock_db, mock_col, docs, user_id="userA", stage="post_base")),
+            tuple(self._run(mock_db, mock_col, docs, user_id="userA", stage="post_variant")),
+        }
+
+        # Distinct seeds should not all collapse to one order.
+        assert len(orders) > 1
+
+
 # ── record_item_shown ────────────────────────────────────────────────────────
 
 class TestRecordItemShown:
