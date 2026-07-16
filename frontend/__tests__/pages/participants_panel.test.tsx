@@ -319,7 +319,9 @@ describe("ParticipantsPanelPage", () => {
 
     it("shows enrolled and complete counts per study condition", async () => {
       render(<ParticipantsPanelPage />);
-      await screen.findByText("Participants Panel");
+      // Wait for the roster to load before reading counts — the card renders
+      // immediately with zeros and only fills in once /api/users resolves.
+      await screen.findByText("Bob Jones");
 
       expect(conditionRow("Follow-up").getByText("2 enrolled")).toBeInTheDocument();
       expect(conditionRow("Follow-up").getByText("1 complete")).toBeInTheDocument();
@@ -330,7 +332,7 @@ describe("ParticipantsPanelPage", () => {
 
     it("excludes a participant who declined consent from the enrolled count", async () => {
       render(<ParticipantsPanelPage />);
-      await screen.findByText("Participants Panel");
+      await screen.findByText("Bob Jones");
 
       // Dual-Agent has one active + one declined → 1 enrolled, not 2.
       expect(conditionRow("Dual-Agent").getByText("1 enrolled")).toBeInTheDocument();
@@ -339,7 +341,8 @@ describe("ParticipantsPanelPage", () => {
 
     it("shows every condition even when the tab filter hides participant cards", async () => {
       render(<ParticipantsPanelPage />);
-      await screen.findByText("Participants Panel");
+      // Load the roster first (on the default "all" tab) before filtering.
+      await screen.findByText("Bob Jones");
 
       // Switch to the Declined tab (only the declined double participant shows).
       fireEvent.click(screen.getByRole("button", { name: /Declined/ }));
