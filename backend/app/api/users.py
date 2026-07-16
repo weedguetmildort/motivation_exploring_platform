@@ -3,9 +3,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from ..schemas.user import UserPublic, ParticipantSummary, AssignedVar, SurveyStage
+from ..schemas.user import (
+    UserPublic,
+    ParticipantSummary,
+    AssignedVar,
+    SurveyStage,
+    NextAssignment,
+    NextAssignmentUpdate,
+)
 from ..api.auth import get_current_user
-from ..services.users import get_users_collection
+from ..services.users import (
+    get_users_collection,
+    peek_next_assignment,
+    set_next_assignment_override,
+)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -51,6 +62,29 @@ def list_participants(
     col = get_users_collection(request.app.state.db)
     docs = list(col.find({"is_admin": False}, sort=[("created_at", -1)]))
     return [_to_summary(doc) for doc in docs]
+
+
+# NOTE: these must be declared before "/{user_id}" or that route would capture
+# "next-assignment" as a user_id (→ InvalidId → 404).
+@router.get("/next-assignment", response_model=NextAssignment)
+def get_next_assignment(
+    request: Request,
+    _: UserPublic = Depends(_require_admin),
+):
+    col = get_users_collection(request.app.state.db)
+    return peek_next_assignment(col)
+
+
+@router.put("/next-assignment", response_model=NextAssignment)
+def put_next_assignment(
+    body: NextAssignmentUpdate,
+    request: Request,
+    _: UserPublic = Depends(_require_admin),
+):
+    col = get_users_collection(request.app.state.db)
+    variant = body.variant.value if body.variant is not None else None
+    set_next_assignment_override(col, variant)
+    return peek_next_assignment(col)
 
 
 @router.get("/{user_id}", response_model=ParticipantSummary)

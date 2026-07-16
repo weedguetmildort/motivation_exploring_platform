@@ -1,6 +1,6 @@
 # backend/app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -115,3 +115,16 @@ class UserDBDoc(BaseModel):
     quiz_variant_completed: bool = False
     survey_post_variant_completed: bool = False
     survey_stage: SurveyStage = SurveyStage.pre_base
+
+
+# What condition the next new participant will be assigned, and why.
+# "override" = an admin pinned it (one-shot); "rotation" = normal round-robin.
+class NextAssignment(BaseModel):
+    next: AssignedVar
+    source: Literal["override", "rotation"]
+
+
+# Admin request to pin the next assignment. `null` clears the override and
+# returns to round-robin rotation.
+class NextAssignmentUpdate(BaseModel):
+    variant: Optional[AssignedVar] = None

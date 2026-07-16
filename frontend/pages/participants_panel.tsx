@@ -34,6 +34,11 @@ const VARIANT_LABELS: Record<string, { label: string; color: string }> = {
 // The three study conditions ("cases"), in a fixed display order.
 const VARIANT_ORDER: Participant["assigned_var"][] = ["followup", "double", "links"];
 
+type NextAssignment = {
+  next: Participant["assigned_var"];
+  source: "override" | "rotation";
+};
+
 const STEPS = [
   { key: "demographics_completed",        label: "Demo" },
   { key: "survey_pre_base_completed",     label: "Pre-Survey" },
@@ -90,6 +95,8 @@ export default function ParticipantsPanelPage() {
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [activeTab, setActiveTab]     = useState<Tab>("all");
+  const [nextAssignment, setNextAssignment] = useState<NextAssignment | null>(null);
+  const [assignmentBusy, setAssignmentBusy] = useState(false);
 
   // Auth gate
   useEffect(() => {
@@ -120,8 +127,31 @@ export default function ParticipantsPanelPage() {
       .then((data) => { if (!cancel) setParticipants(data); })
       .catch(() => { if (!cancel) setError("Failed to load participants."); })
       .finally(() => { if (!cancel) setLoading(false); });
+
+    // Fetch the next-assignment indicator independently — a failure here must
+    // never block the roster from rendering.
+    apiFetch<NextAssignment>("/api/users/next-assignment")
+      .then((data) => { if (!cancel) setNextAssignment(data); })
+      .catch(() => { /* leave the indicator hidden on failure */ });
+
     return () => { cancel = true; };
   }, [user]);
+
+  async function updateNextAssignment(variant: Participant["assigned_var"] | null) {
+    if (assignmentBusy) return;
+    setAssignmentBusy(true);
+    try {
+      const updated = await apiFetch<NextAssignment>("/api/users/next-assignment", {
+        method: "PUT",
+        body: JSON.stringify({ variant }),
+      });
+      setNextAssignment(updated);
+    } catch {
+      alert("Failed to update the next assignment.");
+    } finally {
+      setAssignmentBusy(false);
+    }
+  }
 
   async function onLogout() {
     try { await logout(); } finally { router.replace("/login"); }
@@ -218,6 +248,51 @@ export default function ParticipantsPanelPage() {
                 <span className="text-gray-700">{c.complete} complete</span>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Next sign-up — pin the next case to even out the spread (one-shot) */}
+        <div
+          role="group"
+          aria-label="Next sign-up"
+          className="mb-4 rounded-lg border bg-white px-4 py-3 shadow-sm"
+        >
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Next sign-up
+            </span>
+            {nextAssignment?.next && (
+              <span className="text-sm text-gray-700">
+                {"→ "}
+                <span
+                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                    VARIANT_LABELS[nextAssignment.next]?.color ?? "bg-gray-100 text-gray-700"
+                  }`}
+                >
+                  {VARIANT_LABELS[nextAssignment.next]?.label ?? nextAssignment.next}
+                </span>{" "}
+                <span className="text-gray-400">({nextAssignment.source})</span>
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {VARIANT_ORDER.map((v) => (
+              <button
+                key={v}
+                onClick={() => updateNextAssignment(v)}
+                disabled={assignmentBusy}
+                className="rounded-full border px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+              >
+                Set {VARIANT_LABELS[v].label}
+              </button>
+            ))}
+            <button
+              onClick={() => updateNextAssignment(null)}
+              disabled={assignmentBusy}
+              className="rounded-full border px-3 py-1 text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-60"
+            >
+              Reset to rotation
+            </button>
           </div>
         </div>
 

@@ -352,4 +352,88 @@ describe("ParticipantsPanelPage", () => {
       expect(conditionRow("Links").getByText("1 enrolled")).toBeInTheDocument();
     });
   });
+
+  describe("next sign-up assignment", () => {
+    // Route apiFetch by URL: the roster for /api/users, the indicator for
+    // /api/users/next-assignment (PUT echoes back the resulting state).
+    function mockUsersApi(
+      participants: unknown[],
+      initialNext: { next: string; source: string },
+    ) {
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        if (url.includes("next-assignment")) {
+          if (init?.method === "PUT") {
+            const body = JSON.parse(init.body);
+            return Promise.resolve(
+              body.variant
+                ? { next: body.variant, source: "override" }
+                : { next: "followup", source: "rotation" },
+            );
+          }
+          return Promise.resolve(initialNext);
+        }
+        return Promise.resolve(participants);
+      });
+    }
+
+    function nextGroup() {
+      return within(screen.getByRole("group", { name: "Next sign-up" }));
+    }
+
+    it("shows the current next-assignment indicator", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockUsersApi([activeParticipant], { next: "followup", source: "rotation" });
+      render(<ParticipantsPanelPage />);
+
+      await screen.findByText("Participants Panel");
+      expect(await nextGroup().findByText("(rotation)")).toBeInTheDocument();
+      expect(nextGroup().getByText("Follow-up")).toBeInTheDocument();
+    });
+
+    it("pins the next case when a condition button is clicked", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockUsersApi([activeParticipant], { next: "followup", source: "rotation" });
+      render(<ParticipantsPanelPage />);
+
+      await screen.findByText("Participants Panel");
+      await nextGroup().findByText("(rotation)");
+
+      fireEvent.click(nextGroup().getByRole("button", { name: "Set Links" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/users/next-assignment",
+          expect.objectContaining({
+            method: "PUT",
+            body: JSON.stringify({ variant: "links" }),
+          }),
+        ),
+      );
+      // The indicator reflects the pinned override returned by the PUT.
+      expect(await nextGroup().findByText("(override)")).toBeInTheDocument();
+      expect(nextGroup().getByText("Links")).toBeInTheDocument();
+    });
+
+    it("clears the override with Reset to rotation", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockUsersApi([activeParticipant], { next: "double", source: "override" });
+      render(<ParticipantsPanelPage />);
+
+      await screen.findByText("Participants Panel");
+      await nextGroup().findByText("(override)");
+
+      fireEvent.click(nextGroup().getByRole("button", { name: "Reset to rotation" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/users/next-assignment",
+          expect.objectContaining({
+            method: "PUT",
+            body: JSON.stringify({ variant: null }),
+          }),
+        ),
+      );
+      expect(await nextGroup().findByText("(rotation)")).toBeInTheDocument();
+    });
+  });
 });

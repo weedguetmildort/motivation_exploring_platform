@@ -61,21 +61,71 @@ def ensure_indexes(users: Collection) -> None:
     users.create_index("email", unique=True)
 
 
+_ASSIGNED_VARS = [
+    AssignedVar.followup.value,
+    AssignedVar.double.value,
+    AssignedVar.links.value,
+]
+
+_NEXT_OVERRIDE_ID = "next_assignment_override"
+_ROUND_ROBIN_ID = "user_signup_round_robin"
+
+
 def _next_assigned_var(users: Collection) -> str:
-    assigned_vars = [
-        AssignedVar.followup.value,
-        AssignedVar.double.value,
-        AssignedVar.links.value,
-    ]
     counters = users.database["counters"]
     counter_doc = counters.find_one_and_update(
-        {"_id": "user_signup_round_robin"},
+        {"_id": _ROUND_ROBIN_ID},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
     seq = int(counter_doc.get("seq", 1))
-    return assigned_vars[(seq - 1) % len(assigned_vars)]
+    return _ASSIGNED_VARS[(seq - 1) % len(_ASSIGNED_VARS)]
+
+
+def set_next_assignment_override(users: Collection, variant: Optional[str]) -> None:
+    """Admin control: force the next sign-up into ``variant`` (one-shot), or
+    clear the override with ``None`` to fall back to round-robin rotation."""
+    counters = users.database["counters"]
+    counters.update_one(
+        {"_id": _NEXT_OVERRIDE_ID},
+        {"$set": {"variant": variant}},
+        upsert=True,
+    )
+
+
+def _consume_next_override(users: Collection) -> Optional[str]:
+    """Atomically claim and clear a pending one-shot override, if any.
+
+    Uses find_one_and_update so two concurrent sign-ups can't both claim it —
+    only the first sees a non-null ``variant``.
+    """
+    counters = users.database["counters"]
+    doc = counters.find_one_and_update(
+        {"_id": _NEXT_OVERRIDE_ID, "variant": {"$ne": None}},
+        {"$set": {"variant": None}},
+        return_document=ReturnDocument.BEFORE,
+    )
+    if doc and doc.get("variant"):
+        return doc["variant"]
+    return None
+
+
+def peek_next_assignment(users: Collection) -> dict:
+    """What condition the next sign-up will receive, without consuming anything.
+
+    Returns the pending override if set, else the value round-robin would hand
+    out next (derived from the current counter without incrementing it).
+    """
+    counters = users.database["counters"]
+
+    override = counters.find_one({"_id": _NEXT_OVERRIDE_ID})
+    if override and override.get("variant"):
+        return {"next": override["variant"], "source": "override"}
+
+    counter = counters.find_one({"_id": _ROUND_ROBIN_ID})
+    seq = int(counter.get("seq", 0)) if counter else 0
+    return {"next": _ASSIGNED_VARS[seq % len(_ASSIGNED_VARS)], "source": "rotation"}
 
 
 def create_user(
@@ -114,7 +164,9 @@ def create_user(
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    assigned_var = _next_assigned_var(users)
+    # A one-shot admin override (if set) wins over rotation; consuming it does
+    # not advance the round-robin counter, so rotation resumes cleanly after.
+    assigned_var = _consume_next_override(users) or _next_assigned_var(users)
     users.update_one({"_id": doc["_id"]}, {"$set": {"assigned_var": assigned_var}})
     doc["assigned_var"] = assigned_var
 

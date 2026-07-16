@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from bson import ObjectId
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.core.security import hash_password
@@ -19,6 +20,9 @@ from app.services.users import (
     _next_assigned_var,
     _normalize_stage,
     _to_public,
+    set_next_assignment_override,
+    _consume_next_override,
+    peek_next_assignment,
 )
 
 
@@ -146,6 +150,73 @@ class TestNextAssignedVar:
         assert kwargs["upsert"] is True
 
 
+# ── next-assignment override (Phase 10) ──────────────────────────────────────
+
+class TestNextAssignmentOverride:
+    def test_set_override_upserts_variant(self, mock_col):
+        counters = mock_col.database["counters"]
+        set_next_assignment_override(mock_col, "links")
+        counters.update_one.assert_called_once_with(
+            {"_id": "next_assignment_override"},
+            {"$set": {"variant": "links"}},
+            upsert=True,
+        )
+
+    def test_set_override_none_clears(self, mock_col):
+        counters = mock_col.database["counters"]
+        set_next_assignment_override(mock_col, None)
+        counters.update_one.assert_called_once_with(
+            {"_id": "next_assignment_override"},
+            {"$set": {"variant": None}},
+            upsert=True,
+        )
+
+    def test_consume_returns_and_atomically_clears(self, mock_col):
+        counters = mock_col.database["counters"]
+        counters.find_one_and_update.return_value = {
+            "_id": "next_assignment_override", "variant": "double",
+        }
+
+        assert _consume_next_override(mock_col) == "double"
+
+        args, kwargs = counters.find_one_and_update.call_args
+        # Only claims a *pending* override, and clears it in the same op.
+        assert args[0] == {"_id": "next_assignment_override", "variant": {"$ne": None}}
+        assert args[1] == {"$set": {"variant": None}}
+        assert kwargs["return_document"] == ReturnDocument.BEFORE
+
+    def test_consume_returns_none_when_no_override(self, mock_col):
+        counters = mock_col.database["counters"]
+        counters.find_one_and_update.return_value = None
+        assert _consume_next_override(mock_col) is None
+
+    def test_peek_returns_override_when_set(self, mock_col):
+        counters = mock_col.database["counters"]
+        counters.find_one.return_value = {
+            "_id": "next_assignment_override", "variant": "links",
+        }
+        assert peek_next_assignment(mock_col) == {"next": "links", "source": "override"}
+
+    def test_peek_returns_rotation_value_by_seq(self, mock_col):
+        counters = mock_col.database["counters"]
+        # First find_one → no override; second → round-robin counter at seq=1.
+        counters.find_one.side_effect = [
+            None,
+            {"_id": "user_signup_round_robin", "seq": 1},
+        ]
+        # seq=1 → next signup increments to 2 → index 1 → double. Peek must agree.
+        assert peek_next_assignment(mock_col) == {
+            "next": AssignedVar.double.value, "source": "rotation",
+        }
+
+    def test_peek_rotation_defaults_to_followup_before_any_signup(self, mock_col):
+        counters = mock_col.database["counters"]
+        counters.find_one.side_effect = [None, None]  # no override, no counter yet
+        assert peek_next_assignment(mock_col) == {
+            "next": AssignedVar.followup.value, "source": "rotation",
+        }
+
+
 # ── create_user ───────────────────────────────────────────────────────────────
 
 class TestCreateUser:
@@ -204,6 +275,48 @@ class TestCreateUser:
 
         inserted_doc = mock_col.insert_one.call_args[0][0]
         assert inserted_doc["password_hash"].startswith("$argon2")
+
+    def test_uses_next_assignment_override_when_set(self, mock_col):
+        oid = ObjectId()
+        mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
+        counters = mock_col.database["counters"]
+        # The override-consume claims a pending "links"; rotation must be skipped.
+        counters.find_one_and_update.return_value = {
+            "_id": "next_assignment_override", "variant": "links",
+        }
+
+        result = create_user(
+            mock_col, email="u@example.com", password="plainpassword",
+            first_name="A", last_name="B", consent=True,
+        )
+
+        assert result.assigned_var == AssignedVar.links
+        mock_col.update_one.assert_called_once_with(
+            {"_id": oid}, {"$set": {"assigned_var": "links"}}
+        )
+        # Rotation counter was NOT advanced — only the override was consumed.
+        counters.find_one_and_update.assert_called_once()
+        assert counters.find_one_and_update.call_args[0][0] == {
+            "_id": "next_assignment_override", "variant": {"$ne": None},
+        }
+
+    def test_falls_back_to_rotation_when_no_override(self, mock_col):
+        oid = ObjectId()
+        mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
+        counters = mock_col.database["counters"]
+        # First call (override-consume) → none; second (round-robin inc) → seq 2.
+        counters.find_one_and_update.side_effect = [
+            None,
+            {"_id": "user_signup_round_robin", "seq": 2},
+        ]
+
+        result = create_user(
+            mock_col, email="u@example.com", password="plainpassword",
+            first_name="A", last_name="B", consent=True,
+        )
+
+        assert result.assigned_var == AssignedVar.double  # seq 2 → double
+        assert counters.find_one_and_update.call_count == 2
 
     def test_consent_not_true_raises_value_error(self, mock_col):
         with pytest.raises(ValueError):
