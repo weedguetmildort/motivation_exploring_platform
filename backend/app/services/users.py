@@ -1,6 +1,7 @@
 # backend/app/services/users.py
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+from bson import ObjectId
 from pymongo.collection import Collection
 from pymongo import ReturnDocument
 
@@ -50,6 +51,7 @@ def _to_public(doc: dict) -> UserPublic:
         quiz_variant_completed=doc.get("quiz_variant_completed", False),
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=_normalize_stage(doc.get("survey_stage")),
+        quiz_sets=doc.get("quiz_sets"),
     )
 
 
@@ -69,6 +71,7 @@ _ASSIGNED_VARS = [
 
 _NEXT_OVERRIDE_ID = "next_assignment_override"
 _ROUND_ROBIN_ID = "user_signup_round_robin"
+_QUIZ_DEFAULT_SETS_ID = "quiz_default_sets"
 
 
 def _next_assigned_var(users: Collection) -> str:
@@ -128,6 +131,46 @@ def peek_next_assignment(users: Collection) -> dict:
     return {"next": _ASSIGNED_VARS[seq % len(_ASSIGNED_VARS)], "source": "rotation"}
 
 
+# ── Quiz set restriction (Phase 11) ──────────────────────────────────────────
+
+def get_quiz_default_sets(users: Collection) -> Optional[List[str]]:
+    """The global default question set(s) stamped onto new sign-ups.
+
+    Returns ``None`` when no default is configured (participants draw from all
+    questions).
+    """
+    counters = users.database["counters"]
+    doc = counters.find_one({"_id": _QUIZ_DEFAULT_SETS_ID})
+    sets = doc.get("sets") if doc else None
+    # Only honor an actual non-empty list; anything else = no restriction.
+    if not isinstance(sets, list) or not sets:
+        return None
+    return sets
+
+
+def set_quiz_default_sets(users: Collection, sets: Optional[List[str]]) -> None:
+    """Admin control: set the global default question set(s) for new sign-ups.
+    ``None``/empty clears the restriction."""
+    counters = users.database["counters"]
+    counters.update_one(
+        {"_id": _QUIZ_DEFAULT_SETS_ID},
+        {"$set": {"sets": sets or None}},
+        upsert=True,
+    )
+
+
+def set_participant_quiz_sets(
+    users: Collection, user_id: str, sets: Optional[List[str]]
+) -> Optional[dict]:
+    """Override one participant's allowed question set(s). ``None``/empty clears
+    the restriction. Returns the updated user doc, or ``None`` if not found."""
+    return users.find_one_and_update(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"quiz_sets": sets or None, "updated_at": datetime.now(timezone.utc)}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+
 def create_user(
     users: Collection,
     email: str,
@@ -159,6 +202,8 @@ def create_user(
         "survey_post_variant_completed": False,
         "survey_stage": SurveyStage.pre_base.value,
         "demographics": {},
+        # Stamp the current global default set restriction (None = unrestricted).
+        "quiz_sets": get_quiz_default_sets(users),
     }
 
     res = users.insert_one(doc)

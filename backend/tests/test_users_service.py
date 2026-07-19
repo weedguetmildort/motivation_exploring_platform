@@ -23,6 +23,9 @@ from app.services.users import (
     set_next_assignment_override,
     _consume_next_override,
     peek_next_assignment,
+    get_quiz_default_sets,
+    set_quiz_default_sets,
+    set_participant_quiz_sets,
 )
 
 
@@ -217,6 +220,55 @@ class TestNextAssignmentOverride:
         }
 
 
+# ── quiz set restriction (Phase 11) ──────────────────────────────────────────
+
+class TestQuizSets:
+    def test_get_default_none_when_unset(self, mock_col):
+        mock_col.database["counters"].find_one.return_value = None
+        assert get_quiz_default_sets(mock_col) is None
+
+    def test_get_default_returns_configured_list(self, mock_col):
+        mock_col.database["counters"].find_one.return_value = {"sets": ["a", "c"]}
+        assert get_quiz_default_sets(mock_col) == ["a", "c"]
+
+    def test_get_default_empty_list_is_none(self, mock_col):
+        mock_col.database["counters"].find_one.return_value = {"sets": []}
+        assert get_quiz_default_sets(mock_col) is None
+
+    def test_set_default_upserts_sets(self, mock_col):
+        counters = mock_col.database["counters"]
+        set_quiz_default_sets(mock_col, ["a", "b"])
+        counters.update_one.assert_called_once_with(
+            {"_id": "quiz_default_sets"}, {"$set": {"sets": ["a", "b"]}}, upsert=True
+        )
+
+    def test_set_default_none_clears(self, mock_col):
+        counters = mock_col.database["counters"]
+        set_quiz_default_sets(mock_col, None)
+        counters.update_one.assert_called_once_with(
+            {"_id": "quiz_default_sets"}, {"$set": {"sets": None}}, upsert=True
+        )
+
+    def test_set_participant_quiz_sets_updates_and_returns(self, mock_col):
+        oid = ObjectId()
+        updated = {"_id": oid, "email": "u@e.com", "quiz_sets": ["c"]}
+        mock_col.find_one_and_update.return_value = updated
+
+        result = set_participant_quiz_sets(mock_col, str(oid), ["c"])
+
+        assert result == updated
+        args, kwargs = mock_col.find_one_and_update.call_args
+        assert args[0] == {"_id": oid}
+        assert args[1]["$set"]["quiz_sets"] == ["c"]
+        assert kwargs["return_document"] == ReturnDocument.AFTER
+
+    def test_set_participant_quiz_sets_none_clears(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {"_id": oid, "email": "u@e.com", "quiz_sets": None}
+        set_participant_quiz_sets(mock_col, str(oid), None)
+        assert mock_col.find_one_and_update.call_args[0][1]["$set"]["quiz_sets"] is None
+
+
 # ── create_user ───────────────────────────────────────────────────────────────
 
 class TestCreateUser:
@@ -317,6 +369,21 @@ class TestCreateUser:
 
         assert result.assigned_var == AssignedVar.double  # seq 2 → double
         assert counters.find_one_and_update.call_count == 2
+
+    def test_stamps_default_quiz_sets(self, mock_col):
+        oid = ObjectId()
+        mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
+        counters = mock_col.database["counters"]
+        counters.find_one.return_value = {"_id": "quiz_default_sets", "sets": ["a", "b"]}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+
+        result = create_user(
+            mock_col, email="u@example.com", password="plainpassword",
+            first_name="A", last_name="B", consent=True,
+        )
+
+        assert result.quiz_sets == ["a", "b"]
+        assert mock_col.insert_one.call_args[0][0]["quiz_sets"] == ["a", "b"]
 
     def test_consent_not_true_raises_value_error(self, mock_col):
         with pytest.raises(ValueError):

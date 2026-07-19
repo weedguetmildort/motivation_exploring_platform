@@ -80,6 +80,7 @@ def build_user_public(doc: dict) -> UserPublic:
         quiz_variant_completed=doc.get("quiz_variant_completed", False),
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=survey_stage,
+        quiz_sets=doc.get("quiz_sets"),
     )
 
 

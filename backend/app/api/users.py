@@ -10,12 +10,17 @@ from ..schemas.user import (
     SurveyStage,
     NextAssignment,
     NextAssignmentUpdate,
+    QuizDefaultSets,
+    ParticipantSetsUpdate,
 )
 from ..api.auth import get_current_user
 from ..services.users import (
     get_users_collection,
     peek_next_assignment,
     set_next_assignment_override,
+    get_quiz_default_sets,
+    set_quiz_default_sets,
+    set_participant_quiz_sets,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -50,6 +55,7 @@ def _to_summary(doc: dict) -> ParticipantSummary:
         consent_declined_at=doc.get("consent_declined_at"),
         consent_viewed_at=doc.get("consent_viewed_at"),
         consent_abandoned_at=doc.get("consent_abandoned_at"),
+        quiz_sets=doc.get("quiz_sets"),
         created_at=doc.get("created_at"),
     )
 
@@ -87,6 +93,27 @@ def put_next_assignment(
     return peek_next_assignment(col)
 
 
+# Also static — must precede "/{user_id}" for the same reason as next-assignment.
+@router.get("/quiz-default-sets", response_model=QuizDefaultSets)
+def get_quiz_default_sets_endpoint(
+    request: Request,
+    _: UserPublic = Depends(_require_admin),
+):
+    col = get_users_collection(request.app.state.db)
+    return QuizDefaultSets(sets=get_quiz_default_sets(col))
+
+
+@router.put("/quiz-default-sets", response_model=QuizDefaultSets)
+def put_quiz_default_sets(
+    body: QuizDefaultSets,
+    request: Request,
+    _: UserPublic = Depends(_require_admin),
+):
+    col = get_users_collection(request.app.state.db)
+    set_quiz_default_sets(col, body.sets)
+    return QuizDefaultSets(sets=get_quiz_default_sets(col))
+
+
 @router.get("/{user_id}", response_model=ParticipantSummary)
 def get_participant(
     user_id: str,
@@ -102,3 +129,21 @@ def get_participant(
     if not doc:
         raise HTTPException(status_code=404, detail="Participant not found")
     return _to_summary(doc)
+
+
+@router.patch("/{user_id}/quiz-sets", response_model=ParticipantSummary)
+def patch_participant_quiz_sets(
+    user_id: str,
+    body: ParticipantSetsUpdate,
+    request: Request,
+    _: UserPublic = Depends(_require_admin),
+):
+    try:
+        ObjectId(user_id)
+    except InvalidId:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    col = get_users_collection(request.app.state.db)
+    updated = set_participant_quiz_sets(col, user_id, body.quiz_sets)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    return _to_summary(updated)

@@ -12,6 +12,16 @@ from ..schemas.user import SurveyStage, AssignedVar
 
 _VARIANT_QUIZ_IDS = {v.value for v in AssignedVar}
 
+# ── Quiz 2 (Phase 13 scaffold) ───────────────────────────────────────────────
+# Placeholder namespace for a future second quiz version, parallel to quiz 1's
+# `base` + followup/links/double. Layout-only for now: completion-flag wiring and
+# quiz-2 question pools are deferred. Quiz-2 attempts currently fall through the
+# "unknown quiz_id" branch in _get_user_quiz_update_fields (no user-flag update),
+# which is intentional until quiz2_*_completed flags are added to the user model.
+QUIZ2_BASE_ID = "base2"
+QUIZ2_VARIANT_QUIZ_IDS = {"followup2", "double2", "links2"}
+QUIZ2_QUIZ_IDS = {QUIZ2_BASE_ID, *QUIZ2_VARIANT_QUIZ_IDS}
+
 MAX_QUIZ_QUESTIONS = 10
 
 
@@ -30,7 +40,9 @@ def _ensure_unique_index(col: Collection) -> None:
     )
 
 
-def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> dict:
+def _load_or_create_attempt(
+    db, user_id: str, user_email: str, quiz_id: str, quiz_sets: Optional[list] = None
+) -> dict:
     col = get_quiz_attempts_collection(db)
     _ensure_unique_index(col)
 
@@ -39,7 +51,13 @@ def _load_or_create_attempt(db, user_id: str, user_email: str, quiz_id: str) -> 
         return doc
 
     qcol = get_questions_collection(db)
-    questions = list(qcol.find({}, {"_id": 1}))
+
+    # Phase 11: restrict the pool to the participant's allowed set(s). A non-empty
+    # `quiz_sets` filters to those sets (null-set questions excluded); None/empty
+    # means no restriction (draw from all questions — the historical behavior).
+    pool_query = {"set": {"$in": quiz_sets}} if quiz_sets else {}
+
+    questions = list(qcol.find(pool_query, {"_id": 1}))
     if not questions:
         raise HTTPException(status_code=400, detail="No questions available for quiz")
 

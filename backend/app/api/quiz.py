@@ -26,7 +26,9 @@ def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
 def get_quiz_state(request: Request, user: UserPublic = Depends(get_current_user)):
     db = request.app.state.db
     quiz_id = request.path_params["quiz_id"]
-    attempt_doc = _load_or_create_attempt(db, user.id, user.email, quiz_id)
+    attempt_doc = _load_or_create_attempt(
+        db, user.id, user.email, quiz_id, quiz_sets=user.quiz_sets
+    )
 
     # If quiz is completed, just return state
     if attempt_doc["status"] == "completed":

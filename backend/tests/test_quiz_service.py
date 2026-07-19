@@ -121,6 +121,27 @@ class TestLoadOrCreateAttempt:
         assert len(result["question_order"]) == 2
         assert len(result["incorrect_question_ids"]) == 2
 
+    def test_restricts_pool_to_quiz_sets(self, mock_db, mock_col):
+        """Phase 11: a participant with quiz_sets draws only from those sets."""
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(4)]
+        mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a", "b"])
+
+        # The question pool query must filter to the allowed sets.
+        mock_col.find.assert_called_once_with({"set": {"$in": ["a", "b"]}}, {"_id": 1})
+
+    def test_no_restriction_when_quiz_sets_none(self, mock_db, mock_col):
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(4)]
+        mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_sets=None)
+
+        # Unrestricted → empty query, historical behavior.
+        mock_col.find.assert_called_once_with({}, {"_id": 1})
+
 
 # ── _find_next_unanswered ─────────────────────────────────────────────────────
 
