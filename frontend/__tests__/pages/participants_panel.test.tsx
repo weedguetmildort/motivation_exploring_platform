@@ -51,6 +51,7 @@ const activeParticipant = {
   survey_post_variant_completed: false,
   last_active_at: threeDaysAgo,
   consent_declined_at: null,
+  quiz_sets: null,
   created_at: "2025-01-01T00:00:00.000Z",
 };
 
@@ -69,6 +70,7 @@ const completeParticipant = {
   survey_post_variant_completed: true,
   last_active_at: threeDaysAgo,
   consent_declined_at: null,
+  quiz_sets: null,
   created_at: "2025-01-02T00:00:00.000Z",
 };
 
@@ -87,6 +89,7 @@ const declinedParticipant = {
   survey_post_variant_completed: false,
   last_active_at: null,
   consent_declined_at: "2025-01-03T00:00:00.000Z",
+  quiz_sets: null,
   created_at: "2025-01-03T00:00:00.000Z",
 };
 
@@ -350,6 +353,169 @@ describe("ParticipantsPanelPage", () => {
       // Case counts are computed from the full roster, not the filtered view.
       expect(conditionRow("Follow-up").getByText("2 enrolled")).toBeInTheDocument();
       expect(conditionRow("Links").getByText("1 enrolled")).toBeInTheDocument();
+    });
+  });
+
+  describe("next sign-up assignment", () => {
+    // Route apiFetch by URL: the roster for /api/users, the indicator for
+    // /api/users/next-assignment (PUT echoes back the resulting state).
+    function mockUsersApi(
+      participants: unknown[],
+      initialNext: { next: string; source: string },
+    ) {
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        if (url.includes("next-assignment")) {
+          if (init?.method === "PUT") {
+            const body = JSON.parse(init.body);
+            return Promise.resolve(
+              body.variant
+                ? { next: body.variant, source: "override" }
+                : { next: "followup", source: "rotation" },
+            );
+          }
+          return Promise.resolve(initialNext);
+        }
+        return Promise.resolve(participants);
+      });
+    }
+
+    function nextGroup() {
+      return within(screen.getByRole("group", { name: "Next sign-up" }));
+    }
+
+    it("shows the current next-assignment indicator", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockUsersApi([activeParticipant], { next: "followup", source: "rotation" });
+      render(<ParticipantsPanelPage />);
+
+      await screen.findByText("Participants Panel");
+      expect(await nextGroup().findByText("(rotation)")).toBeInTheDocument();
+      expect(nextGroup().getByText("Follow-up")).toBeInTheDocument();
+    });
+
+    it("pins the next case when a condition button is clicked", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockUsersApi([activeParticipant], { next: "followup", source: "rotation" });
+      render(<ParticipantsPanelPage />);
+
+      await screen.findByText("Participants Panel");
+      await nextGroup().findByText("(rotation)");
+
+      fireEvent.click(nextGroup().getByRole("button", { name: "Set Links" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/users/next-assignment",
+          expect.objectContaining({
+            method: "PUT",
+            body: JSON.stringify({ variant: "links" }),
+          }),
+        ),
+      );
+      // The indicator reflects the pinned override returned by the PUT.
+      expect(await nextGroup().findByText("(override)")).toBeInTheDocument();
+      expect(nextGroup().getByText("Links")).toBeInTheDocument();
+    });
+
+    it("clears the override with Reset to rotation", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockUsersApi([activeParticipant], { next: "double", source: "override" });
+      render(<ParticipantsPanelPage />);
+
+      await screen.findByText("Participants Panel");
+      await nextGroup().findByText("(override)");
+
+      fireEvent.click(nextGroup().getByRole("button", { name: "Reset to rotation" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/users/next-assignment",
+          expect.objectContaining({
+            method: "PUT",
+            body: JSON.stringify({ variant: null }),
+          }),
+        ),
+      );
+      expect(await nextGroup().findByText("(rotation)")).toBeInTheDocument();
+    });
+  });
+
+  describe("quiz set restriction", () => {
+    // Route apiFetch by URL across the roster, next-assignment, the global
+    // default-sets config, and per-participant PATCH.
+    function mockSetsApi(participants: any[], defaultSets: string[] | null) {
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        if (url.includes("quiz-default-sets")) {
+          if (init?.method === "PUT") {
+            return Promise.resolve({ sets: JSON.parse(init.body).sets });
+          }
+          return Promise.resolve({ sets: defaultSets });
+        }
+        if (url.includes("/quiz-sets")) {
+          // PATCH /api/users/{id}/quiz-sets
+          const id = url.split("/")[3];
+          const p = participants.find((x) => x.id === id);
+          return Promise.resolve({ ...p, quiz_sets: JSON.parse(init.body).quiz_sets });
+        }
+        if (url.includes("next-assignment")) {
+          return Promise.resolve({ next: "followup", source: "rotation" });
+        }
+        return Promise.resolve(participants);
+      });
+    }
+
+    it("reflects the configured default question sets", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockSetsApi([activeParticipant], ["a"]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+
+      const group = within(screen.getByRole("group", { name: "Default question sets" }));
+      await waitFor(() =>
+        expect(group.getByRole("button", { name: "A" })).toHaveAttribute("aria-pressed", "true"),
+      );
+      expect(group.getByRole("button", { name: "B" })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("PUTs the new default sets when a chip is toggled", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockSetsApi([activeParticipant], []);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+
+      const group = within(screen.getByRole("group", { name: "Default question sets" }));
+      fireEvent.click(group.getByRole("button", { name: "B" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          "/api/users/quiz-default-sets",
+          expect.objectContaining({ method: "PUT", body: JSON.stringify({ sets: ["b"] }) }),
+        ),
+      );
+    });
+
+    it("PATCHes a participant's question sets when edited", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      const p = { ...activeParticipant, quiz_sets: ["a"] };
+      mockSetsApi([p], []);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Alice Smith");
+
+      const group = within(
+        screen.getByRole("group", { name: `Question sets for ${p.email}` }),
+      );
+      // Starts at A; toggling B should send both.
+      fireEvent.click(group.getByRole("button", { name: "B" }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          `/api/users/${p.id}/quiz-sets`,
+          expect.objectContaining({
+            method: "PATCH",
+            body: JSON.stringify({ quiz_sets: ["a", "b"] }),
+          }),
+        ),
+      );
     });
   });
 });

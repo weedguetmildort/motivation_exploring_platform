@@ -1,6 +1,7 @@
 # backend/app/services/users.py
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+from bson import ObjectId
 from pymongo.collection import Collection
 from pymongo import ReturnDocument
 
@@ -50,6 +51,7 @@ def _to_public(doc: dict) -> UserPublic:
         quiz_variant_completed=doc.get("quiz_variant_completed", False),
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=_normalize_stage(doc.get("survey_stage")),
+        quiz_sets=doc.get("quiz_sets"),
     )
 
 
@@ -61,21 +63,112 @@ def ensure_indexes(users: Collection) -> None:
     users.create_index("email", unique=True)
 
 
+_ASSIGNED_VARS = [
+    AssignedVar.followup.value,
+    AssignedVar.double.value,
+    AssignedVar.links.value,
+]
+
+_NEXT_OVERRIDE_ID = "next_assignment_override"
+_ROUND_ROBIN_ID = "user_signup_round_robin"
+_QUIZ_DEFAULT_SETS_ID = "quiz_default_sets"
+
+
 def _next_assigned_var(users: Collection) -> str:
-    assigned_vars = [
-        AssignedVar.followup.value,
-        AssignedVar.double.value,
-        AssignedVar.links.value,
-    ]
     counters = users.database["counters"]
     counter_doc = counters.find_one_and_update(
-        {"_id": "user_signup_round_robin"},
+        {"_id": _ROUND_ROBIN_ID},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
     seq = int(counter_doc.get("seq", 1))
-    return assigned_vars[(seq - 1) % len(assigned_vars)]
+    return _ASSIGNED_VARS[(seq - 1) % len(_ASSIGNED_VARS)]
+
+
+def set_next_assignment_override(users: Collection, variant: Optional[str]) -> None:
+    """Admin control: force the next sign-up into ``variant`` (one-shot), or
+    clear the override with ``None`` to fall back to round-robin rotation."""
+    counters = users.database["counters"]
+    counters.update_one(
+        {"_id": _NEXT_OVERRIDE_ID},
+        {"$set": {"variant": variant}},
+        upsert=True,
+    )
+
+
+def _consume_next_override(users: Collection) -> Optional[str]:
+    """Atomically claim and clear a pending one-shot override, if any.
+
+    Uses find_one_and_update so two concurrent sign-ups can't both claim it —
+    only the first sees a non-null ``variant``.
+    """
+    counters = users.database["counters"]
+    doc = counters.find_one_and_update(
+        {"_id": _NEXT_OVERRIDE_ID, "variant": {"$ne": None}},
+        {"$set": {"variant": None}},
+        return_document=ReturnDocument.BEFORE,
+    )
+    if doc and doc.get("variant"):
+        return doc["variant"]
+    return None
+
+
+def peek_next_assignment(users: Collection) -> dict:
+    """What condition the next sign-up will receive, without consuming anything.
+
+    Returns the pending override if set, else the value round-robin would hand
+    out next (derived from the current counter without incrementing it).
+    """
+    counters = users.database["counters"]
+
+    override = counters.find_one({"_id": _NEXT_OVERRIDE_ID})
+    if override and override.get("variant"):
+        return {"next": override["variant"], "source": "override"}
+
+    counter = counters.find_one({"_id": _ROUND_ROBIN_ID})
+    seq = int(counter.get("seq", 0)) if counter else 0
+    return {"next": _ASSIGNED_VARS[seq % len(_ASSIGNED_VARS)], "source": "rotation"}
+
+
+# ── Quiz set restriction (Phase 11) ──────────────────────────────────────────
+
+def get_quiz_default_sets(users: Collection) -> Optional[List[str]]:
+    """The global default question set(s) stamped onto new sign-ups.
+
+    Returns ``None`` when no default is configured (participants draw from all
+    questions).
+    """
+    counters = users.database["counters"]
+    doc = counters.find_one({"_id": _QUIZ_DEFAULT_SETS_ID})
+    sets = doc.get("sets") if doc else None
+    # Only honor an actual non-empty list; anything else = no restriction.
+    if not isinstance(sets, list) or not sets:
+        return None
+    return sets
+
+
+def set_quiz_default_sets(users: Collection, sets: Optional[List[str]]) -> None:
+    """Admin control: set the global default question set(s) for new sign-ups.
+    ``None``/empty clears the restriction."""
+    counters = users.database["counters"]
+    counters.update_one(
+        {"_id": _QUIZ_DEFAULT_SETS_ID},
+        {"$set": {"sets": sets or None}},
+        upsert=True,
+    )
+
+
+def set_participant_quiz_sets(
+    users: Collection, user_id: str, sets: Optional[List[str]]
+) -> Optional[dict]:
+    """Override one participant's allowed question set(s). ``None``/empty clears
+    the restriction. Returns the updated user doc, or ``None`` if not found."""
+    return users.find_one_and_update(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"quiz_sets": sets or None, "updated_at": datetime.now(timezone.utc)}},
+        return_document=ReturnDocument.AFTER,
+    )
 
 
 def create_user(
@@ -109,12 +202,16 @@ def create_user(
         "survey_post_variant_completed": False,
         "survey_stage": SurveyStage.pre_base.value,
         "demographics": {},
+        # Stamp the current global default set restriction (None = unrestricted).
+        "quiz_sets": get_quiz_default_sets(users),
     }
 
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    assigned_var = _next_assigned_var(users)
+    # A one-shot admin override (if set) wins over rotation; consuming it does
+    # not advance the round-robin counter, so rotation resumes cleanly after.
+    assigned_var = _consume_next_override(users) or _next_assigned_var(users)
     users.update_one({"_id": doc["_id"]}, {"$set": {"assigned_var": assigned_var}})
     doc["assigned_var"] = assigned_var
 

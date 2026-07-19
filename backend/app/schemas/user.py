@@ -1,8 +1,10 @@
 # backend/app/schemas/user.py
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, Literal, List
 from datetime import datetime
 from enum import Enum
+
+from .question import SetId  # "a" | "b" | "c" | "d" — question set labels
 
 
 # Tracks where the user is in the research study flow.
@@ -72,6 +74,9 @@ class UserPublic(BaseModel):
     quiz_variant_completed: bool = False
     survey_post_variant_completed: bool = False
     survey_stage: SurveyStage = SurveyStage.pre_base
+    # Which question set(s) this participant draws from in the quiz. None = no
+    # restriction (all questions). See Phase 11 — quiz set restriction.
+    quiz_sets: Optional[List[SetId]] = None
 
 
 # Admin-facing view of a participant — adds created_at, omits password_hash.
@@ -92,6 +97,7 @@ class ParticipantSummary(BaseModel):
     consent_declined_at: Optional[datetime] = None
     consent_viewed_at: Optional[datetime] = None
     consent_abandoned_at: Optional[datetime] = None
+    quiz_sets: Optional[List[SetId]] = None
     created_at: Optional[datetime] = None
 
 
@@ -115,3 +121,28 @@ class UserDBDoc(BaseModel):
     quiz_variant_completed: bool = False
     survey_post_variant_completed: bool = False
     survey_stage: SurveyStage = SurveyStage.pre_base
+
+
+# What condition the next new participant will be assigned, and why.
+# "override" = an admin pinned it (one-shot); "rotation" = normal round-robin.
+class NextAssignment(BaseModel):
+    next: AssignedVar
+    source: Literal["override", "rotation"]
+
+
+# Admin request to pin the next assignment. `null` clears the override and
+# returns to round-robin rotation.
+class NextAssignmentUpdate(BaseModel):
+    variant: Optional[AssignedVar] = None
+
+
+# The global default question set(s) stamped onto new sign-ups. `null`/empty =
+# no restriction (participants draw from all questions).
+class QuizDefaultSets(BaseModel):
+    sets: Optional[List[SetId]] = None
+
+
+# Admin request to override one participant's allowed question set(s). `null` =
+# clear the restriction (draw from all questions).
+class ParticipantSetsUpdate(BaseModel):
+    quiz_sets: Optional[List[SetId]] = None
