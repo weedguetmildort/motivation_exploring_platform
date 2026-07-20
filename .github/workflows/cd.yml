@@ -45,12 +45,16 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           platforms: linux/amd64
-          push: true
           provenance: false
           sbom: false
           # Heroku requires the image to be tagged as registry.heroku.com/<app>/web
           tags: |
             ${{ env.HEROKU_REGISTRY }}/${{ env.APP_BACKEND }}/web
+          # Heroku's Container Registry only accepts Docker v2 schema-2 manifests.
+          # BuildKit now defaults the image exporter to OCI media types, which the
+          # registry rejects with "failed to push ...: unsupported". Push via an
+          # explicit output (replaces `push: true`) so we can force Docker types.
+          outputs: type=image,oci-mediatypes=false,push=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -61,7 +65,6 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           platforms: linux/amd64
-          push: true
           provenance: false
           sbom: false
           no-cache: true
@@ -69,7 +72,8 @@ jobs:
             BACKEND_URL=https://${{ secrets.BACKEND_URL }}
           tags: |
             ${{ env.HEROKU_REGISTRY }}/${{ env.APP_FRONTEND }}/web
-          cache-from: type=gha
+          # Same Heroku OCI-manifest constraint as the backend step above.
+          outputs: type=image,oci-mediatypes=false,push=true
           cache-to: type=gha,mode=max
 
       # Install Heroku CLI to run container:release
