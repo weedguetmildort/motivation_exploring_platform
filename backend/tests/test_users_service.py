@@ -26,6 +26,7 @@ from app.services.users import (
     get_quiz_default_sets,
     set_quiz_default_sets,
     set_participant_quiz_sets,
+    set_participant_followup_study,
 )
 
 
@@ -267,6 +268,33 @@ class TestQuizSets:
         mock_col.find_one_and_update.return_value = {"_id": oid, "email": "u@e.com", "quiz_sets": None}
         set_participant_quiz_sets(mock_col, str(oid), None)
         assert mock_col.find_one_and_update.call_args[0][1]["$set"]["quiz_sets"] is None
+
+
+# ── follow-up study access (Phase 13) ────────────────────────────────────────
+
+class TestFollowupStudy:
+    def test_grant_updates_and_returns(self, mock_col):
+        oid = ObjectId()
+        updated = {"_id": oid, "email": "u@e.com", "followup_study_granted": True}
+        mock_col.find_one_and_update.return_value = updated
+
+        result = set_participant_followup_study(mock_col, str(oid), True)
+
+        assert result == updated
+        args, kwargs = mock_col.find_one_and_update.call_args
+        assert args[0] == {"_id": oid}
+        assert args[1]["$set"]["followup_study_granted"] is True
+        assert kwargs["return_document"] == ReturnDocument.AFTER
+
+    def test_revoke_sets_false(self, mock_col):
+        oid = ObjectId()
+        mock_col.find_one_and_update.return_value = {"_id": oid, "email": "u@e.com", "followup_study_granted": False}
+        set_participant_followup_study(mock_col, str(oid), False)
+        assert mock_col.find_one_and_update.call_args[0][1]["$set"]["followup_study_granted"] is False
+
+    def test_returns_none_when_user_missing(self, mock_col):
+        mock_col.find_one_and_update.return_value = None
+        assert set_participant_followup_study(mock_col, str(ObjectId()), True) is None
 
 
 # ── create_user ───────────────────────────────────────────────────────────────

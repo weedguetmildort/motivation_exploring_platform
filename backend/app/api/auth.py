@@ -81,6 +81,7 @@ def build_user_public(doc: dict) -> UserPublic:
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=survey_stage,
         quiz_sets=doc.get("quiz_sets"),
+        followup_study_granted=doc.get("followup_study_granted", False),
     )
 
 

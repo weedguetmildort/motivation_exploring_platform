@@ -87,6 +87,35 @@ describe("DashboardPage", () => {
     expect(mockPush).toHaveBeenCalledWith("/survey?stage=pre_quiz");
   });
 
+  it("shows the follow-up study card only when granted AND the study is complete", async () => {
+    mockGetMe.mockResolvedValue({
+      user: { ...completeUser, survey_stage: "complete", followup_study_granted: true },
+    });
+    render(<DashboardPage />);
+
+    expect(await screen.findByRole("heading", { name: "Follow-up study" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(mockPush).toHaveBeenCalledWith("/followup_study");
+  });
+
+  it("hides the follow-up card when granted but the study is not complete", async () => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, followup_study_granted: true } });
+    render(<DashboardPage />);
+
+    await screen.findByText("Next Step"); // incomplete → hero renders, dashboard loaded
+    expect(screen.queryByRole("heading", { name: "Follow-up study" })).not.toBeInTheDocument();
+  });
+
+  it("hides the follow-up card when complete but not granted", async () => {
+    mockGetMe.mockResolvedValue({
+      user: { ...completeUser, survey_stage: "complete", followup_study_granted: false },
+    });
+    render(<DashboardPage />);
+
+    await screen.findByText("Study Complete — thank you for participating!");
+    expect(screen.queryByRole("heading", { name: "Follow-up study" })).not.toBeInTheDocument();
+  });
+
   it("renders the admin section with tool, quiz, and survey links for admins", async () => {
     mockGetMe.mockResolvedValue({ user: { ...baseUser, is_admin: true } });
     render(<DashboardPage />);

@@ -77,6 +77,9 @@ class UserPublic(BaseModel):
     # Which question set(s) this participant draws from in the quiz. None = no
     # restriction (all questions). See Phase 11 — quiz set restriction.
     quiz_sets: Optional[List[SetId]] = None
+    # Admin-granted access to the follow-up study (Phase 13). The dashboard card
+    # additionally requires the main study to be complete.
+    followup_study_granted: bool = False
 
 
 # Admin-facing view of a participant — adds created_at, omits password_hash.
@@ -98,6 +101,7 @@ class ParticipantSummary(BaseModel):
     consent_viewed_at: Optional[datetime] = None
     consent_abandoned_at: Optional[datetime] = None
     quiz_sets: Optional[List[SetId]] = None
+    followup_study_granted: bool = False
     created_at: Optional[datetime] = None
 
 
@@ -146,3 +150,8 @@ class QuizDefaultSets(BaseModel):
 # clear the restriction (draw from all questions).
 class ParticipantSetsUpdate(BaseModel):
     quiz_sets: Optional[List[SetId]] = None
+
+
+# Admin request to grant/revoke a participant's follow-up study access (Phase 13).
+class FollowupStudyUpdate(BaseModel):
+    granted: bool

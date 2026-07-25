@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { buildStudySteps } from "../lib/studySteps";
+import { isFollowupEligible } from "../lib/quiz2";
 import ProgressBar from "../components/ProgressBar";
 import PageHeader from "../components/PageHeader";
 
@@ -89,6 +90,23 @@ export default function DashboardPage() {
             </div>
           </div>
         ) : null}
+
+        {/* ── Follow-Up Study (admin-granted + main study complete) ── */}
+        {isFollowupEligible(user) && (
+          <div className="flex w-full flex-col gap-4 rounded-2xl border-2 border-blue-300 bg-blue-50 p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-blue-500">Available to you</p>
+              <h2 className="text-xl font-bold text-blue-900">Follow-up study</h2>
+              <p className="mt-1 text-sm text-blue-700">You&apos;ve been invited to take part in a follow-up study.</p>
+            </div>
+            <button
+              onClick={() => router.push("/followup_study")}
+              className="w-full rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white shadow transition-all hover:bg-blue-700 active:scale-[0.98] sm:w-auto"
+            >
+              Start
+            </button>
+          </div>
+        )}
 
         {/* ── My Reports link ── */}
         <div className="flex justify-end">

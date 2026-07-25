@@ -473,6 +473,18 @@ class TestRecordConsentViewed:
         assert resp.status_code == 200
         assert resp.json()["user"]["consent_viewed_at"] is not None
 
+    def test_me_returns_followup_study_granted(self, auth_client, auth_mock_col):
+        settings = get_settings()
+        doc = make_user_doc(email="student@test.edu", followup_study_granted=True)
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(settings.COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        resp = auth_client.get("/auth/me")
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["followup_study_granted"] is True
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # POST /auth/consent-abandoned  (funnel telemetry — step 6c)

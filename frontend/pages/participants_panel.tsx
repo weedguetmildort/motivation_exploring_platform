@@ -21,6 +21,7 @@ type Participant = {
   last_active_at: string | null;
   consent_declined_at: string | null;
   quiz_sets: SetId[] | null;
+  followup_study_granted: boolean;
   created_at: string | null;
 };
 
@@ -242,6 +243,22 @@ export default function ParticipantsPanelPage() {
     }
   }
 
+  async function updateFollowupStudy(id: string, granted: boolean) {
+    try {
+      const updated = await apiFetch<Participant>(`/api/users/${id}/followup-study`, {
+        method: "PATCH",
+        body: JSON.stringify({ granted }),
+      });
+      setParticipants((prev) =>
+        prev.map((p) =>
+          p.id === id ? { ...p, followup_study_granted: updated.followup_study_granted } : p,
+        ),
+      );
+    } catch {
+      alert("Failed to update follow-up study access.");
+    }
+  }
+
   async function onLogout() {
     try { await logout(); } finally { router.replace("/login"); }
   }
@@ -448,6 +465,22 @@ export default function ParticipantsPanelPage() {
                       onChange={(next) => updateParticipantSets(p.id, next)}
                       label={`Question sets for ${p.email}`}
                     />
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="text-xs text-gray-500">Follow-up study:</span>
+                    <button
+                      type="button"
+                      onClick={() => updateFollowupStudy(p.id, !p.followup_study_granted)}
+                      aria-pressed={p.followup_study_granted}
+                      aria-label={`Toggle follow-up study access for ${p.email}`}
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
+                        p.followup_study_granted
+                          ? "bg-blue-600 text-white hover:bg-blue-700"
+                          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                    >
+                      {p.followup_study_granted ? "Granted ✓" : "Grant"}
+                    </button>
                   </div>
                 </div>
 
