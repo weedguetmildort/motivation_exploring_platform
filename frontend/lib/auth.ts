@@ -32,6 +32,7 @@ export type User = {
   quiz_variant_completed?: boolean;
   survey_post_variant_completed?: boolean;
   survey_stage?: string;
+  followup_study_granted?: boolean;
 };
 
 export async function signup(data: SignupPayload) {

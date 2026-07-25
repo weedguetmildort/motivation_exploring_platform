@@ -52,6 +52,7 @@ const activeParticipant = {
   last_active_at: threeDaysAgo,
   consent_declined_at: null,
   quiz_sets: null,
+  followup_study_granted: false,
   created_at: "2025-01-01T00:00:00.000Z",
 };
 
@@ -71,6 +72,7 @@ const completeParticipant = {
   last_active_at: threeDaysAgo,
   consent_declined_at: null,
   quiz_sets: null,
+  followup_study_granted: false,
   created_at: "2025-01-02T00:00:00.000Z",
 };
 
@@ -90,6 +92,7 @@ const declinedParticipant = {
   last_active_at: null,
   consent_declined_at: "2025-01-03T00:00:00.000Z",
   quiz_sets: null,
+  followup_study_granted: false,
   created_at: "2025-01-03T00:00:00.000Z",
 };
 
@@ -514,6 +517,63 @@ describe("ParticipantsPanelPage", () => {
             method: "PATCH",
             body: JSON.stringify({ quiz_sets: ["a", "b"] }),
           }),
+        ),
+      );
+    });
+  });
+
+  describe("follow-up study grant", () => {
+    function mockFollowupApi(participants: any[]) {
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        if (url.includes("/followup-study")) {
+          const id = url.split("/")[3]; // PATCH /api/users/{id}/followup-study
+          const p = participants.find((x) => x.id === id);
+          return Promise.resolve({ ...p, followup_study_granted: JSON.parse(init.body).granted });
+        }
+        if (url.includes("next-assignment")) return Promise.resolve({ next: "followup", source: "rotation" });
+        if (url.includes("quiz-default-sets")) return Promise.resolve({ sets: null });
+        return Promise.resolve(participants);
+      });
+    }
+
+    it("grants access via the per-participant toggle", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockFollowupApi([activeParticipant]); // starts ungranted
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Alice Smith");
+
+      const label = `Toggle follow-up study access for ${activeParticipant.email}`;
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          `/api/users/${activeParticipant.id}/followup-study`,
+          expect.objectContaining({ method: "PATCH", body: JSON.stringify({ granted: true }) }),
+        ),
+      );
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true"),
+      );
+    });
+
+    it("revokes access when toggling an already-granted participant", async () => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      const granted = { ...activeParticipant, followup_study_granted: true };
+      mockFollowupApi([granted]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Alice Smith");
+
+      const label = `Toggle follow-up study access for ${granted.email}`;
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      await waitFor(() =>
+        expect(mockApiFetch).toHaveBeenCalledWith(
+          `/api/users/${granted.id}/followup-study`,
+          expect.objectContaining({ method: "PATCH", body: JSON.stringify({ granted: false }) }),
         ),
       );
     });

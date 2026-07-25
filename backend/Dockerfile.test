@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-test.txt
 
 COPY app ./app
 COPY tests ./tests
+# scripts/ holds dev tooling (e.g. seed_questions.py) that tests/ import; the
+# app image doesn't need it, but the test image does so collection succeeds.
+COPY scripts ./scripts
 COPY pytest.ini .coveragerc ./
 
 CMD ["pytest", "--cov=app", "--cov-report=term-missing", "--cov-report=html:/app/htmlcov"]

@@ -52,6 +52,7 @@ def _to_public(doc: dict) -> UserPublic:
         survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
         survey_stage=_normalize_stage(doc.get("survey_stage")),
         quiz_sets=doc.get("quiz_sets"),
+        followup_study_granted=doc.get("followup_study_granted", False),
     )
 
 
@@ -167,6 +168,18 @@ def set_participant_quiz_sets(
     return users.find_one_and_update(
         {"_id": ObjectId(user_id)},
         {"$set": {"quiz_sets": sets or None, "updated_at": datetime.now(timezone.utc)}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+
+def set_participant_followup_study(
+    users: Collection, user_id: str, granted: bool
+) -> Optional[dict]:
+    """Grant/revoke a participant's follow-up study access (Phase 13). Returns
+    the updated user doc, or ``None`` if not found."""
+    return users.find_one_and_update(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"followup_study_granted": granted, "updated_at": datetime.now(timezone.utc)}},
         return_document=ReturnDocument.AFTER,
     )
 

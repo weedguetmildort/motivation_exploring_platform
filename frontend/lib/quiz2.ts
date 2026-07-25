@@ -36,6 +36,20 @@ export type Quiz2Step = {
 export const QUIZ2_INTRO_SUBTITLE =
   "Quiz 2 — a second problem set. Coming soon.";
 
+// Copy for the Phase-13 follow-up study placeholder page (pages/followup_study.tsx).
+// Lives here so quiz-2 content grows in this scaffold; the page evolves in place.
+export const QUIZ2_PLACEHOLDER_TITLE = "Quiz 2 — Follow-Up Study";
+export const QUIZ2_PLACEHOLDER_BODY =
+  "This is the future home of Quiz 2. The follow-up study isn't available yet — " +
+  "content is coming soon. You've been granted access, so it will appear here once ready.";
+
+// A participant sees the follow-up study only once an admin has granted access
+// AND they've completed the original study. Shared by the dashboard card and the
+// /followup_study page so both gate identically.
+export function isFollowupEligible(user: User): boolean {
+  return !!user.followup_study_granted && user.survey_stage === "complete";
+}
+
 // Returns the quiz-2 study steps to show in the dashboard once enabled. Empty
 // while the flag is off so callers can splice it into the study flow safely.
 export function buildQuiz2Steps(_user: User): Quiz2Step[] {

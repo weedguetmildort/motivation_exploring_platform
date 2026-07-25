@@ -12,6 +12,7 @@ from ..schemas.user import (
     NextAssignmentUpdate,
     QuizDefaultSets,
     ParticipantSetsUpdate,
+    FollowupStudyUpdate,
 )
 from ..api.auth import get_current_user
 from ..services.users import (
@@ -21,6 +22,7 @@ from ..services.users import (
     get_quiz_default_sets,
     set_quiz_default_sets,
     set_participant_quiz_sets,
+    set_participant_followup_study,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -56,6 +58,7 @@ def _to_summary(doc: dict) -> ParticipantSummary:
         consent_viewed_at=doc.get("consent_viewed_at"),
         consent_abandoned_at=doc.get("consent_abandoned_at"),
         quiz_sets=doc.get("quiz_sets"),
+        followup_study_granted=doc.get("followup_study_granted", False),
         created_at=doc.get("created_at"),
     )
 
@@ -144,6 +147,24 @@ def patch_participant_quiz_sets(
         raise HTTPException(status_code=404, detail="Participant not found")
     col = get_users_collection(request.app.state.db)
     updated = set_participant_quiz_sets(col, user_id, body.quiz_sets)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    return _to_summary(updated)
+
+
+@router.patch("/{user_id}/followup-study", response_model=ParticipantSummary)
+def patch_participant_followup_study(
+    user_id: str,
+    body: FollowupStudyUpdate,
+    request: Request,
+    _: UserPublic = Depends(_require_admin),
+):
+    try:
+        ObjectId(user_id)
+    except InvalidId:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    col = get_users_collection(request.app.state.db)
+    updated = set_participant_followup_study(col, user_id, body.granted)
     if not updated:
         raise HTTPException(status_code=404, detail="Participant not found")
     return _to_summary(updated)
