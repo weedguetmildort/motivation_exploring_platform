@@ -261,11 +261,79 @@ describe("AnalyticsPanelPage", () => {
       expect(screen.getByText("dan@test.edu")).toBeInTheDocument();
       expect(screen.getByText("2 messages")).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByLabelText("Only with stated choice"));
 
       expect(screen.getByText("carol@test.edu")).toBeInTheDocument();
       expect(screen.queryByText("dan@test.edu")).not.toBeInTheDocument();
       expect(screen.getByText("1 messages")).toBeInTheDocument();
+    });
+
+    it("filters messages by the Only leaked manipulation checkbox", async () => {
+      const leakedMsg = { ...chatMessage, id: "m6", user_email: "greg@test.edu", manipulation_leaked: { default: true } };
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([chatMessage, leakedMsg]);
+      render(<AnalyticsPanelPage />);
+
+      await screen.findByText("Analytics Panel");
+      fireEvent.click(screen.getByRole("button", { name: "Chat Interactions" }));
+
+      await screen.findByText("carol@test.edu");
+      expect(screen.getByText("greg@test.edu")).toBeInTheDocument();
+      expect(screen.getByText("2 messages")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByLabelText("Only leaked manipulation"));
+
+      expect(screen.queryByText("carol@test.edu")).not.toBeInTheDocument();
+      expect(screen.getByText("greg@test.edu")).toBeInTheDocument();
+      expect(screen.getByText("1 messages")).toBeInTheDocument();
+    });
+
+    it("shows a leaked warning badge when manipulation_leaked has a true value", async () => {
+      const leakedMsg = { ...chatMessage, id: "m7", manipulation_leaked: { default: true } };
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([leakedMsg]);
+      render(<AnalyticsPanelPage />);
+
+      await screen.findByText("Analytics Panel");
+      fireEvent.click(screen.getByRole("button", { name: "Chat Interactions" }));
+
+      expect(await screen.findByText("⚠ Leaked")).toBeInTheDocument();
+    });
+
+    it("shows 'No' when manipulation_leaked has no true values", async () => {
+      const cleanMsg = { ...chatMessage, id: "m8", manipulation_leaked: { default: false } };
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([cleanMsg]);
+      render(<AnalyticsPanelPage />);
+
+      await screen.findByText("Analytics Panel");
+      fireEvent.click(screen.getByRole("button", { name: "Chat Interactions" }));
+
+      await screen.findByText("carol@test.edu");
+      expect(screen.queryByText("⚠ Leaked")).not.toBeInTheDocument();
+    });
+
+    it("shows '—' when manipulation_leaked is null", async () => {
+      const noLeak = { ...chatMessage, id: "m9", manipulation_leaked: null };
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([noLeak]);
+      render(<AnalyticsPanelPage />);
+
+      await screen.findByText("Analytics Panel");
+      fireEvent.click(screen.getByRole("button", { name: "Chat Interactions" }));
+
+      await screen.findByText("carol@test.edu");
+      expect(screen.queryByText("⚠ Leaked")).not.toBeInTheDocument();
+      const dashes = screen.getAllByText("—");
+      expect(dashes.length).toBeGreaterThan(0);
     });
 
     it("filters chat messages by email search", async () => {

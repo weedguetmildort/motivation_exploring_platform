@@ -26,6 +26,7 @@ def _to_summary(doc: dict) -> MessageSummary:
         trigger=doc.get("trigger"),
         stated_choice_id=meta.get("stated_choice_id"),
         answer_incorrectly=meta.get("answer_incorrectly"),
+        manipulation_leaked=meta.get("manipulation_leaked"),
         created_at=doc["created_at"],
     )
 
@@ -36,6 +37,10 @@ def list_messages(
     _: UserPublic = Depends(_require_admin),
     question_id: Optional[str] = Query(default=None),
     has_choice: Optional[bool] = Query(default=None),
+    leaked_only: Optional[bool] = Query(
+        default=None,
+        description="If true, only return replies flagged as having leaked the answer_incorrectly instruction.",
+    ),
 ):
     db = request.app.state.db
     col = db["messages"]
@@ -45,6 +50,12 @@ def list_messages(
         query["question_id"] = question_id
     if has_choice:
         query["metadata.stated_choice_id"] = {"$exists": True, "$ne": None}
+    if leaked_only:
+        query["$or"] = [
+            {"metadata.manipulation_leaked.default": True},
+            {"metadata.manipulation_leaked.A": True},
+            {"metadata.manipulation_leaked.B": True},
+        ]
 
     docs = list(col.find(query, sort=[("created_at", -1)], limit=2000))
     return [_to_summary(doc) for doc in docs]

@@ -31,6 +31,7 @@ type ChatMessage = {
   trigger: string | null;
   stated_choice_id: Record<string, string | null> | null;
   answer_incorrectly: boolean | null;
+  manipulation_leaked: Record<string, boolean> | null;
   created_at: string;
 };
 
@@ -195,12 +196,19 @@ function choiceSummary(stated: Record<string, string | null> | null): string {
     .join(", ");
 }
 
+// True if the reply appears to have leaked the "answer incorrectly" instruction
+// to the participant — this must never happen, so any true value here needs review.
+function hasLeaked(leaked: Record<string, boolean> | null): boolean {
+  return !!leaked && Object.values(leaked).some(Boolean);
+}
+
 function ChatInteractionsTab() {
   const [rows, setRows] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [onlyWithChoice, setOnlyWithChoice] = useState(false);
+  const [onlyLeaked, setOnlyLeaked] = useState(false);
 
   useEffect(() => {
     apiFetch<ChatMessage[]>("/api/messages")
@@ -215,6 +223,7 @@ function ChatInteractionsTab() {
   let filtered = rows;
   if (search) filtered = filtered.filter((r) => (r.user_email ?? "").toLowerCase().includes(search.toLowerCase()));
   if (onlyWithChoice) filtered = filtered.filter((r) => r.stated_choice_id != null);
+  if (onlyLeaked) filtered = filtered.filter((r) => hasLeaked(r.manipulation_leaked));
 
   return (
     <>
@@ -228,6 +237,14 @@ function ChatInteractionsTab() {
           />
           Only with stated choice
         </label>
+        <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={onlyLeaked}
+            onChange={(e) => setOnlyLeaked(e.target.checked)}
+          />
+          Only leaked manipulation
+        </label>
       </div>
       <p className="mb-2 text-xs text-gray-400">{filtered.length} messages</p>
       <div className="overflow-x-auto">
@@ -239,7 +256,8 @@ function ChatInteractionsTab() {
               <th className="pb-1 pr-4 font-medium">Question</th>
               <th className="pb-1 pr-4 font-medium">Trigger</th>
               <th className="pb-1 pr-4 font-medium">Stated Choice</th>
-              <th className="pb-1 font-medium">Wrong?</th>
+              <th className="pb-1 pr-4 font-medium">Wrong?</th>
+              <th className="pb-1 font-medium">Leaked?</th>
             </tr>
           </thead>
           <tbody>
@@ -250,9 +268,16 @@ function ChatInteractionsTab() {
                 <td className="py-1.5 pr-4 text-gray-500">{r.question_id ?? "—"}</td>
                 <td className="py-1.5 pr-4 text-gray-500">{r.trigger ?? "—"}</td>
                 <td className="py-1.5 pr-4 font-mono text-xs">{choiceSummary(r.stated_choice_id)}</td>
-                <td className="py-1.5">
+                <td className="py-1.5 pr-4">
                   {r.answer_incorrectly == null ? "—" : r.answer_incorrectly ? (
                     <span className="text-red-600 font-medium">Yes</span>
+                  ) : (
+                    <span className="text-green-700">No</span>
+                  )}
+                </td>
+                <td className="py-1.5">
+                  {r.manipulation_leaked == null ? "—" : hasLeaked(r.manipulation_leaked) ? (
+                    <span className="text-red-600 font-semibold">⚠ Leaked</span>
                   ) : (
                     <span className="text-green-700">No</span>
                   )}
@@ -260,7 +285,7 @@ function ChatInteractionsTab() {
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={6} className="py-4 text-center text-gray-400">No results.</td></tr>
+              <tr><td colSpan={7} className="py-4 text-center text-gray-400">No results.</td></tr>
             )}
           </tbody>
         </table>

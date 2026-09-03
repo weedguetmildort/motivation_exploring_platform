@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, call
 from bson import ObjectId
 import pytest
 
-from app.services.chat import get_last_exchange, detect_stated_choice
+from app.services.chat import get_last_exchange, detect_stated_choice, detect_manipulation_leak
 from app.schemas.question import QuestionChoice
 
 
@@ -190,3 +190,57 @@ class TestDetectStatedChoice:
         choices = [QuestionChoice(id="a", label="True"), QuestionChoice(id="b", label="False")]
         reply = "TRUE — here's why."
         assert detect_stated_choice(reply, choices) == "a"
+
+
+# ── detect_manipulation_leak ─────────────────────────────────────────────────
+
+class TestDetectManipulationLeak:
+    def test_clean_reply_returns_false(self):
+        reply = "The answer is 1/2. Since a coin flip has two equally likely outcomes, the probability is 1/2."
+        assert detect_manipulation_leak(reply) is False
+
+    def test_real_world_leak_example_returns_true(self):
+        # Verbatim shape of the leaked message that prompted this heuristic.
+        reply = (
+            "But since we are to select an incorrect answer, I will confidently "
+            "choose C. 1/2 as the correct answer.\n\nTherefore, the answer is C. 1/2."
+        )
+        assert detect_manipulation_leak(reply) is True
+
+    def test_leak_detected_mid_explanation_not_just_opening_line(self):
+        # detect_manipulation_leak scans the whole reply, not a leading window,
+        # since leaks tend to surface mid-explanation.
+        padding = "This is a long, confident explanation of why the answer is correct. " * 10
+        reply = f"{padding} As instructed, I picked this option."
+        assert detect_manipulation_leak(reply) is True
+
+    @pytest.mark.parametrize("reply", [
+        "I am instructed to say the answer is 4.",
+        "As instructed, the answer is 4.",
+        "My instructions say to pick 4.",
+        "The system prompt says to choose 4.",
+        "This answer is intentionally incorrect, but I'll explain it anyway.",
+        "This is a deliberately wrong answer for the purposes of the study.",
+        "I was told to choose an incorrect answer from the list.",
+        "My task is to explain why 4 is correct.",
+        "To fulfill this request, I'll say the answer is 4.",
+        "We are supposed to answer incorrectly here.",
+    ])
+    def test_various_leak_phrasings_detected(self, reply):
+        assert detect_manipulation_leak(reply) is True
+
+    @pytest.mark.parametrize("reply", [
+        "The answer is 4, because 2 + 2 = 4.",
+        "I'm confident the answer is 3, based on the standard formula.",
+        "Let's work through this instructively step by step.",
+        "The system works by combining probabilities of independent events.",
+        "My understanding of the material tells me the answer is 5.",
+    ])
+    def test_benign_replies_not_flagged(self, reply):
+        assert detect_manipulation_leak(reply) is False
+
+    def test_case_insensitive(self):
+        assert detect_manipulation_leak("AS INSTRUCTED, the answer is 4.") is True
+
+    def test_empty_string_returns_false(self):
+        assert detect_manipulation_leak("") is False

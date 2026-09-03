@@ -190,6 +190,7 @@ def export_chat_messages(
     for doc in docs:
         meta = doc.get("metadata") or {}
         stated = meta.get("stated_choice_id") or {}
+        leaked = meta.get("manipulation_leaked") or {}
         rows.append({
             "user_email": _fmt(doc.get("user_email")),
             "conversation_id": _fmt(doc.get("conversation_id")),
@@ -199,6 +200,9 @@ def export_chat_messages(
             "stated_choice_A": _fmt(stated.get("A")),
             "stated_choice_B": _fmt(stated.get("B")),
             "answer_incorrectly": _fmt(meta.get("answer_incorrectly")),
+            "manipulation_leaked_default": _fmt(leaked.get("default")),
+            "manipulation_leaked_A": _fmt(leaked.get("A")),
+            "manipulation_leaked_B": _fmt(leaked.get("B")),
             "created_at": _fmt(doc.get("created_at")),
         })
     return _csv_response(rows, "chat_messages.csv")
