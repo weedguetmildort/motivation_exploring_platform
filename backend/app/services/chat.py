@@ -19,6 +19,40 @@ def detect_stated_choice(reply_text: str, choices: list[QuestionChoice]) -> Opti
     return matches[0] if len(matches) == 1 else None
 
 
+# Phrases that indicate the reply is narrating the "answer incorrectly" system
+# instruction to the participant instead of just following it silently — e.g.
+# "since we are to select an incorrect answer, I will confidently choose C."
+# Participants must never see that their answer is deliberately wrong, so any
+# match here is a prompt-leak worth flagging even though the prompt already
+# tells the model not to do this.
+_MANIPULATION_LEAK_PATTERNS = [
+    re.compile(p, re.IGNORECASE) for p in (
+        r"\bwe are (?:to|supposed to|asked to)\b",
+        r"\bi(?:'m| am) (?:asked|told|instructed|supposed) to\b",
+        r"\binstructed to\b",
+        r"\bas instructed\b",
+        r"\bmy instructions\b",
+        r"\bsystem prompt\b",
+        r"\bintentionally (?:incorrect|wrong)\b",
+        r"\bdeliberately (?:incorrect|wrong)\b",
+        r"\b(?:choose|select|pick|give|provide) an incorrect answer\b",
+        r"\bsupposed to (?:be wrong|be incorrect|answer incorrectly|choose|select|pick)\b",
+        r"\bmy task is to\b",
+        r"\bto fulfill this request\b",
+    )
+]
+
+
+def detect_manipulation_leak(reply_text: str) -> bool:
+    """Heuristic: True if the reply appears to reveal that the AI was told to
+    answer incorrectly. Meant to be checked only when answer_incorrectly=True,
+    to flag/monitor prompt leakage in stored metadata (see AIMessageMetadata.
+    manipulation_leaked). Scans the full reply — unlike detect_stated_choice —
+    since leaks tend to surface mid-explanation rather than in the opening line.
+    """
+    return any(p.search(reply_text) for p in _MANIPULATION_LEAK_PATTERNS)
+
+
 def _format_assistant(content) -> str:
     """Combine agent replies into a single assistant message string.
     Labels are pre-baked into each item at save time (e.g. '[AGENT A] ...').

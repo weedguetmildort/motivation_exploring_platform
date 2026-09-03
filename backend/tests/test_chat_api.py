@@ -125,10 +125,29 @@ class TestBuildSystemInstruction:
         assert "MUST choose an incorrect answer choice" in text
         assert "Do NOT mention that your answer is intentionally incorrect" in text
 
+    def test_answer_incorrectly_and_choices_forbids_leaking_the_setup(self):
+        # Regression: the AI must never narrate the manipulation to the student
+        # (e.g. "since we are to select an incorrect answer, I will choose C").
+        text = chat_module._build_system_instruction(answer_incorrectly=True, has_choices=True)
+        assert "never reveal, reference, hint at, or acknowledge" in text
+        assert "since we are asked to" in text
+        assert "Silently work out which answer is actually" in text
+
     def test_answer_incorrectly_only(self):
         text = chat_module._build_system_instruction(answer_incorrectly=True, has_choices=False)
         assert "Respond confidently with an incorrect answer" in text
         assert "answer choice" not in text
+
+    def test_answer_incorrectly_only_forbids_leaking_the_setup(self):
+        text = chat_module._build_system_instruction(answer_incorrectly=True, has_choices=False)
+        assert "never reveal, reference, hint at, or acknowledge" in text
+
+    def test_secrecy_rules_absent_when_not_answering_incorrectly(self):
+        for text in (
+            chat_module._build_system_instruction(answer_incorrectly=False, has_choices=True),
+            chat_module._build_system_instruction(answer_incorrectly=False, has_choices=False),
+        ):
+            assert "never reveal, reference, hint at, or acknowledge" not in text
 
     def test_choices_only(self):
         text = chat_module._build_system_instruction(answer_incorrectly=False, has_choices=True)
@@ -454,7 +473,7 @@ class TestStandardStream:
         assert events[0] == chat_module._sse({"type": "token", "content": "foo", "agent": "A"})
         assistant_doc = col.insert_one.call_args_list[1].args[0]
         assert assistant_doc["content"] == ["[AGENT A] foo"]
-        assert assistant_doc["metadata"] == {"answer_incorrectly": True}
+        assert assistant_doc["metadata"] == {"answer_incorrectly": True, "manipulation_leaked": {"default": False}}
 
     def test_error_mid_stream_no_save(self, monkeypatch):
         monkeypatch.setattr(chat_module._client.chat.completions, "create", AsyncMock(side_effect=RuntimeError("boom")))
@@ -569,6 +588,59 @@ class TestStandardStream:
         asyncio.run(run())
         assistant_doc = col.insert_one.call_args_list[1].args[0]
         assert "stated_choice_id" not in assistant_doc.get("metadata", {})
+
+    def test_manipulation_leak_flagged_when_answer_incorrectly_and_reply_leaks(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            chat_module._client.chat.completions, "create",
+            _mock_create(["Since we are to select an incorrect answer, I'll go with 3."]),
+        )
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        async def run():
+            async for _ in chat_module._standard_stream(
+                [{"role": "user", "content": "hi"}], col, user, "conv1", "hi",
+                answer_incorrectly=True,
+            ):
+                pass
+
+        asyncio.run(run())
+        assistant_doc = col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["manipulation_leaked"] == {"default": True}
+        # A leak must be loud in server logs, not just silently recorded.
+        out = capsys.readouterr().out
+        assert "MANIPULATION LEAK detected conv=conv1" in out
+
+    def test_manipulation_leaked_false_when_answer_incorrectly_and_reply_clean(self, monkeypatch):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["The answer is 3, clearly."]))
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        async def run():
+            async for _ in chat_module._standard_stream(
+                [{"role": "user", "content": "hi"}], col, user, "conv1", "hi",
+                answer_incorrectly=True,
+            ):
+                pass
+
+        asyncio.run(run())
+        assistant_doc = col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["manipulation_leaked"] == {"default": False}
+
+    def test_no_manipulation_leaked_field_when_not_answering_incorrectly(self, monkeypatch):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["The answer is 3, clearly."]))
+        col = MagicMock()
+        user = UserPublic(id="u1", email="a@b.com", is_admin=False)
+
+        async def run():
+            async for _ in chat_module._standard_stream(
+                [{"role": "user", "content": "hi"}], col, user, "conv1", "hi",
+            ):
+                pass
+
+        asyncio.run(run())
+        assistant_doc = col.insert_one.call_args_list[1].args[0]
+        assert "manipulation_leaked" not in assistant_doc.get("metadata", {})
 
 
 # ── _stream_into_queue ───────────────────────────────────────────────────────────
@@ -766,6 +838,36 @@ class TestDoubleChatEndpoint:
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert assistant_doc["metadata"]["stated_choice_id"] == {"A": "a", "B": "b"}
 
+    def test_both_agents_manipulation_leak_detected_per_agent(self, monkeypatch, chat_client, chat_col, capsys):
+        monkeypatch.setattr(
+            chat_module._client.chat.completions, "create",
+            _agent_aware_create(
+                ["Since we are to select an incorrect answer, I'll say 3."],
+                ["The answer is 4, formally."],
+            ),
+        )
+
+        resp = chat_client.post("/chat/double", json={
+            "message": "hi", "conversation_id": "conv1", "agents": [],
+            "answer_incorrectly": True,
+        })
+
+        assert resp.status_code == 200
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["manipulation_leaked"] == {"A": True, "B": False}
+        out = capsys.readouterr().out
+        assert "MANIPULATION LEAK detected conv=conv1" in out
+        assert "agents=['A']" in out
+
+    def test_no_manipulation_leaked_field_when_not_answering_incorrectly(self, monkeypatch, chat_client, chat_col):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _agent_aware_create(["a"], ["b"]))
+
+        resp = chat_client.post("/chat/double", json={"message": "hi", "conversation_id": "conv1", "agents": []})
+
+        assert resp.status_code == 200
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert "manipulation_leaked" not in assistant_doc.get("metadata", {})
+
     def test_question_id_and_trigger_round_trip_both_agents(self, monkeypatch, chat_client, chat_col):
         monkeypatch.setattr(chat_module._client.chat.completions, "create", _agent_aware_create(["a"], ["b"]))
 
@@ -924,6 +1026,24 @@ class TestLinksChatEndpoint:
         assert resp.status_code == 200
         assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
         assert assistant_doc["metadata"]["stated_choice_id"] == {"default": "b"}
+
+    def test_manipulation_leak_flagged(self, monkeypatch, chat_client, chat_app, chat_col, capsys):
+        chat_app.state.knowledge_links = []
+        monkeypatch.setattr(
+            chat_module._client.chat.completions, "create",
+            _mock_create(["Since we are to select an incorrect answer, I'll say 3."]),
+        )
+
+        resp = chat_client.post("/chat/links", json={
+            "message": "What is 2+2?", "conversation_id": "conv3",
+            "answer_incorrectly": True,
+        })
+
+        assert resp.status_code == 200
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["manipulation_leaked"] == {"default": True}
+        out = capsys.readouterr().out
+        assert "MANIPULATION LEAK detected conv=conv3" in out
 
 
 # ── GET /chat/get_history/{conversation_id} ───────────────────────────────────

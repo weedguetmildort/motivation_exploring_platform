@@ -61,6 +61,17 @@ class AIMessageMetadata(BaseModel):
             "'A'/'B'. A None value means no single choice could be confidently detected."
         )
     )
+    manipulation_leaked: Optional[dict[str, bool]] = Field(
+        default=None,
+        description=(
+            "Maps an agent tag to whether the reply appears to reveal that the AI was "
+            "told to answer incorrectly (e.g. 'since we are to select an incorrect "
+            "answer...'). Only populated when answer_incorrectly is True. Single-agent "
+            "endpoints use the key 'default'; dual-agent mode uses 'A'/'B'. Used to flag "
+            "and audit prompt leakage — participants must never see that their answer "
+            "is deliberately wrong."
+        )
+    )
     custom_metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Flexible field for any additional metadata or analysis data"
@@ -121,4 +132,5 @@ class MessageSummary(BaseModel):
     trigger: Optional[str] = None
     stated_choice_id: Optional[dict[str, Optional[str]]] = None
     answer_incorrectly: Optional[bool] = None
+    manipulation_leaked: Optional[dict[str, bool]] = None
     created_at: datetime
