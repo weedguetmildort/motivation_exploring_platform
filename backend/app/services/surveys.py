@@ -18,7 +18,7 @@ from ..schemas.survey import (
     SurveyScale,
 )
 
-from ..schemas.user import SurveyStage
+from . import study_flow
 
 def get_survey_items_collection(db) -> Collection:
     return db["survey_items"]
@@ -38,28 +38,27 @@ def ensure_survey_indexes(db) -> None:
 def get_users_collection(db) -> Collection:
     return db["users"]
 
-def _next_stage(stage: SurveyStage) -> SurveyStage | None:
-    return {
-        SurveyStage.pre_base: SurveyStage.post_base,
-        SurveyStage.post_base: SurveyStage.post_variant,
-        SurveyStage.post_variant: SurveyStage.complete,
-        SurveyStage.complete: None,
-    }[stage]
+def _validate_stage(stage: str) -> str:
+    """Accept any stage the study-flow registry knows about.
 
-def _completion_flag_field(stage: SurveyStage) -> str:
-    return {
-        SurveyStage.pre_base: "survey_pre_base_completed",
-        SurveyStage.post_base: "survey_post_base_completed",
-        SurveyStage.post_variant: "survey_post_variant_completed",
-    }[stage]
+    Stages used to be limited to the four SurveyStage enum members. The flow now
+    schedules one interstitial survey per variant (post_followup, post_links,
+    post_double, ...), each of which needs its OWN response stage because
+    survey_responses is uniquely indexed on (user_id, stage) — sharing
+    "post_base" would make the second survey read back the first's completed
+    document and skip straight past it.
+    """
+    if not study_flow.is_known_survey_stage(stage):
+        raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
+    return stage
 
-def _question_stage_for_stage(stage: SurveyStage) -> SurveyStage:
-    return {
-        SurveyStage.pre_base: SurveyStage.pre_base,
-        SurveyStage.post_base: SurveyStage.post_base,
-        SurveyStage.post_variant: SurveyStage.post_base,
-        SurveyStage.complete: SurveyStage.complete,
-    }[stage]
+def _question_stage_for_stage(stage: str) -> str:
+    """Which stage's *questions* a response stage displays.
+
+    Every post-variant survey reuses the post_base question set, so admins keep
+    editing one list in the Surveys Panel rather than one per variant.
+    """
+    return study_flow.survey_question_stage(stage) or stage
 
 
 def _seeded_shuffle(items: List, seed_str: str) -> List:
@@ -199,12 +198,8 @@ def _load_or_create_response_doc(db, user_id: str, user_email: str, stage: str) 
     return doc
 
 def build_survey_state(db, user_id: str, user_email: str, stage: str) -> SurveyStateResponse:
-    try:
-        current_stage = SurveyStage(stage)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
-
-    question_stage = _question_stage_for_stage(current_stage).value
+    stage = _validate_stage(stage)
+    question_stage = _question_stage_for_stage(stage)
 
     # load items from question source stage
     items = list_survey_items(db, stage=question_stage, active_only=True)
@@ -253,6 +248,10 @@ def record_item_shown(db, user_id: str, stage: str, item_id: str) -> None:
     )
 
 def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubmitRequest) -> SurveyStateResponse:
+    # Validate before touching the DB — an unknown stage must not create a
+    # response document for itself.
+    stage = _validate_stage(stage)
+
     col = get_survey_responses_collection(db)
     items_col = get_survey_items_collection(db)
 
@@ -261,12 +260,7 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     if doc.get("status") == "completed":
         raise HTTPException(status_code=400, detail="Survey already completed")
 
-    try:
-        current_stage = SurveyStage(stage)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
-
-    question_stage = _question_stage_for_stage(current_stage).value
+    question_stage = _question_stage_for_stage(stage)
 
     # Validate item IDs against the question stage, not necessarily the response stage
     valid_ids = set(
@@ -331,35 +325,14 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
         users = get_users_collection(db)
         answers_map: Dict[str, Any] = {a.item_id: a.value for a in req.answers}
 
+        # Denormalised copy of the answers on the user doc, one key per stage.
+        # Keeps the existing pre_quiz_survey / post_base_survey / post_variant_survey
+        # naming convention and extends it to the per-variant stages.
         set_doc: Dict[str, Any] = {
             "updated_at": completed_at,
-            _completion_flag_field(current_stage): True,
+            f"{stage}_survey": answers_map,
+            f"{stage}_survey_completed_at": completed_at,
         }
-
-        if current_stage == SurveyStage.pre_base:
-            set_doc.update(
-                {
-                    "pre_quiz_survey": answers_map,
-                    "pre_quiz_survey_completed_at": completed_at,
-                }
-            )
-
-        elif current_stage == SurveyStage.post_base:
-            set_doc.update(
-                {
-                    "post_base_survey": answers_map,
-                    "post_base_survey_completed_at": completed_at,
-                }
-            )
-
-        elif current_stage == SurveyStage.post_variant:
-            set_doc.update(
-                {
-                    "post_variant_survey": answers_map,
-                    "post_variant_survey_completed_at": completed_at,
-                    "survey_stage": SurveyStage.complete.value,
-                }
-            )
 
         user_result = users.update_one(
             {"_id": ObjectId(user_id)},
@@ -368,5 +341,12 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
 
         if user_result.matched_count == 0:
             raise HTTPException(status_code=404, detail="User not found")
+
+        # Advance the flow. This also refreshes the derived legacy booleans
+        # (survey_pre_base_completed, survey_stage, ...) that used to be written
+        # by hand here via _completion_flag_field.
+        study_flow.mark_step_completed(
+            db, user_id, study_flow.survey_step_id(stage), completed_at
+        )
 
     return build_survey_state(db, user_id, user_email, stage)

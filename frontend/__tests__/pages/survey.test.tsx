@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import SurveyPage from "../../pages/survey";
 import { getMe, logout, invalidateMeCache } from "../../lib/auth";
 import { getSurveyState, submitSurvey } from "../../lib/surveys";
+import { getNextStep } from "../../lib/study";
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -21,6 +22,12 @@ jest.mock("../../lib/surveys", () => ({
   submitSurvey: jest.fn(),
 }));
 
+// Which survey is current, and where the participant goes next, are decided by
+// the backend (GET /study/next) rather than derived from completion flags.
+jest.mock("../../lib/study", () => ({
+  getNextStep: jest.fn(),
+}));
+
 jest.mock("../../components/ProgressBar", () => () => <div data-testid="progress-bar" />);
 
 const mockGetMe = getMe as jest.Mock;
@@ -28,6 +35,61 @@ const mockLogout = logout as jest.Mock;
 const mockInvalidateMeCache = invalidateMeCache as jest.Mock;
 const mockGetSurveyState = getSurveyState as jest.Mock;
 const mockSubmitSurvey = submitSurvey as jest.Mock;
+const mockGetNextStep = getNextStep as jest.Mock;
+
+const FLOW_ORDER = [
+  "survey:pre_quiz",
+  "quiz:base",
+  "survey:post_base",
+  "quiz:followup",
+  "survey:post_followup",
+  "quiz:double",
+  "survey:post_double",
+  "quiz:links",
+  "survey:post_links",
+];
+
+/** A /study/next response whose current step is the survey at `stage`. */
+function nextIsSurvey(stage: string, label = "Survey 1") {
+  return {
+    next_step: {
+      id: `survey:${stage}`,
+      kind: "survey",
+      key: stage,
+      label,
+      route: `/survey?stage=${stage}`,
+      variant: null,
+      completed: false,
+    },
+    next_route: `/survey?stage=${stage}`,
+    completed_count: 0,
+    total_steps: FLOW_ORDER.length,
+    finished: false,
+  };
+}
+
+/** A /study/next response pointing at something that is not a survey. */
+function nextIsRoute(route: string) {
+  return {
+    next_step: {
+      id: "quiz:base", kind: "quiz", key: "base",
+      label: "Quiz Part 1", route, variant: null, completed: false,
+    },
+    next_route: route,
+    completed_count: 1,
+    total_steps: FLOW_ORDER.length,
+    finished: false,
+  };
+}
+
+/** Survey state in the shape the API actually returns (status under attempt). */
+function surveyState(items: any[], answers: any[] = [], status = "in_progress") {
+  return {
+    attempt: { stage: "pre_quiz", status, answered_count: answers.length, total_items: items.length },
+    items,
+    answers,
+  };
+}
 
 const baseUser = {
   id: "1",
@@ -35,6 +97,8 @@ const baseUser = {
   is_admin: false,
   demographics_completed: true,
   assigned_var: "followup",
+  step_order: FLOW_ORDER,
+  completed_steps: [] as string[],
   survey_pre_base_completed: false,
   quiz_base_completed: false,
   survey_post_base_completed: false,
@@ -71,7 +135,9 @@ describe("SurveyPage", () => {
     mockInvalidateMeCache.mockReset();
     mockGetSurveyState.mockReset();
     mockSubmitSurvey.mockReset();
+    mockGetNextStep.mockReset();
     mockQuery = {};
+    mockGetNextStep.mockResolvedValue(nextIsSurvey("pre_quiz"));
   });
 
   it("shows a loading state before the session check resolves", () => {
@@ -87,14 +153,26 @@ describe("SurveyPage", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
   });
 
-  it("redirects when there is no active survey stage to show", async () => {
-    mockGetMe.mockResolvedValue({
-      user: { ...baseUser, survey_pre_base_completed: true, quiz_base_completed: false },
-    });
+  it("redirects when the current step is not a survey", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetNextStep.mockResolvedValue(nextIsRoute("/quiz/base"));
+
     render(<SurveyPage />);
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
     expect(mockGetSurveyState).not.toHaveBeenCalled();
+  });
+
+  it("redirects a stale ?stage= link to the survey actually owed", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockQuery = { stage: "post_variant" };
+    mockGetNextStep.mockResolvedValue(nextIsSurvey("post_followup", "Survey 3"));
+
+    render(<SurveyPage />);
+
+    await waitFor(() =>
+      expect(mockReplace).toHaveBeenCalledWith("/survey?stage=post_followup"),
+    );
   });
 
   it("loads and renders likert survey items for the pre-quiz stage", async () => {
@@ -163,20 +241,15 @@ describe("SurveyPage", () => {
   });
 
   it("redirects automatically when the survey is already completed", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: baseUser })
-      .mockResolvedValueOnce({ user: { ...baseUser, survey_pre_base_completed: true } });
+    mockGetMe.mockResolvedValue({ user: baseUser });
     mockQuery = { stage: "pre_quiz" };
-    mockGetSurveyState.mockResolvedValue({
-      stage: "pre_quiz",
-      status: "completed",
-      items: [likertItem],
-      answers: [],
-    });
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem], [], "completed"));
+    mockGetNextStep
+      .mockResolvedValueOnce(nextIsSurvey("pre_quiz"))
+      .mockResolvedValue(nextIsRoute("/quiz/base"));
 
     render(<SurveyPage />);
 
-    await waitFor(() => expect(mockInvalidateMeCache).toHaveBeenCalled());
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
   });
 
@@ -211,6 +284,12 @@ describe("SurveyPage", () => {
       answers: [],
     });
     mockSubmitSurvey.mockResolvedValue({ ok: true });
+    // First call resolves the current step; the call after submitting returns
+    // where the participant goes next.
+    mockGetNextStep
+      .mockReset()
+      .mockResolvedValueOnce(nextIsSurvey("pre_quiz"))
+      .mockResolvedValue(nextIsRoute("/quiz/base"));
 
     render(<SurveyPage />);
 
@@ -251,140 +330,56 @@ describe("SurveyPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Failed to save your responses.");
   });
 
-  it("loads post-base questions but reads/writes response state under post-variant", async () => {
-    const completedUser = {
-      ...baseUser,
-      survey_pre_base_completed: true,
-      quiz_base_completed: true,
-      survey_post_base_completed: true,
-      quiz_variant_completed: true,
-    };
-    mockGetMe.mockResolvedValue({ user: completedUser });
-    mockQuery = { stage: "post_variant" };
-
-    mockGetSurveyState.mockImplementation((s: string) => {
-      if (s === "post_base") {
-        return Promise.resolve({
-          stage: "post_base",
-          status: "not_started",
-          items: [likertItem],
-          answers: [],
-        });
-      }
-      return Promise.resolve({
-        stage: "post_variant",
-        status: "not_started",
-        items: [],
-        answers: [{ item_id: "item1", value: 4 }],
-      });
+  it("serves a per-variant survey under its own response stage", async () => {
+    // The questions come from the post_base bank, but answers are stored under
+    // this stage's own response document (survey_responses is unique per stage).
+    mockGetMe.mockResolvedValue({
+      user: { ...baseUser, completed_steps: FLOW_ORDER.slice(0, 4) },
     });
+    mockQuery = { stage: "post_followup" };
+    mockGetNextStep.mockResolvedValue(nextIsSurvey("post_followup", "Survey 3"));
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem]));
     mockSubmitSurvey.mockResolvedValue({ ok: true });
 
     render(<SurveyPage />);
 
-    expect(await screen.findByText(likertItem.prompt)).toBeInTheDocument();
-    expect(mockGetSurveyState).toHaveBeenCalledWith("post_base");
-    expect(mockGetSurveyState).toHaveBeenCalledWith("post_variant");
+    await screen.findByText(likertItem.prompt);
+    // Read under the per-variant stage, not post_base.
+    expect(mockGetSurveyState).toHaveBeenCalledWith("post_followup");
 
-    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
-    expect(radios[3].checked).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    fireEvent.click(screen.getByLabelText?.("3") ?? screen.getAllByRole("radio")[2]);
+    fireEvent.click(screen.getByRole("button", { name: /Continue|Finish/ }));
 
     await waitFor(() =>
-      expect(mockSubmitSurvey).toHaveBeenCalledWith("post_variant", [{ item_id: "item1", value: 4 }]),
+      expect(mockSubmitSurvey).toHaveBeenCalledWith("post_followup", expect.any(Array)),
     );
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
-  it("auto-resolves the pre_quiz stage from user flags when no stage is given", async () => {
-    mockGetMe.mockResolvedValue({ user: baseUser });
-    mockGetSurveyState.mockResolvedValue({
-      stage: "pre_quiz",
-      status: "not_started",
-      items: [likertItem],
-      answers: [],
-    });
-
-    render(<SurveyPage />);
-
-    expect(await screen.findByText("Survey 1")).toBeInTheDocument();
-    expect(mockGetSurveyState).toHaveBeenCalledWith("pre_quiz");
-  });
-
-  it("auto-resolves the post_base stage when the base quiz is done", async () => {
+  it("numbers each survey by its position in the participant's flow", async () => {
     mockGetMe.mockResolvedValue({
-      user: { ...baseUser, survey_pre_base_completed: true, quiz_base_completed: true },
+      user: { ...baseUser, completed_steps: FLOW_ORDER.slice(0, 4) },
     });
-    mockGetSurveyState.mockResolvedValue({
-      stage: "post_base",
-      status: "not_started",
-      items: [likertItem],
-      answers: [],
-    });
+    mockQuery = { stage: "post_followup" };
+    mockGetNextStep.mockResolvedValue(nextIsSurvey("post_followup", "Survey 3"));
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem]));
 
     render(<SurveyPage />);
 
-    expect(await screen.findByText("Survey 2")).toBeInTheDocument();
-    expect(await screen.findByText("Step 3 of 5")).toBeInTheDocument();
-    expect(mockGetSurveyState).toHaveBeenCalledWith("post_base");
-  });
-
-  it("auto-resolves the post_variant stage when the variant quiz is done", async () => {
-    mockGetMe.mockResolvedValue({
-      user: {
-        ...baseUser,
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: true,
-      },
-    });
-    mockGetSurveyState.mockImplementation((s: string) =>
-      Promise.resolve({
-        stage: s,
-        status: "not_started",
-        items: s === "post_base" ? [likertItem] : [],
-        answers: [],
-      }),
-    );
-
-    render(<SurveyPage />);
-
+    // post_followup is the 5th step of 9, and the 3rd survey.
     expect(await screen.findByText("Survey 3")).toBeInTheDocument();
-    expect(await screen.findByText("Step 5 of 5")).toBeInTheDocument();
-    expect(mockGetSurveyState).toHaveBeenCalledWith("post_base");
-    expect(mockGetSurveyState).toHaveBeenCalledWith("post_variant");
+    expect(screen.getByText("Step 5 of 9")).toBeInTheDocument();
   });
 
-  it("redirects to the variant quiz when it is the next pending step", async () => {
+  it("sends a finished participant to the dashboard", async () => {
     mockGetMe.mockResolvedValue({
-      user: {
-        ...baseUser,
-        assigned_var: "links",
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: false,
-      },
+      user: { ...baseUser, completed_steps: FLOW_ORDER },
     });
-
-    render(<SurveyPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/links"));
-    expect(mockGetSurveyState).not.toHaveBeenCalled();
-  });
-
-  it("redirects to the dashboard when the variant quiz is pending but no variant is assigned", async () => {
-    mockGetMe.mockResolvedValue({
-      user: {
-        ...baseUser,
-        assigned_var: null,
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: false,
-      },
+    mockGetNextStep.mockResolvedValue({
+      next_step: null,
+      next_route: "/dashboard",
+      completed_count: FLOW_ORDER.length,
+      total_steps: FLOW_ORDER.length,
+      finished: true,
     });
 
     render(<SurveyPage />);
@@ -392,17 +387,9 @@ describe("SurveyPage", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
-  it("redirects to the dashboard when the whole study is complete", async () => {
-    mockGetMe.mockResolvedValue({
-      user: {
-        ...baseUser,
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: true,
-        survey_post_variant_completed: true,
-      },
-    });
+  it("falls back to the dashboard when the next-step lookup fails", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetNextStep.mockRejectedValue(new Error("network"));
 
     render(<SurveyPage />);
 
@@ -437,69 +424,23 @@ describe("SurveyPage", () => {
     );
   });
 
-  it("redirects to a quiz-scoped survey URL when pre-base is still incomplete after submit", async () => {
-    mockGetMe.mockResolvedValue({ user: baseUser }); // survey_pre_base_completed: false
-    mockQuery = { stage: "post_base", quiz_id: "base" };
-    mockGetSurveyState.mockResolvedValue({
-      stage: "post_base",
-      status: "not_started",
-      items: [likertItem],
-      answers: [],
-    });
+  it("routes to whatever /study/next returns after submitting", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockQuery = { stage: "pre_quiz" };
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem]));
     mockSubmitSurvey.mockResolvedValue({ ok: true });
+    mockGetNextStep
+      .mockResolvedValueOnce(nextIsSurvey("pre_quiz"))
+      .mockResolvedValue(nextIsRoute("/quiz/base"));
 
     render(<SurveyPage />);
 
     await screen.findByText(likertItem.prompt);
     fireEvent.click(screen.getAllByRole("radio")[2]);
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Quiz Part 2" }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue|Finish|Begin/ }));
 
-    await waitFor(() => expect(mockSubmitSurvey).toHaveBeenCalledWith("post_base", [{ item_id: "item1", value: 3 }]));
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey?quiz_id=base"));
-  });
-
-  it("redirects to /survey when a completed post_base survey leaves the flag unset", async () => {
-    const lagging = { ...baseUser, survey_pre_base_completed: true, quiz_base_completed: true };
-    mockGetMe
-      .mockResolvedValueOnce({ user: lagging })
-      .mockResolvedValueOnce({ user: lagging }); // post_base still false after refresh
-    mockQuery = { stage: "post_base" };
-    mockGetSurveyState.mockResolvedValue({
-      stage: "post_base",
-      status: "completed",
-      items: [likertItem],
-      answers: [],
-    });
-
-    render(<SurveyPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects to /survey when a completed post_variant survey leaves the flag unset", async () => {
-    const lagging = {
-      ...baseUser,
-      survey_pre_base_completed: true,
-      quiz_base_completed: true,
-      survey_post_base_completed: true,
-      quiz_variant_completed: true,
-    };
-    mockGetMe
-      .mockResolvedValueOnce({ user: lagging })
-      .mockResolvedValueOnce({ user: lagging }); // post_variant still false after refresh
-    mockQuery = { stage: "post_variant" };
-    mockGetSurveyState.mockImplementation((s: string) =>
-      Promise.resolve({
-        stage: s,
-        status: s === "post_variant" ? "completed" : "not_started",
-        items: s === "post_base" ? [likertItem] : [],
-        answers: [],
-      }),
-    );
-
-    render(<SurveyPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
+    expect(mockInvalidateMeCache).toHaveBeenCalled();
   });
 
   it("navigates to the dashboard when the Dashboard button is clicked", async () => {

@@ -333,10 +333,17 @@ class TestCreateUser:
         assert inserted_doc["is_admin"] is False
         assert inserted_doc["survey_stage"] == SurveyStage.pre_base.value
 
-        # assigned_var update_one called with the round-robin result
-        mock_col.update_one.assert_called_once_with(
-            {"_id": oid}, {"$set": {"assigned_var": AssignedVar.followup.value}}
-        )
+        # Assignment now writes the participant's whole flow, not just a single
+        # condition: the sequence, the assembled step order, and the flow version.
+        mock_col.update_one.assert_called_once()
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert mock_col.update_one.call_args[0][0] == {"_id": oid}
+        assert set_doc["assigned_var"] == AssignedVar.followup.value
+        # assigned_var stays the FIRST variant of the sequence.
+        assert set_doc["variant_sequence"][0] == AssignedVar.followup.value
+        assert set_doc["step_order"][0] == "survey:pre_quiz"
+        assert set_doc["step_order"][1] == "quiz:base"  # base quiz always first
+        assert set_doc["assignment_source"] == "rotation"
 
     def test_password_is_hashed(self, mock_col):
         oid = ObjectId()
@@ -371,9 +378,15 @@ class TestCreateUser:
         )
 
         assert result.assigned_var == AssignedVar.links
-        mock_col.update_one.assert_called_once_with(
-            {"_id": oid}, {"$set": {"assigned_var": "links"}}
+        mock_col.update_one.assert_called_once()
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert set_doc["assigned_var"] == "links"
+        # The override pins the FIRST variant; the rest rotate around it.
+        assert set_doc["variant_sequence"][0] == "links"
+        assert sorted(set_doc["variant_sequence"]) == sorted(
+            v.value for v in AssignedVar
         )
+        assert set_doc["assignment_source"] == "override"
         # Rotation counter was NOT advanced — only the override was consumed.
         counters.find_one_and_update.assert_called_once()
         assert counters.find_one_and_update.call_args[0][0] == {

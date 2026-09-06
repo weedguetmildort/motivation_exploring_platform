@@ -29,6 +29,38 @@ def regular_user():
     return UserPublic(id="userid1", email="student@test.edu", is_admin=False)
 
 
+
+# ── Study-flow user helpers ──────────────────────────────────────────────────
+
+def standard_step_order():
+    """The step_order a participant receives under the default flow config."""
+    from app.services import study_flow
+
+    cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+    return study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
+
+
+def participant_at(step_id=None, **overrides):
+    """A non-admin UserPublic whose current step is ``step_id``.
+
+    Every authenticated participant carries a step_order in production
+    (api/auth.get_current_user_doc backfills one on read), so API tests need one
+    too — otherwise the flow gates in api/quiz.py and api/surveys.py correctly
+    refuse the request with 403.
+    """
+    order = standard_step_order()
+    completed = order[: order.index(step_id)] if step_id else []
+    fields = dict(
+        id="userid1",
+        email="student@test.edu",
+        is_admin=False,
+        step_order=order,
+        completed_steps=completed,
+    )
+    fields.update(overrides)
+    return UserPublic(**fields)
+
+
 # ── MongoDB mock helpers ─────────────────────────────────────────────────────
 
 @pytest.fixture

@@ -10,6 +10,7 @@ import {
   type QuizResultsResponse,
 } from "../../../lib/quiz";
 import { createReport } from "../../../lib/reports";
+import { getNextStep } from "../../../lib/study";
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -42,6 +43,12 @@ jest.mock("../../../lib/reports", () => ({
   createReport: jest.fn(),
 }));
 
+// Routing is delegated to the backend (GET /study/next); the page no longer
+// derives it from the user's completion flags.
+jest.mock("../../../lib/study", () => ({
+  getNextStep: jest.fn(),
+}));
+
 let lastChatBoxProps: any = null;
 jest.mock("../../../components/ChatBox", () => (props: any) => {
   lastChatBoxProps = props;
@@ -63,6 +70,52 @@ const mockSubmitQuizAnswer = submitQuizAnswer as jest.Mock;
 const mockResetQuiz = resetQuiz as jest.Mock;
 const mockGetQuizResults = getQuizResults as jest.Mock;
 const mockCreateReport = createReport as jest.Mock;
+const mockGetNextStep = getNextStep as jest.Mock;
+
+/** A /study/next response whose current step is `quizId`. */
+function nextIsQuiz(quizId: string) {
+  return {
+    next_step: {
+      id: `quiz:${quizId}`,
+      kind: "quiz",
+      key: quizId,
+      label: "Quiz Part 1",
+      route: `/quiz/${quizId}`,
+      variant: quizId === "base" ? null : quizId,
+      completed: false,
+    },
+    next_route: `/quiz/${quizId}`,
+    completed_count: 1,
+    total_steps: 9,
+    finished: false,
+  };
+}
+
+/** A /study/next response pointing somewhere other than a quiz. */
+function nextIsRoute(route: string) {
+  return {
+    next_step: {
+      id: "survey:post_base", kind: "survey", key: "post_base",
+      label: "Survey 2", route, variant: null, completed: false,
+    },
+    next_route: route,
+    completed_count: 2,
+    total_steps: 9,
+    finished: false,
+  };
+}
+
+const FLOW_ORDER = [
+  "survey:pre_quiz",
+  "quiz:base",
+  "survey:post_base",
+  "quiz:followup",
+  "survey:post_followup",
+  "quiz:double",
+  "survey:post_double",
+  "quiz:links",
+  "survey:post_links",
+];
 
 function baseUser(overrides: Partial<User> = {}): User {
   return {
@@ -70,6 +123,8 @@ function baseUser(overrides: Partial<User> = {}): User {
     email: "user@example.com",
     is_admin: false,
     assigned_var: "followup",
+    step_order: FLOW_ORDER,
+    completed_steps: ["survey:pre_quiz"],
     survey_pre_base_completed: true,
     quiz_base_completed: false,
     survey_post_base_completed: false,
@@ -194,7 +249,9 @@ describe("QuizPage ([quiz_id])", () => {
     mockResetQuiz.mockReset();
     mockGetQuizResults.mockReset();
     mockCreateReport.mockReset();
+    mockGetNextStep.mockReset();
     lastChatBoxProps = null;
+    mockGetNextStep.mockResolvedValue(nextIsQuiz("base"));
 
     setRoute("base");
     mockGetQuizState.mockResolvedValue(quizStateQ1);
@@ -225,136 +282,38 @@ describe("QuizPage ([quiz_id])", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
   });
 
-  it("redirects non-admin users to the dashboard for an invalid quiz id", async () => {
-    setRoute("not-a-real-quiz");
-    mockGetMe.mockResolvedValue({ user: baseUser() });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
-    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
-  });
-
-  it("redirects non-admin users to the dashboard when requesting a variant that is not their assigned variant", async () => {
+  it("sends a participant wherever /study/next points when this is not their current step", async () => {
     setRoute("links");
-    mockGetMe.mockResolvedValue({ user: baseUser({ assigned_var: "followup" }) });
+    mockGetMe.mockResolvedValue({ user: baseUser() });
+    mockGetNextStep.mockResolvedValue(nextIsRoute("/survey?stage=post_base"));
+
     render(<QuizPage />);
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() =>
+      expect(mockReplace).toHaveBeenCalledWith("/survey?stage=post_base"),
+    );
   });
 
-  it("redirects admin users to the dashboard when requesting a non-existent quiz id", async () => {
-    setRoute("not-a-real-quiz");
+  it("admits a participant to the quiz that is their current step", async () => {
+    setRoute("followup");
+    mockGetMe.mockResolvedValue({ user: baseUser() });
+    mockGetNextStep.mockResolvedValue(nextIsQuiz("followup"));
+
+    render(<QuizPage />);
+
+    await waitFor(() => expect(mockGetQuizState).toHaveBeenCalledWith("followup"));
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("does not consult the flow for admins, who may open any quiz", async () => {
+    setRoute("links");
     mockGetMe.mockResolvedValue({ user: adminUser });
+
     render(<QuizPage />);
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
-  });
-
-  it("redirects to /survey when the base quiz is requested before the pre-quiz survey is completed", async () => {
-    mockGetMe.mockResolvedValue({
-      user: baseUser({ survey_pre_base_completed: false }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects to /survey when the base quiz is already completed and the post-base survey is not", async () => {
-    mockGetMe.mockResolvedValue({
-      user: baseUser({
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: false,
-      }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects to the assigned variant quiz when the base quiz and post-base survey are done but the variant quiz is not", async () => {
-    mockGetMe.mockResolvedValue({
-      user: baseUser({
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: false,
-        assigned_var: "double",
-      }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/double"));
-  });
-
-  it("redirects to /survey for the base quiz when the variant is completed but the final survey is not", async () => {
-    mockGetMe.mockResolvedValue({
-      user: baseUser({
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: true,
-        survey_post_variant_completed: false,
-      }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects to /dashboard for the base quiz when everything is completed", async () => {
-    mockGetMe.mockResolvedValue({
-      user: baseUser({
-        survey_pre_base_completed: true,
-        quiz_base_completed: true,
-        survey_post_base_completed: true,
-        quiz_variant_completed: true,
-        survey_post_variant_completed: true,
-      }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
-  });
-
-  it("redirects a variant quiz to /survey when the post-base survey is not completed", async () => {
-    setRoute("followup");
-    mockGetMe.mockResolvedValue({
-      user: baseUser({ assigned_var: "followup", survey_post_base_completed: false }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects a variant quiz to /survey when the variant is completed but the final survey is not", async () => {
-    setRoute("followup");
-    mockGetMe.mockResolvedValue({
-      user: baseUser({
-        assigned_var: "followup",
-        survey_post_base_completed: true,
-        quiz_variant_completed: true,
-        survey_post_variant_completed: false,
-      }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects a variant quiz to /dashboard when the variant and final survey are both completed", async () => {
-    setRoute("followup");
-    mockGetMe.mockResolvedValue({
-      user: baseUser({
-        assigned_var: "followup",
-        survey_post_base_completed: true,
-        quiz_variant_completed: true,
-        survey_post_variant_completed: true,
-      }),
-    });
-    render(<QuizPage />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(mockGetQuizState).toHaveBeenCalledWith("links"));
+    expect(mockGetNextStep).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 
   it("renders the base quiz for an admin user with the correct header and subtitle", async () => {
@@ -369,19 +328,33 @@ describe("QuizPage ([quiz_id])", () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it("renders a variant quiz for the assigned non-admin user with 'Step 4 of 5'", async () => {
+  it("labels a variant quiz by its position in the participant's own flow", async () => {
+    // followup is the 4th step overall and the 2nd quiz, of a 9-step flow.
     setRoute("followup");
     mockGetMe.mockResolvedValue({
       user: baseUser({
-        assigned_var: "followup",
-        survey_post_base_completed: true,
-        quiz_variant_completed: false,
+        completed_steps: ["survey:pre_quiz", "quiz:base", "survey:post_base"],
       }),
     });
+    mockGetNextStep.mockResolvedValue(nextIsQuiz("followup"));
+
     render(<QuizPage />);
 
     expect(await screen.findByText("Quiz Part 2")).toBeInTheDocument();
-    expect(screen.getByText("Step 4 of 5")).toBeInTheDocument();
+    expect(screen.getByText("Step 4 of 9")).toBeInTheDocument();
+  });
+
+  it("numbers the later variant quizzes past the old two-quiz ceiling", async () => {
+    setRoute("links");
+    mockGetMe.mockResolvedValue({
+      user: baseUser({ completed_steps: FLOW_ORDER.slice(0, 7) }),
+    });
+    mockGetNextStep.mockResolvedValue(nextIsQuiz("links"));
+
+    render(<QuizPage />);
+
+    expect(await screen.findByText("Quiz Part 4")).toBeInTheDocument();
+    expect(screen.getByText("Step 8 of 9")).toBeInTheDocument();
   });
 
   it("loads and displays the current question with its choices and progress", async () => {
@@ -642,171 +615,53 @@ describe("QuizPage ([quiz_id])", () => {
     expect(screen.queryByText("Quiz completed (admin view)")).not.toBeInTheDocument();
   });
 
-  it("redirects to the post-base survey after completing the base quiz when it is not yet done", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: adminUser })
-      .mockResolvedValueOnce({ user: { ...adminUser, survey_post_base_completed: false } });
+  it("routes to whatever /study/next returns after finishing a quiz", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser() });
     mockGetQuizState.mockResolvedValue(quizStateCompleted);
+    mockGetNextStep
+      .mockResolvedValueOnce(nextIsQuiz("base"))
+      .mockResolvedValue(nextIsRoute("/survey?stage=post_base"));
+
     render(<QuizPage />);
 
-    await screen.findByText("Quiz completed (admin view)");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
+    const next = await screen.findByText("Continue to Next Step");
+    fireEvent.click(next);
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey?stage=post_base"));
+    await waitFor(() =>
+      expect(mockReplace).toHaveBeenCalledWith("/survey?stage=post_base"),
+    );
     expect(mockInvalidateMeCache).toHaveBeenCalled();
   });
 
-  it("redirects to the assigned variant quiz after completing the base quiz when the variant is not done", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: adminUser })
-      .mockResolvedValueOnce({
-        user: {
-          ...adminUser,
-          survey_post_base_completed: true,
-          quiz_variant_completed: false,
-          assigned_var: "double",
-        },
-      });
+  it("sends a finished participant to the dashboard", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser() });
     mockGetQuizState.mockResolvedValue(quizStateCompleted);
+    mockGetNextStep
+      .mockResolvedValueOnce(nextIsQuiz("base"))
+      .mockResolvedValue({
+        next_step: null, next_route: "/dashboard",
+        completed_count: 9, total_steps: 9, finished: true,
+      });
+
     render(<QuizPage />);
 
-    await screen.findByText("Quiz completed (admin view)");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/double"));
-  });
-
-  it("redirects to the dashboard after completing the base quiz when no variant is assigned", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: adminUser })
-      .mockResolvedValueOnce({
-        user: {
-          ...adminUser,
-          survey_post_base_completed: true,
-          quiz_variant_completed: false,
-          assigned_var: null,
-        },
-      });
-    mockGetQuizState.mockResolvedValue(quizStateCompleted);
-    render(<QuizPage />);
-
-    await screen.findByText("Quiz completed (admin view)");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
+    fireEvent.click(await screen.findByText("Continue to Next Step"));
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
-  it("redirects to /survey after the base quiz when the variant is done but the final survey is not", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: adminUser })
-      .mockResolvedValueOnce({
-        user: {
-          ...adminUser,
-          survey_post_base_completed: true,
-          quiz_variant_completed: true,
-          survey_post_variant_completed: false,
-        },
-      });
+  it("falls back to the dashboard when the next-step lookup fails", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser() });
     mockGetQuizState.mockResolvedValue(quizStateCompleted);
+    mockGetNextStep
+      .mockResolvedValueOnce(nextIsQuiz("base"))
+      .mockRejectedValue(new Error("network"));
+
     render(<QuizPage />);
 
-    await screen.findByText("Quiz completed (admin view)");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
-  });
-
-  it("redirects to /dashboard after the base quiz when the variant and final survey are both done", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: adminUser })
-      .mockResolvedValueOnce({
-        user: {
-          ...adminUser,
-          survey_post_base_completed: true,
-          quiz_variant_completed: true,
-          survey_post_variant_completed: true,
-        },
-      });
-    mockGetQuizState.mockResolvedValue(quizStateCompleted);
-    render(<QuizPage />);
-
-    await screen.findByText("Quiz completed (admin view)");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
+    fireEvent.click(await screen.findByText("Continue to Next Step"));
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
-  });
-
-  it("redirects to /survey?stage=post_variant after a variant quiz when the final survey is not done", async () => {
-    setRoute("followup");
-    mockGetMe
-      .mockResolvedValueOnce({
-        user: baseUser({
-          assigned_var: "followup",
-          survey_post_base_completed: true,
-          quiz_variant_completed: false,
-        }),
-      })
-      .mockResolvedValueOnce({
-        user: baseUser({
-          assigned_var: "followup",
-          survey_post_base_completed: true,
-          quiz_variant_completed: true,
-          survey_post_variant_completed: false,
-        }),
-      });
-    mockGetQuizState.mockResolvedValue({
-      ...quizStateCompleted,
-      attempt: { ...quizStateCompleted.attempt, quiz_id: "followup" },
-    });
-    render(<QuizPage />);
-
-    await screen.findByText("Quiz completed");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey?stage=post_variant"));
-  });
-
-  it("redirects to /dashboard after a variant quiz when the final survey is done", async () => {
-    setRoute("followup");
-    mockGetMe
-      .mockResolvedValueOnce({
-        user: baseUser({
-          assigned_var: "followup",
-          survey_post_base_completed: true,
-          quiz_variant_completed: false,
-        }),
-      })
-      .mockResolvedValueOnce({
-        user: baseUser({
-          assigned_var: "followup",
-          survey_post_base_completed: true,
-          quiz_variant_completed: true,
-          survey_post_variant_completed: true,
-        }),
-      });
-    mockGetQuizState.mockResolvedValue({
-      ...quizStateCompleted,
-      attempt: { ...quizStateCompleted.attempt, quiz_id: "followup" },
-    });
-    render(<QuizPage />);
-
-    await screen.findByText("Quiz completed");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
-  });
-
-  it("redirects to /survey if refreshing the user after completion fails", async () => {
-    mockGetMe
-      .mockResolvedValueOnce({ user: adminUser })
-      .mockRejectedValueOnce(new Error("network error"));
-    mockGetQuizState.mockResolvedValue(quizStateCompleted);
-    render(<QuizPage />);
-
-    await screen.findByText("Quiz completed (admin view)");
-    fireEvent.click(screen.getByRole("button", { name: "Continue to Next Step" }));
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey"));
   });
 
   it("navigates to the dashboard when the header Dashboard button is clicked", async () => {

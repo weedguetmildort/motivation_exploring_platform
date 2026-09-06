@@ -25,6 +25,13 @@ export type User = {
   last_active_at?: string;
   is_admin: boolean;
   assigned_var?: string | null;
+
+  // Study flow (authoritative). The backend snapshots the participant's whole
+  // assigned journey at signup; prefer GET /api/study/next for routing.
+  step_order?: string[];
+  completed_steps?: string[];
+  variant_sequence?: string[];
+  study_flow_version?: number;
   demographics_completed?: boolean;
   survey_pre_base_completed?: boolean;
   quiz_base_completed?: boolean;

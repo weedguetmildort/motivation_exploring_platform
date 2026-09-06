@@ -13,6 +13,7 @@ from app.api.auth import router as auth_router, get_current_user
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
 from app.schemas.user import AssignedVar, SurveyStage, UserPublic
+from tests.conftest import standard_step_order
 
 
 # ── Local app/fixtures (do not touch conftest.py) ────────────────────────────
@@ -75,6 +76,11 @@ def make_user_doc(email="student@test.edu", password="correct-password", **overr
         "quiz_variant_completed": False,
         "survey_post_variant_completed": False,
         "survey_stage": SurveyStage.pre_base.value,
+        # Every stored participant carries a flow; without one, reading the user
+        # triggers a one-time backfill write (study_flow.ensure_user_flow) that
+        # would show up as an extra update_one in these tests.
+        "step_order": standard_step_order(),
+        "completed_steps": [],
     }
     doc.update(overrides)
     return doc

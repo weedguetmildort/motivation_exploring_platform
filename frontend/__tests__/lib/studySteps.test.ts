@@ -2,6 +2,8 @@ import {
   isActiveSurveyStage,
   isVariantQuizId,
   buildStudySteps,
+  stageConfigFor,
+  stepIndexForPath,
   STEP_SUBTITLES,
 } from "../../lib/studySteps";
 import type { User } from "../../lib/auth";
@@ -113,5 +115,144 @@ describe("buildStudySteps", () => {
     expect(variant.abbr).toBe("Quiz Part 2");
     expect(variant.label).toBe("Quiz Part 2");
     expect(variant.path).toBe("/quiz/something-else");
+  });
+});
+
+// ── Flow-derived build (participants with an assigned step_order) ───────────
+
+const FLOW_ORDER = [
+  "survey:pre_quiz",
+  "quiz:base",
+  "survey:post_base",
+  "quiz:followup",
+  "survey:post_followup",
+  "quiz:double",
+  "survey:post_double",
+  "quiz:links",
+  "survey:post_links",
+];
+
+describe("buildStudySteps (flow-derived)", () => {
+  it("builds one step per entry in the participant's assigned order", () => {
+    const steps = buildStudySteps(makeUser({ step_order: FLOW_ORDER }));
+
+    expect(steps.map((s) => s.id)).toEqual(FLOW_ORDER);
+  });
+
+  it("numbers quizzes and surveys independently, past the old two-quiz ceiling", () => {
+    const steps = buildStudySteps(makeUser({ step_order: FLOW_ORDER }));
+
+    expect(steps.filter((s) => s.kind === "quiz").map((s) => s.label)).toEqual([
+      "Quiz Part 1",
+      "Quiz Part 2",
+      "Quiz Part 3",
+      "Quiz Part 4",
+    ]);
+    expect(steps.filter((s) => s.kind === "survey").map((s) => s.label)).toEqual([
+      "Survey 1",
+      "Survey 2",
+      "Survey 3",
+      "Survey 4",
+      "Survey 5",
+    ]);
+  });
+
+  it("keeps labels de-identified — no variant name is exposed", () => {
+    const steps = buildStudySteps(makeUser({ step_order: FLOW_ORDER }));
+
+    for (const variant of ["followup", "links", "double"]) {
+      expect(steps.some((s) => s.label.includes(variant))).toBe(false);
+    }
+  });
+
+  it("derives paths from the step id", () => {
+    const steps = buildStudySteps(makeUser({ step_order: FLOW_ORDER }));
+    const byId = Object.fromEntries(steps.map((s) => [s.id, s]));
+
+    expect(byId["quiz:links"].path).toBe("/quiz/links");
+    expect(byId["survey:post_links"].path).toBe("/survey?stage=post_links");
+  });
+
+  it("reflects completed_steps rather than the legacy booleans", () => {
+    const steps = buildStudySteps(
+      makeUser({
+        step_order: FLOW_ORDER,
+        completed_steps: ["survey:pre_quiz", "quiz:base"],
+        // Deliberately contradictory legacy flags — they must be ignored.
+        quiz_variant_completed: true,
+        survey_post_variant_completed: true,
+      })
+    );
+
+    const byId = Object.fromEntries(steps.map((s) => [s.id, s]));
+    expect(byId["survey:pre_quiz"].completed).toBe(true);
+    expect(byId["quiz:base"].completed).toBe(true);
+    expect(byId["quiz:links"].completed).toBe(false);
+    expect(byId["survey:post_links"].completed).toBe(false);
+  });
+
+  it("skips step ids it does not recognise", () => {
+    const steps = buildStudySteps(
+      makeUser({ step_order: [...FLOW_ORDER, "garbage"] })
+    );
+
+    expect(steps).toHaveLength(FLOW_ORDER.length);
+  });
+
+  it("falls back to the legacy five steps when there is no assigned flow", () => {
+    const steps = buildStudySteps(makeUser({ step_order: [] }));
+
+    expect(steps.map((s) => s.id)).toEqual([
+      "survey_pre",
+      "quiz_base",
+      "survey_post_base",
+      "quiz_variant",
+      "survey_final",
+    ]);
+  });
+});
+
+describe("stepIndexForPath", () => {
+  it("finds a step in the flow-derived build", () => {
+    const steps = buildStudySteps(makeUser({ step_order: FLOW_ORDER }));
+    expect(stepIndexForPath(steps, "/quiz/double")).toBe(5);
+  });
+
+  it("finds the equivalent step in the legacy build", () => {
+    // Both builds emit identical paths, which is why lookups match on path.
+    const steps = buildStudySteps(makeUser({ step_order: [] }));
+    expect(stepIndexForPath(steps, "/quiz/base")).toBe(1);
+  });
+
+  it("returns -1 for a path that is not in the flow", () => {
+    const steps = buildStudySteps(makeUser({ step_order: FLOW_ORDER }));
+    expect(stepIndexForPath(steps, "/quiz/nope")).toBe(-1);
+  });
+});
+
+describe("stageConfigFor", () => {
+  it("titles and numbers a survey by its position in the flow", () => {
+    const config = stageConfigFor(
+      makeUser({ step_order: FLOW_ORDER }),
+      "post_followup"
+    );
+
+    expect(config.title).toBe("Survey 3");
+    expect(config.submitLabel).toBe("Continue to Quiz Part 3");
+  });
+
+  it("keeps the original wording on the first step", () => {
+    const config = stageConfigFor(makeUser({ step_order: FLOW_ORDER }), "pre_quiz");
+    expect(config.submitLabel).toBe("Begin Quiz Part 1");
+  });
+
+  it("labels the final survey's submit as Finish", () => {
+    const config = stageConfigFor(makeUser({ step_order: FLOW_ORDER }), "post_links");
+    expect(config.submitLabel).toBe("Finish");
+  });
+
+  it("falls back to the fixed stage config without a flow", () => {
+    const config = stageConfigFor(makeUser({ step_order: [] }), "post_base");
+    expect(config.title).toBe("Survey 2");
   });
 });

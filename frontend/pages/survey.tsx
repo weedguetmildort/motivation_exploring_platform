@@ -5,11 +5,12 @@ import { getMe, invalidateMeCache, logout, type User } from "../lib/auth";
 import ProgressBar from "../components/ProgressBar";
 import PageHeader from "../components/PageHeader";
 import {
-  STAGE_CONFIG,
-  isActiveSurveyStage,
-  type ActiveSurveyStage,
-  type StudyStepId,
+  stageConfigFor,
+  surveyPath,
+  stepIndexForPath,
+  buildStudySteps,
 } from "../lib/studySteps";
+import { getNextStep } from "../lib/study";
 import {
   getSurveyState,
   submitSurvey,
@@ -17,73 +18,9 @@ import {
   type SurveyAnswer,
 } from "../lib/surveys";
 
-/**
- * Returns the survey stage that should actually be shown right now.
- * Returns null when the user should not see a survey page and should be routed onward.
- */
-function resolveCurrentSurveyStage(
-  user: User | null,
-): ActiveSurveyStage | null {
-  if (!user) return null;
-
-  if (!user.survey_pre_base_completed) {
-    return "pre_quiz";
-  }
-
-  if (user.quiz_base_completed && !user.survey_post_base_completed) {
-    return "post_base";
-  }
-
-  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-    return "post_variant";
-  }
-
-  return null;
-}
-
-/**
- * Decide which survey definition to load for a given active survey stage.
- * post_variant reuses the post_base questions.
- */
-function getLoadStage(activeStage: ActiveSurveyStage): ActiveSurveyStage {
-  if (activeStage === "post_variant") {
-    return "post_base";
-  }
-
-  return activeStage;
-}
-
-/**
- * When there is no active survey to show, decide where the user should go next.
- */
-function getNextRouteForResolvedGap(
-  user: User | null,
-  quizId?: string,
-): string {
-  if (!user) return "/dashboard";
-
-  if (!user.survey_pre_base_completed) {
-    return quizId ? `/survey?quiz_id=${quizId}` : "/survey";
-  }
-
-  if (!user.quiz_base_completed) {
-    return "/quiz/base";
-  }
-
-  if (!user.survey_post_base_completed) {
-    return "/survey";
-  }
-
-  if (!user.quiz_variant_completed) {
-    return user.assigned_var ? `/quiz/${user.assigned_var}` : "/dashboard";
-  }
-
-  if (!user.survey_post_variant_completed) {
-    return "/survey";
-  }
-
-  return "/dashboard";
-}
+// Which survey is current, and where a participant goes next, are both decided
+// by the backend (GET /study/next). The three hand-written ladders that used to
+// live here duplicated that logic and could not express one survey per variant.
 
 export default function SurveyPage() {
   const router = useRouter();
@@ -116,11 +53,15 @@ export default function SurveyPage() {
     return false;
   }
 
-  const forcedStage = isActiveSurveyStage(stage) ? stage : null;
+  // The backend decides which survey is current; `?stage=` is only a hint.
+  const [activeSurveyStage, setActiveSurveyStage] = useState<string | null>(null);
 
-  const activeSurveyStage = forcedStage ?? resolveCurrentSurveyStage(user);
-  const loadStage = activeSurveyStage ? getLoadStage(activeSurveyStage) : null;
-  const config = activeSurveyStage ? STAGE_CONFIG[activeSurveyStage] : null;
+  // Must be memoised: stageConfigFor builds a fresh object, and `config` is a
+  // dependency of the loader effect below.
+  const config = useMemo(
+    () => (user && activeSurveyStage ? stageConfigFor(user, activeSurveyStage) : null),
+    [user, activeSurveyStage],
+  );
 
   useEffect(() => {
     let cancel = false;
@@ -143,14 +84,44 @@ export default function SurveyPage() {
     };
   }, []);
 
+  // Resolve which survey step is current. A stale `?stage=` link (e.g. an old
+  // post_variant bookmark) is redirected to the survey the participant owes.
   useEffect(() => {
     if (!user) return;
 
-    if (!activeSurveyStage || !config || !loadStage) {
-      setLoadingSurvey(false);
-      router.replace(getNextRouteForResolvedGap(user, quiz_id));
-      return;
-    }
+    let cancel = false;
+
+    (async () => {
+      try {
+        const next = await getNextStep();
+        if (cancel) return;
+
+        if (!next.next_step || next.next_step.kind !== "survey") {
+          setLoadingSurvey(false);
+          router.replace(next.next_route);
+          return;
+        }
+
+        if (stage && stage !== next.next_step.key) {
+          router.replace(next.next_step.route);
+          return;
+        }
+
+        setActiveSurveyStage(next.next_step.key);
+      } catch (e) {
+        console.error(e);
+        if (!cancel) router.replace("/dashboard");
+      }
+    })();
+
+    return () => {
+      cancel = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, stage]);
+
+  useEffect(() => {
+    if (!user || !activeSurveyStage || !config) return;
 
     let cancel = false;
 
@@ -159,36 +130,26 @@ export default function SurveyPage() {
       setError(null);
 
       try {
-        // Load question definitions from the mapped load stage.
-        // For post_variant, this pulls the post_base questions.
-        const questionState = await getSurveyState(loadStage);
+        // One request: the backend serves this stage's own saved answers while
+        // sourcing the question definitions from the post_base item bank
+        // (services/surveys._question_stage_for_stage).
+        const state = await getSurveyState(activeSurveyStage);
         if (cancel) return;
 
-        // Load completion status / saved answers from the actual active stage.
-        // For post_variant, this reads the user's post_variant progress.
-        const responseState =
-          loadStage === activeSurveyStage
-            ? questionState
-            : await getSurveyState(activeSurveyStage);
-
-        if (cancel) return;
-
-        setItems(questionState.items || []);
-        setStatus(responseState.status);
+        setItems(state.items || []);
+        setStatus(state.attempt?.status ?? "in_progress");
 
         const initial: Record<string, number | string | string[]> = {};
-        for (const a of responseState.answers || []) {
+        for (const a of state.answers || []) {
           initial[a.item_id] = a.value;
         }
         setValues(initial);
 
-        if (responseState.status === "completed") {
+        if (state.attempt?.status === "completed") {
           invalidateMeCache();
-          const refreshed = await getMe();
+          const next = await getNextStep();
           if (cancel) return;
-          router.replace(
-            getNextRouteForResolvedGap(refreshed.user as User, quiz_id),
-          );
+          router.replace(next.next_route);
           return;
         }
       } catch (e) {
@@ -202,7 +163,8 @@ export default function SurveyPage() {
     return () => {
       cancel = true;
     };
-  }, [user, activeSurveyStage, loadStage, config, quiz_id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, activeSurveyStage, config]);
 
   const requiredUnanswered = useMemo(() => {
     return items
@@ -244,30 +206,14 @@ export default function SurveyPage() {
         })
         .filter(Boolean) as SurveyAnswer[];
 
-      // Submit under the actual active stage.
-      // For post_variant, this saves under post_variant.
+      // Saves under this stage's own response document.
       await submitSurvey(activeSurveyStage, answers);
       invalidateMeCache();
 
-      const optimisticUser: User | null =
-        user &&
-        ({
-          ...user,
-          survey_pre_base_completed:
-            activeSurveyStage === "pre_quiz"
-              ? true
-              : user.survey_pre_base_completed,
-          survey_post_base_completed:
-            activeSurveyStage === "post_base"
-              ? true
-              : user.survey_post_base_completed,
-          survey_post_variant_completed:
-            activeSurveyStage === "post_variant"
-              ? true
-              : user.survey_post_variant_completed,
-        } as User);
-
-      router.replace(getNextRouteForResolvedGap(optimisticUser, quiz_id));
+      // Ask the backend where to go rather than optimistically re-deriving the
+      // flow here — it has just recorded this step as complete.
+      const next = await getNextStep();
+      router.replace(next.next_route);
     } catch (e) {
       console.error(e);
       setError("Failed to save your responses.");
@@ -338,14 +284,11 @@ export default function SurveyPage() {
   if (!user) return null;
   if (!activeSurveyStage || !config) return null;
 
-  const surveyStepId: StudyStepId | undefined = (() => {
-    if (activeSurveyStage === "pre_quiz") return "survey_pre";
-    if (activeSurveyStage === "post_base") return "survey_post_base";
-    if (activeSurveyStage === "post_variant") return "survey_final";
-    return undefined;
-  })();
-
-  const surveyStepNum = activeSurveyStage === "pre_quiz" ? 1 : activeSurveyStage === "post_base" ? 3 : 5;
+  // Position within this participant's own flow, which is no longer 5 steps.
+  const allSteps = buildStudySteps(user);
+  const surveyStepIndex = stepIndexForPath(allSteps, surveyPath(activeSurveyStage));
+  const surveyStepId = surveyStepIndex === -1 ? undefined : allSteps[surveyStepIndex].id;
+  const surveyStepNum = surveyStepIndex === -1 ? 1 : surveyStepIndex + 1;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -354,7 +297,7 @@ export default function SurveyPage() {
           <>
             {config.title}
             <span className="ml-3 text-base font-normal text-gray-400">
-              Step {surveyStepNum} of 5
+              Step {surveyStepNum} of {allSteps.length}
             </span>
           </>
         }

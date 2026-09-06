@@ -13,16 +13,20 @@ from fastapi.testclient import TestClient
 
 from app.api.surveys import router as surveys_router
 from app.api.auth import get_current_user
+from tests.conftest import participant_at, standard_step_order
 
 
 # ── local app fixtures ───────────────────────────────────────────────────────
 
 @pytest.fixture
-def survey_app(mock_db, regular_user):
+def survey_app(mock_db):
+    # Positioned on survey:pre_quiz — the flow gate in api/surveys.py only
+    # admits a participant to the survey that is their current step.
+    participant = participant_at("survey:pre_quiz")
     app = FastAPI()
     app.include_router(surveys_router)
     app.state.db = mock_db
-    app.dependency_overrides[get_current_user] = lambda: regular_user
+    app.dependency_overrides[get_current_user] = lambda: participant
     return app
 
 
@@ -364,11 +368,19 @@ class TestSubmit:
         ]
         updated_doc["status"] = "completed"
 
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
+        order = standard_step_order()
+        mock_col.find_one.side_effect = [
+            doc,
+            updated_doc,
+            # study_flow.mark_step_completed reads the user doc to advance the flow
+            {"_id": user_oid, "step_order": order, "completed_steps": []},
+            updated_doc,
+        ]
         mock_col.update_one.side_effect = [
             MagicMock(matched_count=1),  # answer update
             MagicMock(),  # completion status update
-            MagicMock(matched_count=1),  # user update
+            MagicMock(matched_count=1),  # user answers payload
+            MagicMock(matched_count=1),  # flow advance
         ]
 
         final_find_result = MagicMock()
@@ -379,9 +391,11 @@ class TestSubmit:
             final_find_result,  # build_survey_state's list_survey_items
         ]
 
-        # Override the current user to have a valid ObjectId-format id
+        # Override the current user to have a valid ObjectId-format id, keeping a
+        # flow that puts them on the pre-quiz survey (the flow gate requires it).
         survey_client.app.dependency_overrides[get_current_user] = lambda: UserPublic(
             id=str(user_oid), email="student@test.edu", is_admin=False,
+            step_order=order, completed_steps=[],
         )
 
         resp = survey_client.post("/surveys/pre_quiz/submit", json={
@@ -392,8 +406,10 @@ class TestSubmit:
         data = resp.json()
         assert data["attempt"]["status"] == "completed"
 
-        # The user doc should have been updated with completion flags
-        user_update_call = mock_col.update_one.call_args_list[-1]
-        set_doc = user_update_call[0][1]["$set"]
-        assert set_doc["survey_pre_base_completed"] is True
-        assert set_doc["pre_quiz_survey"] == {str(item1): 5}
+        # Two user writes now: the answers payload, then the flow advance.
+        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
+        assert payload_doc["pre_quiz_survey"] == {str(item1): 5}
+
+        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
+        assert flow_doc["survey_pre_base_completed"] is True
+        assert "survey:pre_quiz" in flow_doc["completed_steps"]

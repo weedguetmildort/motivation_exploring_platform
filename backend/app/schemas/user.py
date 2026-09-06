@@ -7,8 +7,12 @@ from enum import Enum
 from .question import SetId  # "a" | "b" | "c" | "d" — question set labels
 
 
-# Tracks where the user is in the research study flow.
-# Stages progress linearly: pre_quiz → post_base → post_variant → complete.
+# Coarse label for where the user is in the study.
+#
+# NOTE: this is now a DERIVED field, recomputed from step_order/completed_steps
+# by services/study_flow.derive_legacy_flags. Routing no longer reads it — it is
+# kept accurate so existing Mongo queries, exports and the participants panel
+# keep working.
 class SurveyStage(str, Enum):
     pre_base = "pre_quiz"
     post_base = "post_base"
@@ -16,8 +20,14 @@ class SurveyStage(str, Enum):
     complete = "complete"
 
 
-# The study variant (chatbot type) assigned to the user at registration.
-# Determines which chat endpoint and quiz the user sees.
+# The study variants (chatbot types). Every participant now works through ALL of
+# these, in a per-participant counterbalanced order; assigned_var records
+# whichever one they saw first.
+#
+# Adding or removing a member here is all that is needed to add or remove a
+# variant: the step registry, the assembled flow, and the round-robin rotation
+# in services/study_flow.py all derive from this enum. A new variant also needs
+# its chat endpoint in api/chat.py and a label in study_flow.VARIANT_LABELS.
 class AssignedVar(str, Enum):
     followup = "followup"   # chatbot generates follow-up questions after each answer
     double = "double"       # two-agent chatbot (Agent A answers, Agent B checks)
@@ -68,11 +78,21 @@ class UserPublic(BaseModel):
     assigned_var: AssignedVar = AssignedVar.followup
     is_admin: bool = False
     demographics_completed: bool = False
+
+    # ── Study flow (authoritative) ───────────────────────────────────────────
+    # The participant's whole assigned journey, snapshotted at signup, and the
+    # steps of it they have finished. Routing reads these two fields only.
+    step_order: List[str] = Field(default_factory=list)
+    completed_steps: List[str] = Field(default_factory=list)
+    variant_sequence: List[str] = Field(default_factory=list)
+    study_flow_version: int = 1
+
+    # ── Derived legacy mirrors (not used for routing) ────────────────────────
     survey_pre_base_completed: bool = False
     quiz_base_completed: bool = False
     survey_post_base_completed: bool = False
-    quiz_variant_completed: bool = False
-    survey_post_variant_completed: bool = False
+    quiz_variant_completed: bool = False        # True once ALL variant quizzes are done
+    survey_post_variant_completed: bool = False # True once ALL post-variant surveys are done
     survey_stage: SurveyStage = SurveyStage.pre_base
     # Which question set(s) this participant draws from in the quiz. None = no
     # restriction (all questions). See Phase 11 — quiz set restriction.

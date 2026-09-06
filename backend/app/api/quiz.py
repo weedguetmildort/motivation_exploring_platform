@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException
 from ..schemas.user import UserPublic
 from .auth import get_current_user
 from ..schemas.quiz import QuizStateResponse, SubmitAnswerRequest, QuizResultsResponse
+from ..services import study_flow
 from ..services.quiz import (
     _load_or_create_attempt,
     build_quiz_state_response,
@@ -12,8 +13,6 @@ from ..services.quiz import (
     get_quiz_results,
 )
 
-#TODO: ensure quiz_id is valid - either in this file before querying responses or in services/quiz.py functions
-# Doing in this file is a bit more organized but doing it from services avoids doing an additional mongoDB request
 router = APIRouter(prefix="/quiz/{quiz_id}", tags=["quiz"])
 
 
@@ -22,8 +21,40 @@ def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 
+
+def require_quiz_access(
+    request: Request, user: UserPublic = Depends(get_current_user)
+) -> UserPublic:
+    """Allow a main-study quiz only when it is the participant's current step.
+
+    Enforced server-side, not just by the page's redirects, so a participant
+    cannot skip ahead in the flow (or redo a finished quiz) by typing a URL.
+
+    Two deliberate exemptions:
+      * admins, so the playground can still exercise any variant out of order;
+      * any quiz_id the main-study registry doesn't know — notably the Phase 13
+        quiz-2 ids (base2/followup2/...), which are gated by
+        followup_study_granted rather than by this flow. Those keep exactly the
+        access behaviour they have today.
+    """
+    quiz_id = request.path_params["quiz_id"]
+
+    if user.is_admin or not study_flow.is_known_quiz_id(quiz_id):
+        return user
+
+    step_id = study_flow.quiz_step_id(quiz_id)
+
+    if step_id not in user.step_order:
+        raise HTTPException(status_code=403, detail="Quiz is not part of your study flow")
+
+    if not study_flow.is_step_unlocked_for(user.step_order, user.completed_steps, step_id):
+        raise HTTPException(status_code=403, detail="This quiz is not your current step")
+
+    return user
+
+
 @router.get("/state", response_model=QuizStateResponse)
-def get_quiz_state(request: Request, user: UserPublic = Depends(get_current_user)):
+def get_quiz_state(request: Request, user: UserPublic = Depends(require_quiz_access)):
     db = request.app.state.db
     quiz_id = request.path_params["quiz_id"]
     attempt_doc = _load_or_create_attempt(
@@ -49,7 +80,7 @@ def get_quiz_state(request: Request, user: UserPublic = Depends(get_current_user
 def submit_quiz_answer(
     data: SubmitAnswerRequest,
     request: Request,
-    user: UserPublic = Depends(get_current_user),
+    user: UserPublic = Depends(require_quiz_access),
 ):
     db = request.app.state.db
     quiz_id = request.path_params["quiz_id"]

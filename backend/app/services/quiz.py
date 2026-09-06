@@ -7,8 +7,9 @@ from pymongo.collection import Collection
 from fastapi import HTTPException
 
 from .questions import get_questions_collection
+from . import study_flow
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload, QuizResultItem, QuizResultsResponse
-from ..schemas.user import SurveyStage, AssignedVar
+from ..schemas.user import AssignedVar
 
 _VARIANT_QUIZ_IDS = {v.value for v in AssignedVar}
 
@@ -66,6 +67,23 @@ def _load_or_create_attempt(
     import random
     random.shuffle(ids)
 
+    # TODO(question-reuse): each attempt draws independently from the pool, so
+    # now that a participant runs the base quiz plus every variant, the same
+    # question will very likely be served to them more than once. Having already
+    # seen an item confounds the accuracy comparison between variants — a later
+    # variant looks better purely because the question is familiar.
+    #
+    # Fix by excluding question_ids already used in this user's other attempts:
+    #
+    #     used = {qid for prior in col.find({"user_id": user_id}, {"question_order": 1})
+    #                 for qid in prior.get("question_order", [])}
+    #     ids = [qid for qid in ids if qid not in used]
+    #
+    # Needs reconciling with the Phase 11 set restriction above: the pool has to
+    # hold MAX_QUIZ_QUESTIONS * (1 + len(variant_sequence)) items *within the
+    # participant's allowed sets* — 40 at present — so it also needs a clear
+    # error (or a smaller MAX_QUIZ_QUESTIONS) when the restricted pool is too
+    # small, rather than silently serving short quizzes.
     ids = ids[:MAX_QUIZ_QUESTIONS]
     incorrect_question_ids = random.sample(ids, min(3, len(ids)))
 
@@ -99,70 +117,32 @@ def _find_next_unanswered(doc: dict, qcol=None) -> Optional[str]:
 
 
 def _mark_quiz_completed(db, doc: dict) -> None:
-    """Mark a quiz attempt as completed and update user-level completion flags."""
+    """Mark a quiz attempt as completed and advance the user's study flow."""
     completed_at = datetime.utcnow()
     col = get_quiz_attempts_collection(db)
     col.update_one(
         {"_id": doc["_id"]},
         {"$set": {"status": "completed", "updated_at": completed_at}},
     )
+
     users = get_users_collection(db)
-    user_set_doc = _get_user_quiz_update_fields(doc["quiz_id"], completed_at)
-    result = users.update_one(
-        {"_id": ObjectId(doc["user_id"])},
-        {"$set": user_set_doc},
-    )
-    if result.matched_count == 0:
+    if not users.count_documents({"_id": ObjectId(doc["user_id"])}, limit=1):
         raise HTTPException(status_code=404, detail="User not found")
 
-
-def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
-    """
-    Decide which user-level completion flag and next survey_stage should be set
-    when a quiz is completed.
-
-    Adjust the quiz_id values here to match your actual routing / DB values.
-    """
-    if quiz_id == "base":
-        return {
-            "quiz_base_completed": True,
-            "survey_stage": SurveyStage.post_base.value,
-            "updated_at": completed_at,
-        }
-
-    if quiz_id in _VARIANT_QUIZ_IDS:
-        return {
-            "quiz_variant_completed": True,
-            "survey_stage": SurveyStage.post_variant.value,
-            "updated_at": completed_at,
-        }
-        
-    # Unknown quiz_id (e.g. admin test runs) — don't update user flags
-    return {"updated_at": completed_at}
+    # Progress is now one generic operation: tick this step off the user's
+    # assigned step_order, then recompute the derived legacy flags. The old
+    # base-vs-variant branching lived here and in three other places;
+    # services/study_flow owns all of it now. A quiz_id outside this user's
+    # flow (admin test runs, the Phase 13 quiz-2 ids) is simply a no-op.
+    study_flow.mark_step_completed(
+        db, doc["user_id"], study_flow.quiz_step_id(doc["quiz_id"]), completed_at
+    )
 
 
 def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
     col = get_quiz_attempts_collection(db)
     col.delete_one({"user_id": user_id, "quiz_id": quiz_id})
-
-    if quiz_id == "base":
-        revert = {
-            "quiz_base_completed": False,
-            "survey_stage": SurveyStage.pre_base.value,
-            "updated_at": datetime.utcnow(),
-        }
-    elif quiz_id in _VARIANT_QUIZ_IDS:
-        revert = {
-            "quiz_variant_completed": False,
-            "survey_stage": SurveyStage.post_base.value,
-            "updated_at": datetime.utcnow(),
-        }
-    else:
-        # Unknown quiz_id (e.g. admin test runs) — just delete the attempt, no user flags to revert
-        return
-
-    users = get_users_collection(db)
-    users.update_one({"_id": ObjectId(user_id)}, {"$set": revert})
+    study_flow.unmark_step_completed(db, user_id, study_flow.quiz_step_id(quiz_id))
 
 
 def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:

@@ -21,6 +21,7 @@ from ..services.users import (
     check_user_password,
     maybe_touch_last_active,
 )
+from ..services.study_flow import ensure_user_flow
 from ..core.security import create_access_token, decode_token
 from ..core.config import get_settings
 
@@ -85,7 +86,14 @@ def build_user_public(doc: dict) -> UserPublic:
     )
 
 
-def get_current_user(request: Request) -> UserPublic:
+def get_current_user_doc(request: Request) -> dict:
+    """Authenticate the request and return the raw user document.
+
+    Also lazily backfills step_order/completed_steps for accounts created before
+    the multi-variant flow existed, so a participant mid-study picks up where
+    they left off instead of restarting. The backfill is a no-op (one dict
+    lookup, no extra query) once a user has a step_order.
+    """
     s = get_settings()
     token = request.cookies.get(s.COOKIE_NAME)
     if not token:
@@ -100,14 +108,19 @@ def get_current_user(request: Request) -> UserPublic:
     if not email:
         raise HTTPException(status_code=401, detail="Invalid token (no subject)")
 
-    users = get_users_collection(request.app.state.db)
+    db = request.app.state.db
+    users = get_users_collection(db)
     doc = find_user_by_email(users, email)
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
 
     maybe_touch_last_active(users, doc)
 
-    return build_user_public(doc)
+    return ensure_user_flow(db, doc)
+
+
+def get_current_user(request: Request) -> UserPublic:
+    return build_user_public(get_current_user_doc(request))
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -139,12 +152,15 @@ def signup(data: SignupRequest, request: Request, response: Response):
 
 @router.post("/login", response_model=AuthResponse)
 def login(data: LoginRequest, request: Request, response: Response):
-    users = get_users_collection(request.app.state.db)
+    db = request.app.state.db
+    users = get_users_collection(db)
     doc = find_user_by_email(users, data.email)
     if not doc or not check_user_password(doc, data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    user_pub = build_user_public(doc)
+    # Backfill pre-multi-variant accounts at the door rather than on first
+    # quiz load, so their first /study/next already reflects the new flow.
+    user_pub = build_user_public(ensure_user_flow(db, doc))
 
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)

@@ -13,8 +13,7 @@ from app.services.surveys import (
     get_survey_responses_collection,
     get_users_collection,
     ensure_survey_indexes,
-    _next_stage,
-    _completion_flag_field,
+    _validate_stage,
     _question_stage_for_stage,
     _item_to_public,
     _normalize_item_doc,
@@ -33,6 +32,7 @@ from app.schemas.survey import (
     SurveyAnswerIn,
 )
 from app.schemas.user import SurveyStage
+from app.services import study_flow
 
 
 # ── collection accessors ─────────────────────────────────────────────────────
@@ -69,49 +69,45 @@ class TestEnsureSurveyIndexes:
 
 
 # ── stage helpers ────────────────────────────────────────────────────────────
+#
+# _next_stage and _completion_flag_field were fixed 3-stage maps; the flow now
+# schedules one survey per variant, so stage validation and question sourcing
+# are delegated to the study_flow registry.
 
-class TestNextStage:
-    def test_pre_base_to_post_base(self):
-        assert _next_stage(SurveyStage.pre_base) == SurveyStage.post_base
+class TestValidateStage:
+    def test_accepts_the_fixed_stages(self):
+        assert _validate_stage("pre_quiz") == "pre_quiz"
+        assert _validate_stage("post_base") == "post_base"
 
-    def test_post_base_to_post_variant(self):
-        assert _next_stage(SurveyStage.post_base) == SurveyStage.post_variant
+    def test_accepts_a_per_variant_stage(self):
+        stage = study_flow.post_variant_stage(study_flow.all_variants()[0])
+        assert _validate_stage(stage) == stage
 
-    def test_post_variant_to_complete(self):
-        assert _next_stage(SurveyStage.post_variant) == SurveyStage.complete
+    def test_still_accepts_the_legacy_post_variant_stage(self):
+        """Historical survey_responses docs must stay readable."""
+        assert _validate_stage("post_variant") == "post_variant"
 
-    def test_complete_to_none(self):
-        assert _next_stage(SurveyStage.complete) is None
-
-
-class TestCompletionFlagField:
-    def test_pre_base(self):
-        assert _completion_flag_field(SurveyStage.pre_base) == "survey_pre_base_completed"
-
-    def test_post_base(self):
-        assert _completion_flag_field(SurveyStage.post_base) == "survey_post_base_completed"
-
-    def test_post_variant(self):
-        assert _completion_flag_field(SurveyStage.post_variant) == "survey_post_variant_completed"
-
-    def test_complete_raises_keyerror(self):
-        with pytest.raises(KeyError):
-            _completion_flag_field(SurveyStage.complete)
+    def test_rejects_an_unknown_stage(self):
+        with pytest.raises(HTTPException) as exc:
+            _validate_stage("not_a_stage")
+        assert exc.value.status_code == 400
 
 
 class TestQuestionStageForStage:
-    def test_pre_base_maps_to_pre_base(self):
-        assert _question_stage_for_stage(SurveyStage.pre_base) == SurveyStage.pre_base
+    def test_pre_base_maps_to_itself(self):
+        assert _question_stage_for_stage("pre_quiz") == "pre_quiz"
 
-    def test_post_base_maps_to_post_base(self):
-        assert _question_stage_for_stage(SurveyStage.post_base) == SurveyStage.post_base
+    def test_post_base_maps_to_itself(self):
+        assert _question_stage_for_stage("post_base") == "post_base"
 
-    def test_post_variant_maps_to_post_base(self):
-        # post_variant questions are sourced from the post_base item bank
-        assert _question_stage_for_stage(SurveyStage.post_variant) == SurveyStage.post_base
+    def test_every_per_variant_stage_sources_post_base_items(self):
+        # One editable question bank feeds every interstitial survey.
+        for variant in study_flow.all_variants():
+            stage = study_flow.post_variant_stage(variant)
+            assert _question_stage_for_stage(stage) == "post_base"
 
-    def test_complete_maps_to_complete(self):
-        assert _question_stage_for_stage(SurveyStage.complete) == SurveyStage.complete
+    def test_legacy_post_variant_maps_to_post_base(self):
+        assert _question_stage_for_stage("post_variant") == "post_base"
 
 
 # ── _item_to_public / _normalize_item_doc ────────────────────────────────────
@@ -629,6 +625,20 @@ class TestRecordItemShown:
 # ── submit_survey ─────────────────────────────────────────────────────────────
 
 class TestSubmitSurvey:
+    @staticmethod
+    def _flow_doc(user_id, upto_step):
+        """User doc positioned so that ``upto_step`` is the current step."""
+        order = study_flow.build_step_order(
+            study_flow.variant_sequence_for_seq(
+                1, study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+            )
+        )
+        return {
+            "_id": ObjectId(user_id),
+            "step_order": order,
+            "completed_steps": order[: order.index(upto_step)],
+        }
+
     def _response_doc(self, user_id="user1", user_email="user@test.edu", stage="pre_quiz", answers=None, status="in_progress"):
         return {
             "_id": ObjectId(),
@@ -738,14 +748,17 @@ class TestSubmitSurvey:
         # 1) _load_or_create_response_doc
         # 2) col.find_one(updated) post-update
         # 3) build_survey_state's own load_or_create read at the end
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
+        # The user doc is read once more now: completing a survey advances the
+        # study flow (study_flow.mark_step_completed).
+        mock_col.find_one.side_effect = [
+            doc, updated_doc, self._flow_doc(user_id, "survey:pre_quiz"), updated_doc,
+        ]
 
-        # update_one: answer update matched (existing entry) -> matched_count=1
-        # then completion update, then user update
         mock_col.update_one.side_effect = [
             MagicMock(matched_count=1),  # answer update
             MagicMock(),  # completion status update
-            MagicMock(matched_count=1),  # user update
+            MagicMock(matched_count=1),  # user answers payload
+            MagicMock(matched_count=1),  # flow advance
         ]
 
         # items_col.find: valid_ids then required_ids (both = {item1}), then
@@ -766,12 +779,14 @@ class TestSubmitSurvey:
         # The final attempt status reflects build_survey_state's re-read, which uses
         # find_one mocked via side_effect already exhausted -> falls back to MagicMock.
         # What we really care about: the user update set the right flags.
-        user_update_call = mock_col.update_one.call_args_list[-1]
-        set_doc = user_update_call[0][1]["$set"]
-        assert set_doc["survey_pre_base_completed"] is True
-        assert "pre_quiz_survey" in set_doc
-        assert set_doc["pre_quiz_survey"] == {str(item1): 5}
-        assert "pre_quiz_survey_completed_at" in set_doc
+        # The denormalised answers payload and the flow advance are two writes.
+        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
+        assert payload_doc["pre_quiz_survey"] == {str(item1): 5}
+        assert "pre_quiz_survey_completed_at" in payload_doc
+
+        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
+        assert "survey:pre_quiz" in flow_doc["completed_steps"]
+        assert flow_doc["survey_pre_base_completed"] is True
 
     def test_full_completion_post_base_sets_flags_and_payload(self, mock_db, mock_col):
         item1 = ObjectId()
@@ -782,10 +797,13 @@ class TestSubmitSurvey:
             {"item_id": str(item1), "value": 3, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
         ]
 
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
+        mock_col.find_one.side_effect = [
+            doc, updated_doc, self._flow_doc(user_id, "survey:post_base"), updated_doc,
+        ]
         mock_col.update_one.side_effect = [
             MagicMock(matched_count=1),
             MagicMock(),
+            MagicMock(matched_count=1),
             MagicMock(matched_count=1),
         ]
         final_find_result = MagicMock()
@@ -799,44 +817,59 @@ class TestSubmitSurvey:
         req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value=3)])
         submit_survey(mock_db, user_id, "user@test.edu", "post_base", req)
 
-        user_update_call = mock_col.update_one.call_args_list[-1]
-        set_doc = user_update_call[0][1]["$set"]
-        assert set_doc["survey_post_base_completed"] is True
-        assert set_doc["post_base_survey"] == {str(item1): 3}
-        assert "post_base_survey_completed_at" in set_doc
-        assert "survey_stage" not in set_doc
+        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
+        assert payload_doc["post_base_survey"] == {str(item1): 3}
+        assert "post_base_survey_completed_at" in payload_doc
 
-    def test_full_completion_post_variant_sets_complete_stage(self, mock_db, mock_col):
+        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
+        assert flow_doc["survey_post_base_completed"] is True
+        # Variant quizzes still to come, so the study is not complete.
+        assert flow_doc["survey_stage"] != "complete"
+
+    def test_full_completion_of_the_last_step_sets_complete_stage(self, mock_db, mock_col):
         item1 = ObjectId()
         user_id = str(ObjectId())
-        doc = self._response_doc(user_id=user_id, stage="post_variant", answers=[])
+        order = study_flow.build_step_order(
+            study_flow.variant_sequence_for_seq(
+                1, study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+            )
+        )
+        last_stage = study_flow.get_step(order[-1]).key
+        doc = self._response_doc(user_id=user_id, stage=last_stage, answers=[])
         updated_doc = dict(doc)
         updated_doc["answers"] = [
             {"item_id": str(item1), "value": "yes", "shown_at": None, "answered_at": datetime.now(timezone.utc)},
         ]
 
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
+        mock_col.find_one.side_effect = [
+            doc,
+            updated_doc,
+            {"_id": ObjectId(user_id), "step_order": order, "completed_steps": order[:-1]},
+            updated_doc,
+        ]
         mock_col.update_one.side_effect = [
             MagicMock(matched_count=1),
             MagicMock(),
+            MagicMock(matched_count=1),
             MagicMock(matched_count=1),
         ]
         final_find_result = MagicMock()
         final_find_result.sort.return_value = []
         mock_col.find.side_effect = [
-            [{"_id": item1}],  # valid_ids (sourced from post_base since post_variant maps there)
+            [{"_id": item1}],  # valid_ids (sourced from the post_base item bank)
             [{"_id": item1}],  # required_ids
             final_find_result,  # build_survey_state -> list_survey_items
         ]
 
         req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value="yes")])
-        submit_survey(mock_db, user_id, "user@test.edu", "post_variant", req)
+        submit_survey(mock_db, user_id, "user@test.edu", last_stage, req)
 
-        user_update_call = mock_col.update_one.call_args_list[-1]
-        set_doc = user_update_call[0][1]["$set"]
-        assert set_doc["survey_post_variant_completed"] is True
-        assert set_doc["post_variant_survey"] == {str(item1): "yes"}
-        assert set_doc["survey_stage"] == "complete"
+        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
+        assert payload_doc[f"{last_stage}_survey"] == {str(item1): "yes"}
+
+        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
+        assert flow_doc["survey_post_variant_completed"] is True
+        assert flow_doc["survey_stage"] == "complete"
 
     def test_user_not_found_raises_404(self, mock_db, mock_col):
         item1 = ObjectId()

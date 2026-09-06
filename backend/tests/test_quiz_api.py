@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.quiz import router as quiz_router
 from app.api.auth import get_current_user
 from app.schemas.user import UserPublic
+from tests.conftest import participant_at, standard_step_order
 
 
 # ── Local app fixtures (do not touch conftest.py) ────────────────────────────
@@ -55,11 +56,14 @@ def quiz_client_oid(quiz_app_oid, admin_user_oid):
 
 
 @pytest.fixture
-def regular_quiz_app(regular_user, mock_db):
+def regular_quiz_app(mock_db):
+    # Positioned on quiz:base — the flow gate in api/quiz.py only admits a
+    # participant to the quiz that is their current step.
+    participant = participant_at("quiz:base")
     app = FastAPI()
     app.include_router(quiz_router)
     app.state.db = mock_db
-    app.dependency_overrides[get_current_user] = lambda: regular_user
+    app.dependency_overrides[get_current_user] = lambda: participant
     return app
 
 
@@ -390,12 +394,22 @@ class TestResetQuiz:
         mock_col.delete_one.assert_not_called()
 
     def test_reset_variant_quiz_updates_user_flags(self, quiz_client_oid, mock_col):
+        # The participant must actually have completed the step for a reset to
+        # revert anything — resetting a step that was never done is a no-op.
+        order = standard_step_order()
+        mock_col.find_one.return_value = {
+            "_id": ObjectId(quiz_client_oid.admin_id),
+            "step_order": order,
+            "completed_steps": list(order),
+        }
+
         resp = quiz_client_oid.post("/quiz/followup/reset")
 
         assert resp.status_code == 200
         mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "followup"})
-        update_call = mock_col.update_one.call_args
-        assert update_call[0][1]["$set"]["quiz_variant_completed"] is False
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert "quiz:followup" not in set_doc["completed_steps"]
+        assert set_doc["quiz_variant_completed"] is False
 
     def test_reset_unknown_quiz_id_only_deletes(self, quiz_client_oid, mock_col):
         resp = quiz_client_oid.post("/quiz/some-unknown-id/reset")

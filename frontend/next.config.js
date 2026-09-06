@@ -39,6 +39,10 @@ const nextConfig = {
         destination: `${backend}/surveys/:path*`,
       },
       {
+        source: "/api/study/:path*",
+        destination: `${backend}/study/:path*`,
+      },
+      {
         source: "/api/knowledge-links/:path*",
         destination: `${backend}/knowledge-links/:path*`,
       },
