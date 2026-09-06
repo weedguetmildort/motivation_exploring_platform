@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
+import { getStudyFlow, type StudyFlowResponse } from "../lib/study";
 
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  const [flow, setFlow] = useState<StudyFlowResponse | null>(null);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -20,6 +22,13 @@ export default function DashboardPage() {
         }
 
         if (!cancelled) setUser(u);
+
+        try {
+          const f = await getStudyFlow();
+          if (!cancelled) setFlow(f);
+        } catch {
+          // Flow display is non-essential; the page still works without it.
+        }
       } catch {
         if (!cancelled) router.replace("/login");
       } finally {
@@ -69,6 +78,74 @@ export default function DashboardPage() {
       </header>
 
       <div className="page-container">
+        {/* Participant's own progress through the study. Replaces the fixed
+            "Quiz" tile — the flow is now base plus every variant, in an order
+            assigned per participant. */}
+        {flow && flow.total_steps > 0 && (
+          <section className="mb-6 rounded-2xl border bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg 2xl:text-xl font-semibold">
+                  {flow.finished ? "Study complete" : "Your progress"}
+                </h2>
+                <p className="text-sm text-gray-600">
+                  {flow.finished
+                    ? "You’ve finished every step. Thank you for participating."
+                    : `Step ${flow.completed_count + 1} of ${flow.total_steps}`}
+                </p>
+              </div>
+
+              {!flow.finished && (
+                <button
+                  onClick={() => {
+                    const current = flow.steps.find(
+                      (s) => s.id === flow.current_step_id,
+                    );
+                    router.push(current?.route ?? "/survey");
+                  }}
+                  className="btn-primary"
+                >
+                  Continue
+                </button>
+              )}
+            </div>
+
+            <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all"
+                style={{
+                  width: `${Math.round(
+                    (flow.completed_count / flow.total_steps) * 100,
+                  )}%`,
+                }}
+              />
+            </div>
+
+            <ol className="mt-4 space-y-1">
+              {flow.steps.map((s) => {
+                const isCurrent = s.id === flow.current_step_id;
+                return (
+                  <li
+                    key={s.id}
+                    className={[
+                      "flex items-center gap-2 rounded-md px-2 py-1 text-sm",
+                      isCurrent ? "bg-blue-50 font-medium text-blue-800" : "",
+                      s.completed ? "text-gray-500" : "text-gray-700",
+                    ].join(" ")}
+                  >
+                    <span aria-hidden="true">
+                      {s.completed ? "✓" : isCurrent ? "→" : "•"}
+                    </span>
+                    <span className={s.completed ? "line-through" : ""}>
+                      {s.label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        )}
+
         <div className="grid gap-4 sm:grid-cols-2">
           {user?.is_admin && (
             <a
@@ -101,42 +178,26 @@ export default function DashboardPage() {
               <p className="text-sm text-gray-600">Manage questions and content</p>
             </a>
           )}
-          {/*Default quiz */}
-          <a
-            href="/quiz/base"
-            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-          >
-            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Quiz</h2>
-            <p className="text-sm text-gray-600">Begin the Quiz</p>
-          </a>
-          {/*Additional Quizzes below*/}
-          {user?.is_admin && (
-          <a
-            href="/quiz/double"
-            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-          >
-            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Dual Agent Quiz</h2>
-            <p className="text-sm text-gray-600">Begin the Quiz</p>
-          </a>
-          )}
-          {user?.is_admin && (
-          <a
-            href="/quiz/links"
-            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-          >
-            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Links Quiz</h2>
-            <p className="text-sm text-gray-600">Begin the Quiz</p>
-          </a>
-          )}
-          {user?.is_admin && (
-          <a
-            href="/quiz/followup"
-            className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-          >
-            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Follow-up Questions Quiz</h2>
-            <p className="text-sm text-gray-600">Begin the Quiz</p>
-          </a>
-          )}
+          {/* Participants reach their quizzes through the progress card above,
+              which follows their assigned order. Admins keep direct links so
+              they can open any variant out of sequence for testing. */}
+          {user?.is_admin &&
+            flow?.steps
+              .filter((s) => s.kind === "quiz")
+              .map((s) => (
+                <a
+                  key={s.id}
+                  href={s.route}
+                  className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+                >
+                  <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">
+                    {s.label}
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    {s.completed ? "Completed — reopen" : "Begin the Quiz"}
+                  </p>
+                </a>
+              ))}
         </div>
       </div>
     </div>

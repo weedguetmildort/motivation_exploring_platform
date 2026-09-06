@@ -2,10 +2,10 @@
 from typing import Optional
 from datetime import datetime, timezone
 from pymongo.collection import Collection
-from pymongo import ReturnDocument
 
 from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..core.security import hash_password, verify_password
+from . import study_flow
 
 
 def _normalize_stage(raw) -> SurveyStage:
@@ -25,7 +25,7 @@ def _normalize_stage(raw) -> SurveyStage:
     return SurveyStage.pre_base
 
 
-def _to_public(doc: dict) -> UserPublic:
+def to_public(doc: dict) -> UserPublic:
     return UserPublic(
         id=str(doc["_id"]),
         email=doc["email"],
@@ -36,6 +36,10 @@ def _to_public(doc: dict) -> UserPublic:
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
+        step_order=list(doc.get("step_order") or []),
+        completed_steps=list(doc.get("completed_steps") or []),
+        variant_sequence=list(doc.get("variant_sequence") or []),
+        study_flow_version=int(doc.get("study_flow_version", 1)),
         survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
         quiz_base_completed=doc.get("quiz_base_completed", False),
         survey_post_base_completed=doc.get("survey_post_base_completed", False),
@@ -53,21 +57,15 @@ def ensure_indexes(users: Collection) -> None:
     users.create_index("email", unique=True)
 
 
-def _next_assigned_var(users: Collection) -> str:
-    assigned_vars = [
-        AssignedVar.followup.value,
-        AssignedVar.double.value,
-        AssignedVar.links.value,
-    ]
-    counters = users.database["counters"]
-    counter_doc = counters.find_one_and_update(
-        {"_id": "user_signup_round_robin"},
-        {"$inc": {"seq": 1}},
-        upsert=True,
-        return_document=ReturnDocument.AFTER,
-    )
-    seq = int(counter_doc.get("seq", 1))
-    return assigned_vars[(seq - 1) % len(assigned_vars)]
+def _next_assigned_flow(users: Collection) -> dict:
+    """Claim this participant's slot in the round-robin and resolve their flow.
+
+    Replaces the old _next_assigned_var, which cycled a single variant. The
+    counter document and its atomic increment are unchanged; what it now selects
+    is a whole counterbalanced *sequence* of variants rather than one of them.
+    See services/study_flow.variant_sequence_for_seq.
+    """
+    return study_flow.assign_flow(users.database)
 
 
 def create_user(
@@ -94,6 +92,9 @@ def create_user(
         "updated_at": now,
         "is_admin": False,
         "demographics_completed": False,
+        "step_order": [],
+        "completed_steps": [],
+        "variant_sequence": [],
         "survey_pre_base_completed": False,
         "quiz_base_completed": False,
         "survey_post_base_completed": False,
@@ -106,11 +107,13 @@ def create_user(
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    assigned_var = _next_assigned_var(users)
-    users.update_one({"_id": doc["_id"]}, {"$set": {"assigned_var": assigned_var}})
-    doc["assigned_var"] = assigned_var
+    # Assign after insert so a duplicate-email failure doesn't burn a slot in
+    # the round-robin and skew the counterbalancing.
+    flow = _next_assigned_flow(users)
+    users.update_one({"_id": doc["_id"]}, {"$set": flow})
+    doc.update(flow)
 
-    return _to_public(doc)
+    return to_public(doc)
 
 
 def find_user_by_email(users: Collection, email: str) -> Optional[dict]:

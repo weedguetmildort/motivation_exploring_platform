@@ -13,86 +13,9 @@ import {
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 import QuizCompletionCard from "../../components/QuizCompletionCard";
+import { getNextStep, quizStepId } from "../../lib/study";
 
-type SurveyStage = "pre_quiz" | "post_base" | "post_variant" | "complete";
-
-const VARIANT_QUIZ_IDS = ["followup", "links", "double"] as const;
-type VariantQuizId = (typeof VARIANT_QUIZ_IDS)[number];
-type QuizId = "base" | VariantQuizId;
-
-type ExtendedUser = User & {
-  assigned_var?: VariantQuizId | string | null;
-  survey_stage?: SurveyStage | null;
-  survey_pre_base_completed?: boolean;
-  quiz_base_completed?: boolean;
-  survey_post_base_completed?: boolean;
-  quiz_variant_completed?: boolean;
-  survey_post_variant_completed?: boolean;
-};
-
-function isVariantQuizId(value: string): value is VariantQuizId {
-  return (VARIANT_QUIZ_IDS as readonly string[]).includes(value);
-}
-
-function isValidQuizId(value: string, user?: ExtendedUser | null): boolean {
-  if (user?.is_admin) return true;
-  return value === "base" || isVariantQuizId(value);
-}
-
-function isUsersAssignedVariant(
-  quizId: string,
-  user?: ExtendedUser | null,
-): boolean {
-  return Boolean(user?.assigned_var && quizId === user.assigned_var);
-}
-
-function canAccessQuiz(quizId: QuizId, user: ExtendedUser): boolean {
-  if (user.is_admin) {
-    return true;
-  }
-
-  if (quizId === "base") {
-    return !!user.survey_pre_base_completed && !user.quiz_base_completed;
-  }
-
-  return (
-    isUsersAssignedVariant(quizId, user) &&
-    !!user.survey_post_base_completed &&
-    !user.quiz_variant_completed
-  );
-}
-
-function getBlockedQuizRedirect(quizId: QuizId, user: ExtendedUser): string {
-  const assignedVariantPath = user.assigned_var
-    ? `/quiz/${user.assigned_var}`
-    : "/dashboard";
-
-  if (quizId === "base") {
-    if (!user.survey_pre_base_completed) return "/survey";
-
-    if (!user.survey_post_base_completed) {
-      return "/survey";
-    }
-
-    if (!user.quiz_variant_completed) {
-      return assignedVariantPath;
-    }
-
-    if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-      return "/survey";
-    }
-
-    return "/dashboard";
-  }
-
-  if (!user.survey_post_base_completed) return "/survey";
-
-  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-    return "/survey";
-  }
-
-  return "/dashboard";
-}
+type ExtendedUser = User;
 
 export default function QuizPage() {
   const router = useRouter();
@@ -114,10 +37,7 @@ export default function QuizPage() {
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const lastResetQuestionId = useRef<string | undefined>(undefined);
 
-  const quizId =
-    rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
-      ? (rawQuizId as QuizId)
-      : null;
+  const quizId = rawQuizId;
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -132,26 +52,17 @@ export default function QuizPage() {
 
         const u = res.user as ExtendedUser;
 
-        if (!isValidQuizId(rawQuizId, u)) {
-          router.replace("/dashboard");
-          return;
-        }
-
+        // Admins can open any quiz to test it; participants may only be on the
+        // step the backend says is current. One question, one answer — no
+        // client-side re-derivation of the flow.
         if (!u.is_admin) {
-          if (rawQuizId !== "base" && !isUsersAssignedVariant(rawQuizId, u)) {
-            router.replace("/dashboard");
+          const next = await getNextStep();
+          if (cancel) return;
+
+          if (next.next_step?.id !== quizStepId(rawQuizId)) {
+            router.replace(next.next_route);
             return;
           }
-        }
-
-        if (!quizId) {
-          router.replace("/dashboard");
-          return;
-        }
-
-        if (!canAccessQuiz(quizId, u)) {
-          router.replace(getBlockedQuizRedirect(quizId, u));
-          return;
         }
 
         setUser(u);
@@ -219,46 +130,11 @@ export default function QuizPage() {
   async function redirectAfterCompletion() {
     if (!quizId) return;
     try {
-      const res = await getMe();
-      const refreshedUser = res.user as ExtendedUser;
-
-      if (quizId === "base") {
-        if (!refreshedUser.survey_post_base_completed) {
-          router.replace("/survey?stage=post_base");
-          return;
-        }
-
-        if (!refreshedUser.quiz_variant_completed) {
-          router.replace(
-            refreshedUser.assigned_var
-              ? `/quiz/${refreshedUser.assigned_var}`
-              : "/dashboard",
-          );
-          return;
-        }
-
-        if (
-          refreshedUser.quiz_variant_completed &&
-          !refreshedUser.survey_post_variant_completed
-        ) {
-          router.replace("/survey");
-          return;
-        }
-
-        router.replace("/dashboard");
-        return;
-      }
-
-      // Variant quiz completed
-      if (!refreshedUser.survey_post_variant_completed) {
-        router.replace("/survey?stage=post_variant");
-        return;
-      }
-
-      router.replace("/dashboard");
+      const next = await getNextStep();
+      router.replace(next.next_route);
     } catch (e) {
       console.error(e);
-      router.replace("/survey");
+      router.replace("/dashboard");
     }
   }
 

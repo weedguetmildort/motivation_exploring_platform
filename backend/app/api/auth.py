@@ -10,14 +10,16 @@ from ..schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
 )
-from ..schemas.user import UserPublic, SurveyStage, AssignedVar
+from ..schemas.user import UserPublic
 from ..services.users import (
     get_users_collection,
     ensure_indexes,
     create_user,
     find_user_by_email,
     check_user_password,
+    to_public,
 )
+from ..services.study_flow import ensure_user_flow
 from ..core.security import create_access_token, decode_token
 from ..core.config import get_settings
 
@@ -47,34 +49,17 @@ def clear_session_cookie(resp: Response):
     )
 
 
-def build_user_public(doc: dict) -> UserPublic:
-    raw_stage = doc.get("survey_stage", SurveyStage.pre_base)
-
-    try:
-        survey_stage = raw_stage if isinstance(raw_stage, SurveyStage) else SurveyStage(raw_stage)
-    except Exception:
-        survey_stage = SurveyStage.pre_base
-
-    return UserPublic(
-        id=str(doc["_id"]),
-        email=doc["email"],
-        first_name=doc.get("first_name"),
-        last_name=doc.get("last_name"),
-        consent=doc.get("consent"),
-        consent_given_at=doc.get("consent_given_at"),
-        assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
-        is_admin=bool(doc.get("is_admin", False)),
-        demographics_completed=doc.get("demographics_completed", False),
-        survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
-        quiz_base_completed=doc.get("quiz_base_completed", False),
-        survey_post_base_completed=doc.get("survey_post_base_completed", False),
-        quiz_variant_completed=doc.get("quiz_variant_completed", False),
-        survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
-        survey_stage=survey_stage,
-    )
+# Single mapper, shared with services.users, so the two copies cannot drift.
+build_user_public = to_public
 
 
-def get_current_user(request: Request) -> UserPublic:
+def get_current_user_doc(request: Request) -> dict:
+    """Authenticate the request and return the raw user document.
+
+    Also lazily backfills step_order/completed_steps for accounts created before
+    the multi-variant flow existed, so a participant mid-study picks up where
+    they left off instead of restarting.
+    """
     s = get_settings()
     token = request.cookies.get(s.COOKIE_NAME)
     if not token:
@@ -89,12 +74,16 @@ def get_current_user(request: Request) -> UserPublic:
     if not email:
         raise HTTPException(status_code=401, detail="Invalid token (no subject)")
 
-    users = get_users_collection(request.app.state.db)
-    doc = find_user_by_email(users, email)
+    db = request.app.state.db
+    doc = find_user_by_email(get_users_collection(db), email)
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
 
-    return build_user_public(doc)
+    return ensure_user_flow(db, doc)
+
+
+def get_current_user(request: Request) -> UserPublic:
+    return build_user_public(get_current_user_doc(request))
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -126,12 +115,14 @@ def signup(data: SignupRequest, request: Request, response: Response):
 
 @router.post("/login", response_model=AuthResponse)
 def login(data: LoginRequest, request: Request, response: Response):
-    users = get_users_collection(request.app.state.db)
+    db = request.app.state.db
+    users = get_users_collection(db)
     doc = find_user_by_email(users, data.email)
     if not doc or not check_user_password(doc, data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    user_pub = build_user_public(doc)
+    # Backfill legacy accounts at the door rather than on first quiz load.
+    user_pub = build_user_public(ensure_user_flow(db, doc))
 
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)

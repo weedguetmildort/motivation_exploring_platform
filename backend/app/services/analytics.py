@@ -43,10 +43,48 @@ def get_question_accuracy(db, question_id: str, quiz_id: str | None = None) -> d
     }
 
 
+def get_user_variant_accuracies(db, user_id: str) -> list[dict]:
+    """
+    Accuracy for each variant quiz this user completed, one entry per variant.
+
+    Participants now work through every variant, so a user has several completed
+    variant attempts. Prefer this over get_user_quiz_accuracy(user_id, "variant"),
+    which can only report one of them.
+    """
+    col = get_quiz_attempts_collection(db)
+    attempts = col.find(
+        {"user_id": user_id, "quiz_id": {"$in": _VARIANT_QUIZ_IDS}, "status": "completed"},
+        {"answers": 1, "quiz_id": 1},
+    )
+
+    results = []
+    for attempt in attempts:
+        total, correct = 0, 0
+        for ans in attempt.get("answers", []):
+            if ans.get("answered_at"):
+                total += 1
+                if ans.get("marked_correct"):
+                    correct += 1
+
+        results.append({
+            "user_id": user_id,
+            "quiz_id": attempt["quiz_id"],
+            "total": total,
+            "correct": correct,
+            "accuracy": correct / total if total > 0 else None,
+        })
+
+    return results
+
+
 def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
     """
     Returns accuracy for a specific user on a quiz type.
     quiz_type must be "base" or "variant".
+
+    NOTE: with quiz_type="variant" this returns an arbitrary one of the user's
+    variant attempts, since every participant now completes all of them. Use
+    get_user_variant_accuracies for a per-variant breakdown.
     """
     if quiz_type == "base":
         quiz_filter = "base"

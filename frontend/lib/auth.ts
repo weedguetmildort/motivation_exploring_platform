@@ -18,7 +18,17 @@ export type User = {
   consent?: boolean;
   consent_given_at?: string;
   is_admin: boolean;
+  assigned_var?: string | null;
   demographics_completed?: boolean;
+
+  // Study flow (authoritative). Prefer /api/study/next over reading these
+  // directly — the backend owns the "where next" decision.
+  step_order?: string[];
+  completed_steps?: string[];
+  variant_sequence?: string[];
+  study_flow_version?: number;
+
+  // Derived legacy mirrors. Kept for display/analytics; not used for routing.
   survey_pre_base_completed?: boolean;
   quiz_base_completed?: boolean;
   survey_post_base_completed?: boolean;

@@ -1,7 +1,8 @@
 # backend/app/api/surveys.py
 from fastapi import APIRouter, Request, Depends, HTTPException
-from ..api.auth import get_current_user
+from ..api.auth import build_user_public, get_current_user, get_current_user_doc
 from ..schemas.user import UserPublic
+from ..services import study_flow
 from ..schemas.survey import (
     SurveyItemCreate,
     SurveyItemUpdate,
@@ -26,6 +27,34 @@ def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
+
+def require_survey_access(request: Request) -> UserPublic:
+    """Allow a survey stage only when it is the participant's current step.
+
+    Mirrors require_quiz_access in api/quiz.py — the flow is enforced on the
+    server, not just by the page's redirects. Admins are exempt.
+    """
+    doc = get_current_user_doc(request)
+    stage = request.path_params["stage"]
+
+    if doc.get("is_admin"):
+        return build_user_public(doc)
+
+    if not study_flow.is_known_survey_stage(stage):
+        raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
+
+    step_id = study_flow.survey_step_id(stage)
+
+    if step_id not in (doc.get("step_order") or []):
+        raise HTTPException(
+            status_code=403, detail="Survey is not part of your study flow"
+        )
+
+    if not study_flow.is_step_unlocked(doc, step_id):
+        raise HTTPException(status_code=403, detail="This survey is not your current step")
+
+    return build_user_public(doc)
+
 # ----- admin CRUD -----
 
 @router.post("/items", response_model=SurveyItemPublic)
@@ -48,14 +77,14 @@ def admin_delete_item(item_id: str, request: Request, user: UserPublic = Depends
 # ----- user flow -----
 
 @router.get("/{stage}/state", response_model=SurveyStateResponse)
-def get_state(stage: str, request: Request, user: UserPublic = Depends(get_current_user)):
+def get_state(stage: str, request: Request, user: UserPublic = Depends(require_survey_access)):
     return build_survey_state(request.app.state.db, user.id, user.email, stage)
 
 @router.post("/{stage}/record_shown")
-def record_shown(stage: str, item_id: str, request: Request, user: UserPublic = Depends(get_current_user)):
+def record_shown(stage: str, item_id: str, request: Request, user: UserPublic = Depends(require_survey_access)):
     record_item_shown(request.app.state.db, user.id, stage, item_id)
     return {"ok": True}
 
 @router.post("/{stage}/submit", response_model=SurveyStateResponse)
-def submit(stage: str, data: SurveySubmitRequest, request: Request, user: UserPublic = Depends(get_current_user)):
+def submit(stage: str, data: SurveySubmitRequest, request: Request, user: UserPublic = Depends(require_survey_access)):
     return submit_survey(request.app.state.db, user.id, user.email, stage, data)

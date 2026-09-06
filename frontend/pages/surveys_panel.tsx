@@ -78,10 +78,14 @@ export default function SurveyPanelPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Only two editable question sets. Every interstitial survey in the flow —
+  // after the base quiz and after each variant quiz — displays the "post_base"
+  // items, so they are written once here. Each stage still stores its own
+  // responses separately. See backend services/study_flow.SHARED_POST_QUESTION_STAGE.
   const stages = useMemo(
     () => [
       { value: "pre_quiz", label: "Pre-Quiz" },
-      { value: "post_base", label: "Post-Quiz" },
+      { value: "post_base", label: "Post-Quiz (shown after every quiz)" },
     ],
     [],
   );

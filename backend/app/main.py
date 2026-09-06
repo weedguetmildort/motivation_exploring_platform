@@ -9,6 +9,7 @@ from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
 from .api import surveys as surveys_router
+from .api import study as study_router
 
 
 from .core.config import get_settings
@@ -83,3 +84,4 @@ app.include_router(questions_router.router)
 app.include_router(quiz_router.router)
 app.include_router(demographics_router.router)
 app.include_router(surveys_router.router)
+app.include_router(study_router.router)
