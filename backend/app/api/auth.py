@@ -12,7 +12,7 @@ from ..schemas.auth import (
     ConsentAgreementRequest,
     ConsentDeclineRequest,
 )
-from ..schemas.user import UserPublic, SurveyStage, AssignedVar
+from ..schemas.user import UserPublic
 from ..services.users import (
     get_users_collection,
     ensure_indexes,
@@ -20,6 +20,7 @@ from ..services.users import (
     find_user_by_email,
     check_user_password,
     maybe_touch_last_active,
+    user_to_public,
 )
 from ..services.study_flow import ensure_user_flow
 from ..core.security import create_access_token, decode_token
@@ -52,38 +53,16 @@ def clear_session_cookie(resp: Response):
 
 
 def build_user_public(doc: dict) -> UserPublic:
-    raw_stage = doc.get("survey_stage", SurveyStage.pre_base)
+    """Serialize a stored user document for the client.
 
-    try:
-        survey_stage = raw_stage if isinstance(raw_stage, SurveyStage) else SurveyStage(raw_stage)
-    except Exception:
-        survey_stage = SurveyStage.pre_base
-
-    return UserPublic(
-        id=str(doc["_id"]),
-        email=doc["email"],
-        first_name=doc.get("first_name"),
-        last_name=doc.get("last_name"),
-        consent=doc.get("consent"),
-        consent_given_at=doc.get("consent_given_at"),
-        consent_text=doc.get("consent_text"),
-        consent_agreed_at=doc.get("consent_agreed_at"),
-        consent_declined_at=doc.get("consent_declined_at"),
-        consent_viewed_at=doc.get("consent_viewed_at"),
-        consent_abandoned_at=doc.get("consent_abandoned_at"),
-        last_active_at=doc.get("last_active_at"),
-        assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
-        is_admin=bool(doc.get("is_admin", False)),
-        demographics_completed=doc.get("demographics_completed", False),
-        survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
-        quiz_base_completed=doc.get("quiz_base_completed", False),
-        survey_post_base_completed=doc.get("survey_post_base_completed", False),
-        quiz_variant_completed=doc.get("quiz_variant_completed", False),
-        survey_post_variant_completed=doc.get("survey_post_variant_completed", False),
-        survey_stage=survey_stage,
-        quiz_sets=doc.get("quiz_sets"),
-        followup_study_granted=doc.get("followup_study_granted", False),
-    )
+    Delegates to services.users.user_to_public so there is exactly one
+    doc -> UserPublic mapping. This used to be a second, hand-maintained copy
+    of the same field list, and it silently dropped step_order /
+    completed_steps / variant_sequence when the multi-variant flow added them —
+    which left every routing caller (GET /study/next, require_quiz_access)
+    reading an empty flow and bouncing participants back to the dashboard.
+    """
+    return user_to_public(doc)
 
 
 def get_current_user_doc(request: Request) -> dict:

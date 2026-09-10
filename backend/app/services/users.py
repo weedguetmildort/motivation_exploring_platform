@@ -29,7 +29,10 @@ def _normalize_stage(raw) -> SurveyStage:
     return SurveyStage.pre_base
 
 
-def _to_public(doc: dict) -> UserPublic:
+def user_to_public(doc: dict) -> UserPublic:
+    """The single doc -> UserPublic mapping. api/auth.build_user_public
+    delegates here; keep new UserPublic fields in this one place.
+    """
     return UserPublic(
         id=str(doc["_id"]),
         email=doc["email"],
@@ -59,6 +62,10 @@ def _to_public(doc: dict) -> UserPublic:
         quiz_sets=doc.get("quiz_sets"),
         followup_study_granted=doc.get("followup_study_granted", False),
     )
+
+
+# Back-compat alias for the previous private name.
+_to_public = user_to_public
 
 
 def get_users_collection(db) -> Collection:

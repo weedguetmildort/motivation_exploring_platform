@@ -258,6 +258,33 @@ class TestMe:
         assert resp.status_code == 200
         assert resp.json()["user"]["email"] == "student@test.edu"
 
+    def test_me_returns_the_study_flow_fields(self, auth_client, auth_mock_col):
+        """/auth/me must carry step_order/completed_steps.
+
+        These drive every routing decision (the dashboard's step list, GET
+        /study/next, require_quiz_access). When the serializer dropped them the
+        API reported an empty flow, so /study/next answered "finished" and the
+        quiz page bounced participants straight back to the dashboard.
+        """
+        order = standard_step_order()
+        doc = make_user_doc(
+            email="student@test.edu",
+            step_order=order,
+            completed_steps=[order[0]],
+            variant_sequence=["double", "links", "followup"],
+            study_flow_version=3,
+        )
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(get_settings().COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        user = auth_client.get("/auth/me").json()["user"]
+
+        assert user["step_order"] == order
+        assert user["completed_steps"] == [order[0]]
+        assert user["variant_sequence"] == ["double", "links", "followup"]
+        assert user["study_flow_version"] == 3
+
     def test_touches_last_active_at_on_request(self, auth_client, auth_mock_col):
         """get_current_user runs on every authenticated request and should
         record a heartbeat (subject to the debounce — see test_users_service.py
