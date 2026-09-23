@@ -14,6 +14,7 @@ import {
   getStudyConfig,
   updateStudyConfig,
   type StudyConfig,
+  type QuizSetMode,
 } from "../lib/study";
 
 export default function StudyFlowPanel() {
@@ -26,6 +27,9 @@ export default function StudyFlowPanel() {
     "all_variants",
   );
   const [counterbalance, setCounterbalance] = useState(true);
+  const [quizSetMode, setQuizSetMode] = useState<QuizSetMode>("preset");
+  // quiz_id -> set letter. "" means unmapped (draws from the whole pool).
+  const [quizSetMap, setQuizSetMap] = useState<Record<string, string>>({});
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +40,17 @@ export default function StudyFlowPanel() {
     setOrder(c.variant_order);
     setMode(c.mode);
     setCounterbalance(c.counterbalance);
+    setQuizSetMode(c.quiz_set_mode);
+    setQuizSetMap(c.quiz_set_map);
+  }
+
+  function setQuizSet(quizId: string, setId: string) {
+    setQuizSetMap((prev) => {
+      const next = { ...prev };
+      if (setId) next[quizId] = setId;
+      else delete next[quizId];
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -83,6 +98,8 @@ export default function StudyFlowPanel() {
         mode,
         variant_order: order,
         counterbalance,
+        quiz_set_mode: quizSetMode,
+        quiz_set_map: quizSetMap,
       });
       applyConfig(c);
       setSavedAt(new Date().toLocaleTimeString());
@@ -102,11 +119,30 @@ export default function StudyFlowPanel() {
     }
   }
 
+  const serializeMap = (m: Record<string, string>) =>
+    Object.entries(m)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([q, s]) => `${q}:${s}`)
+      .join(",");
+
   const dirty =
     !!config &&
     (mode !== config.mode ||
       counterbalance !== config.counterbalance ||
-      order.join(",") !== config.variant_order.join(","));
+      order.join(",") !== config.variant_order.join(",") ||
+      quizSetMode !== config.quiz_set_mode ||
+      serializeMap(quizSetMap) !== serializeMap(config.quiz_set_map));
+
+  // Two quizzes sharing a set is exactly the repetition per-quiz sets exist to
+  // prevent, so surface it before the server refuses the save.
+  const duplicateSets = (() => {
+    const used = Object.values(quizSetMap);
+    return [...new Set(used.filter((s) => used.filter((x) => x === s).length > 1))];
+  })();
+
+  const unmappedQuizzes = (config?.known_quiz_ids ?? []).filter(
+    (q) => !quizSetMap[q],
+  );
 
   // Mirrors backend build_step_order: pre-quiz survey, base quiz, post-base
   // survey, then each variant followed by its own survey.
@@ -285,6 +321,107 @@ export default function StudyFlowPanel() {
           </label>
         </section>
 
+        {/* Question sets */}
+        <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">Question sets</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Each quiz draws from its own set, so a participant never sees the
+            same question twice. A quiz left unmapped draws from the whole
+            question bank and can overlap with other unmapped quizzes.
+          </p>
+
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-gray-50">
+            <input
+              type="radio"
+              name="quizSetMode"
+              className="mt-1"
+              checked={quizSetMode === "preset"}
+              onChange={() => setQuizSetMode("preset")}
+            />
+            <span>
+              <span className="block text-sm font-medium">Preset</span>
+              <span className="block text-sm text-gray-600">
+                A fixed set per quiz, the same for every participant.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-gray-50">
+            <input
+              type="radio"
+              name="quizSetMode"
+              className="mt-1"
+              checked={quizSetMode === "random"}
+              onChange={() => setQuizSetMode("random")}
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                Random per participant
+              </span>
+              <span className="block text-sm text-gray-600">
+                Each participant gets their own random set-to-quiz mapping,
+                fixed at sign-up. Also counterbalances any difference in
+                difficulty between sets.
+              </span>
+            </span>
+          </label>
+
+          {quizSetMode === "preset" && (
+            <div className="mt-4">
+              <ul className="space-y-2">
+                {(config.known_quiz_ids ?? []).map((quizId) => (
+                  <li
+                    key={quizId}
+                    className="flex items-center justify-between rounded-lg border bg-gray-50 px-3 py-2"
+                  >
+                    <span className="text-sm font-medium">
+                      {config.quiz_labels?.[quizId] ?? quizId}
+                      <span className="ml-2 text-xs text-gray-500">({quizId})</span>
+                    </span>
+
+                    <select
+                      aria-label={`Question set for ${config.quiz_labels?.[quizId] ?? quizId}`}
+                      value={quizSetMap[quizId] ?? ""}
+                      onChange={(e) => setQuizSet(quizId, e.target.value)}
+                      className="rounded border px-2 py-1 text-sm"
+                    >
+                      <option value="">— whole pool</option>
+                      {(config.known_sets ?? []).map((setId) => (
+                        <option key={setId} value={setId}>
+                          Set {setId.toUpperCase()}
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                ))}
+              </ul>
+
+              {duplicateSets.length > 0 && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700"
+                >
+                  Set {duplicateSets.map((x) => x.toUpperCase()).join(", ")} is
+                  used by more than one quiz. Questions could repeat across those
+                  quizzes — give each its own set.
+                </p>
+              )}
+
+              {duplicateSets.length === 0 && unmappedQuizzes.length > 0 && (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                  {unmappedQuizzes.length} quiz
+                  {unmappedQuizzes.length === 1 ? "" : "zes"} still draw from the
+                  whole pool and can overlap:{" "}
+                  {unmappedQuizzes
+                    .map((q) => config.quiz_labels?.[q] ?? q)
+                    .join(", ")}
+                  .
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+
         {/* Preview */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">
@@ -327,7 +464,7 @@ export default function StudyFlowPanel() {
           </button>
           <button
             onClick={onSave}
-            disabled={!dirty || saving}
+            disabled={!dirty || saving || duplicateSets.length > 0}
             className="btn-primary disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save flow"}

@@ -53,6 +53,7 @@ def user_to_public(doc: dict) -> UserPublic:
         completed_steps=list(doc.get("completed_steps") or []),
         variant_sequence=list(doc.get("variant_sequence") or []),
         study_flow_version=int(doc.get("study_flow_version", 1)),
+        quiz_set_assignment=dict(doc.get("quiz_set_assignment") or {}),
         survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
         quiz_base_completed=doc.get("quiz_base_completed", False),
         survey_post_base_completed=doc.get("survey_post_base_completed", False),

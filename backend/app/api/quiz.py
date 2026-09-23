@@ -58,7 +58,12 @@ def get_quiz_state(request: Request, user: UserPublic = Depends(require_quiz_acc
     db = request.app.state.db
     quiz_id = request.path_params["quiz_id"]
     attempt_doc = _load_or_create_attempt(
-        db, user.id, user.email, quiz_id, quiz_sets=user.quiz_sets
+        db,
+        user.id,
+        user.email,
+        quiz_id,
+        quiz_sets=user.quiz_sets,
+        quiz_set=(user.quiz_set_assignment or {}).get(quiz_id),
     )
 
     # If quiz is completed, just return state

@@ -637,6 +637,7 @@ class TestSubmitSurvey:
             "_id": ObjectId(user_id),
             "step_order": order,
             "completed_steps": order[: order.index(upto_step)],
+            "quiz_set_assignment": {},
         }
 
     def _response_doc(self, user_id="user1", user_email="user@test.edu", stage="pre_quiz", answers=None, status="in_progress"):
@@ -844,7 +845,10 @@ class TestSubmitSurvey:
         mock_col.find_one.side_effect = [
             doc,
             updated_doc,
-            {"_id": ObjectId(user_id), "step_order": order, "completed_steps": order[:-1]},
+            {
+                "_id": ObjectId(user_id), "step_order": order,
+                "completed_steps": order[:-1], "quiz_set_assignment": {},
+            },
             updated_doc,
         ]
         mock_col.update_one.side_effect = [

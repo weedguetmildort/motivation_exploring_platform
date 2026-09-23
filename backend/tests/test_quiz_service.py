@@ -11,6 +11,7 @@ from app.services.quiz import (
     get_quiz_attempts_collection,
     _ensure_unique_index,
     _load_or_create_attempt,
+    _build_pool_query,
     _find_next_unanswered,
     _mark_quiz_completed,
     reset_quiz_attempt,
@@ -236,7 +237,10 @@ class TestDerivedLegacyFlagsFromQuizCompletion:
     def test_quiz_id_outside_the_flow_is_ignored(self, mock_db, mock_col):
         """Admin test runs and the Phase 13 quiz-2 ids must not move a flow."""
         order = self._flow()
-        user_doc = {"_id": ObjectId(), "step_order": order, "completed_steps": []}
+        user_doc = {
+            "_id": ObjectId(), "step_order": order,
+            "completed_steps": [], "quiz_set_assignment": {},
+        }
         mock_col.find_one.return_value = user_doc
 
         study_flow.mark_step_completed(
@@ -253,7 +257,12 @@ def _flow_user_doc(user_id, completed=None):
     """A user document positioned in a standard multi-variant flow."""
     cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
     order = study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
-    return {"_id": ObjectId(user_id), "step_order": order, "completed_steps": completed or []}
+    return {
+        "_id": ObjectId(user_id),
+        "step_order": order,
+        "completed_steps": completed or [],
+        "quiz_set_assignment": {},
+    }
 
 
 class TestMarkQuizCompleted:
@@ -290,7 +299,8 @@ class TestMarkQuizCompleted:
         }
         mock_col.count_documents.return_value = 1
         mock_col.find_one.return_value = {
-            "_id": ObjectId(user_id), "step_order": order, "completed_steps": order[:upto],
+            "_id": ObjectId(user_id), "step_order": order,
+            "completed_steps": order[:upto], "quiz_set_assignment": {},
         }
 
         _mark_quiz_completed(mock_db, doc)
@@ -332,7 +342,8 @@ class TestResetQuizAttempt:
         cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
         order = study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
         mock_col.find_one.return_value = {
-            "_id": ObjectId(user_id), "step_order": order, "completed_steps": list(order),
+            "_id": ObjectId(user_id), "step_order": order,
+            "completed_steps": list(order), "quiz_set_assignment": {},
         }
 
         reset_quiz_attempt(mock_db, user_id, "followup")
@@ -917,3 +928,129 @@ class TestGetQuizResults:
         assert result.total_questions == 0
         assert result.correct_count == 0
         assert result.items == []
+
+
+# ── question-pool selection ──────────────────────────────────────────────────
+#
+# Each quiz drawing from its own set is what keeps a participant's quizzes
+# disjoint: no question can appear in two of them, because no question belongs
+# to two sets. These cover the precedence between that per-quiz set, the older
+# per-participant restriction, and the unrestricted default.
+
+class TestBuildPoolQuery:
+    def test_per_quiz_set_wins_over_the_participant_restriction(self):
+        assert _build_pool_query("c", ["a", "b"]) == {"set": "c"}
+
+    def test_falls_back_to_the_participant_restriction(self):
+        assert _build_pool_query(None, ["a", "b"]) == {"set": {"$in": ["a", "b"]}}
+
+    def test_unrestricted_when_neither_is_set(self):
+        assert _build_pool_query(None, None) == {}
+
+    def test_empty_participant_restriction_is_unrestricted(self):
+        assert _build_pool_query(None, []) == {}
+
+
+class TestLoadOrCreateAttemptQuizSet:
+    def _prime(self, mock_col, count=4):
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(count)]
+        mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+
+    def test_draws_only_from_the_quizzes_own_set(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(
+            mock_db, "u1", "u1@test.edu", "followup", quiz_set="b"
+        )
+
+        mock_col.find.assert_called_once_with({"set": "b"}, {"_id": 1})
+
+    def test_quiz_set_overrides_the_participant_restriction(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(
+            mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a"], quiz_set="d"
+        )
+
+        mock_col.find.assert_called_once_with({"set": "d"}, {"_id": 1})
+
+    def test_unmapped_quiz_falls_back_to_the_whole_pool(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
+
+        mock_col.find.assert_called_once_with({}, {"_id": 1})
+
+    def test_unassigned_quiz_falls_back_to_the_configured_map(self, mock_db, mock_col):
+        """A participant assigned before the map was configured still picks it up.
+
+        The map starts empty, so their stored assignment covers nothing; the
+        draw consults the current preset map rather than stranding them on the
+        whole pool.
+        """
+        self._prime(mock_col)
+
+        with patch.object(study_flow, "preset_quiz_set", return_value="c") as m:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
+
+        m.assert_called_once_with(mock_db, "double")
+        mock_col.find.assert_called_once_with({"set": "c"}, {"_id": 1})
+        assert mock_col.insert_one.call_args[0][0]["question_set"] == "c"
+
+    def test_an_explicit_set_skips_the_fallback_lookup(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        with patch.object(study_flow, "preset_quiz_set") as m:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="a")
+
+        m.assert_not_called()
+
+    def test_records_the_set_on_the_attempt(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="a")
+
+        assert mock_col.insert_one.call_args[0][0]["question_set"] == "a"
+
+    def test_records_none_when_drawing_from_the_whole_pool(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base")
+
+        assert mock_col.insert_one.call_args[0][0]["question_set"] is None
+
+    def test_an_empty_set_raises_rather_than_serving_an_empty_quiz(self, mock_db, mock_col):
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = []
+
+        with pytest.raises(HTTPException) as exc:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="c")
+
+        assert exc.value.status_code == 400
+        assert "No questions available" in exc.value.detail
+
+    def test_four_mapped_quizzes_draw_disjoint_questions(self, mock_db, mock_col):
+        """The point of the whole design: no id appears in two attempts."""
+        by_set = {
+            letter: [ObjectId() for _ in range(MAX_QUIZ_QUESTIONS)]
+            for letter in ("a", "b", "c", "d")
+        }
+        assignment = {"base": "a", "followup": "b", "double": "c", "links": "d"}
+
+        inserted = []
+        mock_col.find_one.return_value = None
+        mock_col.insert_one.side_effect = lambda doc: (
+            inserted.append(doc), MagicMock(inserted_id=ObjectId())
+        )[1]
+
+        for quiz_id, letter in assignment.items():
+            mock_col.find.return_value = [{"_id": oid} for oid in by_set[letter]]
+            _load_or_create_attempt(
+                mock_db, "u1", "u1@test.edu", quiz_id, quiz_set=letter
+            )
+
+        orders = [set(doc["question_order"]) for doc in inserted]
+        assert len(inserted) == 4
+        assert all(len(o) == MAX_QUIZ_QUESTIONS for o in orders)
+        assert len(set().union(*orders)) == 4 * MAX_QUIZ_QUESTIONS

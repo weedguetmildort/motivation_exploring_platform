@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.api.study import router as study_router
 from app.api.auth import get_current_user
 from app.schemas.user import UserPublic
+from app.schemas.question import ALL_SET_IDS
 from app.services import study_flow as sf
 from tests.conftest import participant_at, standard_step_order
 
@@ -182,3 +183,92 @@ class TestStudyConfigEndpoints:
         original = admin_client.get("/study/config").json()["variant_order"]
         data = admin_client.put("/study/config", json={"counterbalance": False}).json()
         assert data["variant_order"] == original
+
+
+# ── /study/config — per-quiz question sets ───────────────────────────────────
+
+class TestQuizSetConfigEndpoints:
+    @pytest.fixture
+    def admin_client(self):
+        from tests.test_study_flow_service import FakeDB
+
+        admin = UserPublic(id="a1", email="admin@test.edu", is_admin=True)
+        return TestClient(_app(admin, db=FakeDB()))
+
+    def test_defaults_to_preset_with_an_empty_map(self, admin_client):
+        data = admin_client.get("/study/config").json()
+
+        assert data["quiz_set_mode"] == "preset"
+        assert data["quiz_set_map"] == {}
+
+    def test_advertises_the_sets_and_quizzes_the_code_declares(self, admin_client):
+        data = admin_client.get("/study/config").json()
+
+        assert data["known_sets"] == list(ALL_SET_IDS)
+        # base first, then every variant — the order an admin maps them in.
+        assert data["known_quiz_ids"][0] == sf.BASE_QUIZ_ID
+        assert set(data["known_quiz_ids"][1:]) == set(sf.all_variants())
+        assert set(data["quiz_labels"]) == set(data["known_quiz_ids"])
+
+    def test_saves_a_map_and_bumps_the_version(self, admin_client):
+        before = admin_client.get("/study/config").json()["version"]
+
+        data = admin_client.put(
+            "/study/config", json={"quiz_set_map": {"base": "a", "followup": "b"}}
+        ).json()
+
+        assert data["quiz_set_map"] == {"base": "a", "followup": "b"}
+        assert data["version"] == before + 1
+        assert admin_client.get("/study/config").json()["quiz_set_map"] == {
+            "base": "a", "followup": "b",
+        }
+
+    def test_switches_to_random_mode(self, admin_client):
+        data = admin_client.put("/study/config", json={"quiz_set_mode": "random"}).json()
+        assert data["quiz_set_mode"] == "random"
+
+    def test_rejects_an_unknown_set_letter(self, admin_client):
+        resp = admin_client.put("/study/config", json={"quiz_set_map": {"base": "z"}})
+
+        assert resp.status_code == 400
+        assert "z" in resp.json()["detail"]
+
+    def test_rejects_an_unknown_quiz_id(self, admin_client):
+        resp = admin_client.put(
+            "/study/config", json={"quiz_set_map": {"not_a_quiz": "a"}}
+        )
+
+        assert resp.status_code == 400
+        assert "not_a_quiz" in resp.json()["detail"]
+
+    def test_rejects_reusing_one_set_for_two_quizzes(self, admin_client):
+        """Two quizzes sharing a set is exactly the repetition this prevents."""
+        resp = admin_client.put(
+            "/study/config", json={"quiz_set_map": {"base": "a", "followup": "a"}}
+        )
+
+        assert resp.status_code == 400
+        assert "own set" in resp.json()["detail"]
+
+    def test_rejects_an_invalid_set_mode_at_the_schema(self, admin_client):
+        resp = admin_client.put("/study/config", json={"quiz_set_mode": "sideways"})
+        assert resp.status_code == 422
+
+    def test_a_partial_update_leaves_the_map_alone(self, admin_client):
+        admin_client.put("/study/config", json={"quiz_set_map": {"base": "a"}})
+
+        data = admin_client.put("/study/config", json={"counterbalance": False}).json()
+
+        assert data["quiz_set_map"] == {"base": "a"}
+
+    def test_clearing_the_map_is_possible(self, admin_client):
+        admin_client.put("/study/config", json={"quiz_set_map": {"base": "a"}})
+
+        data = admin_client.put("/study/config", json={"quiz_set_map": {}}).json()
+
+        assert data["quiz_set_map"] == {}
+
+    def test_non_admin_cannot_change_the_map(self):
+        client = TestClient(_app(participant_at()))
+        resp = client.put("/study/config", json={"quiz_set_map": {"base": "a"}})
+        assert resp.status_code == 403

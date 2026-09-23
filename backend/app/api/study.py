@@ -15,6 +15,7 @@ from ..schemas.study import (
     StudyConfigUpdate,
     StudyFlowResponse,
 )
+from ..schemas.question import ALL_SET_IDS
 from ..schemas.user import UserPublic
 from ..services import study_flow
 from .auth import get_current_user
@@ -102,6 +103,10 @@ def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
     else:
         preview = [list(config.variant_order)]
 
+    # The quizzes a participant can be handed, base first, then each variant —
+    # the order the admin will want to map sets in.
+    known_quiz_ids = [study_flow.BASE_QUIZ_ID, *study_flow.all_variants()]
+
     return StudyConfigPublic(
         mode=config.mode,
         variant_order=list(config.variant_order),
@@ -110,6 +115,14 @@ def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
         known_variants=study_flow.all_variants(),
         variant_labels={v: study_flow.variant_label(v) for v in study_flow.all_variants()},
         preview=preview,
+        quiz_set_mode=config.quiz_set_mode,
+        quiz_set_map=study_flow.quiz_set_map_dict(config),
+        known_sets=list(ALL_SET_IDS),
+        known_quiz_ids=known_quiz_ids,
+        quiz_labels={
+            q: (step.label if (step := study_flow.get_step(study_flow.quiz_step_id(q))) else q)
+            for q in known_quiz_ids
+        },
     )
 
 
@@ -136,10 +149,46 @@ def update_config(
                 detail=f"Unknown variant(s): {', '.join(unknown)}",
             )
 
+    if data.quiz_set_map is not None:
+        # Reject rather than silently reconciling, so a typo in the admin UI is
+        # visible instead of quietly leaving a quiz unmapped.
+        unknown_quizzes = [
+            q for q in data.quiz_set_map if not study_flow.is_known_quiz_id(q)
+        ]
+        if unknown_quizzes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown quiz(zes): {', '.join(sorted(unknown_quizzes))}",
+            )
+
+        unknown_sets = sorted(
+            {s for s in data.quiz_set_map.values() if s not in ALL_SET_IDS}
+        )
+        if unknown_sets:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown set(s): {', '.join(unknown_sets)}",
+            )
+
+        duplicates = sorted(
+            {s for s in data.quiz_set_map.values()
+             if list(data.quiz_set_map.values()).count(s) > 1}
+        )
+        if duplicates:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Each quiz needs its own set, or questions can repeat across "
+                    f"quizzes. Set(s) used more than once: {', '.join(duplicates)}"
+                ),
+            )
+
     config = study_flow.save_study_config(
         db,
         mode=data.mode,
         variant_order=data.variant_order,
         counterbalance=data.counterbalance,
+        quiz_set_mode=data.quiz_set_mode,
+        quiz_set_map=data.quiz_set_map,
     )
     return _config_public(config)

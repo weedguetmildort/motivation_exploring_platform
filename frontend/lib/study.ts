@@ -37,6 +37,9 @@ export type StudyFlowResponse = {
   mode: string;
 };
 
+/** How each quiz's question set is chosen. */
+export type QuizSetMode = "preset" | "random";
+
 export type StudyConfig = {
   mode: "all_variants" | "single_variant";
   variant_order: string[];
@@ -45,12 +48,23 @@ export type StudyConfig = {
   known_variants: string[];
   variant_labels: Record<string, string>;
   preview: string[][];
+
+  // Per-quiz question sets. Giving each quiz its own set is what keeps a
+  // participant's quizzes disjoint — a quiz absent from the map draws from the
+  // whole pool.
+  quiz_set_mode: QuizSetMode;
+  quiz_set_map: Record<string, string>;
+  known_sets: string[];
+  known_quiz_ids: string[];
+  quiz_labels: Record<string, string>;
 };
 
 export type StudyConfigUpdate = {
   mode?: "all_variants" | "single_variant";
   variant_order?: string[];
   counterbalance?: boolean;
+  quiz_set_mode?: QuizSetMode;
+  quiz_set_map?: Record<string, string>;
 };
 
 export async function getNextStep() {

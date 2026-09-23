@@ -401,6 +401,7 @@ class TestResetQuiz:
             "_id": ObjectId(quiz_client_oid.admin_id),
             "step_order": order,
             "completed_steps": list(order),
+            "quiz_set_assignment": {},
         }
 
         resp = quiz_client_oid.post("/quiz/followup/reset")

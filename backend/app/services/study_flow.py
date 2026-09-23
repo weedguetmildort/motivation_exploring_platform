@@ -30,6 +30,7 @@ attempts fall through every flow check as "not part of this user's flow".
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Literal, Optional
@@ -38,6 +39,7 @@ from bson.objectid import ObjectId
 from pymongo import ReturnDocument
 from pymongo.collection import Collection
 
+from ..schemas.question import ALL_SET_IDS
 from ..schemas.user import AssignedVar, SurveyStage
 
 # ---------------------------------------------------------------------------
@@ -204,6 +206,14 @@ MODE_SINGLE_VARIANT = "single_variant"  # legacy behaviour, kept as a backup
 
 ROUND_ROBIN_COUNTER_ID = "user_signup_round_robin"
 
+# How each quiz's question set is chosen.
+#   preset - a fixed quiz -> set map, the same for every participant
+#   random - a per-participant random assignment of sets to that participant's
+#            quizzes, snapshotted at signup
+QUIZ_SET_MODE_PRESET = "preset"
+QUIZ_SET_MODE_RANDOM = "random"
+QUIZ_SET_MODES = (QUIZ_SET_MODE_PRESET, QUIZ_SET_MODE_RANDOM)
+
 
 @dataclass(frozen=True)
 class StudyConfig:
@@ -214,12 +224,23 @@ class StudyConfig:
     counterbalance: bool = True
     version: int = 1
 
+    # Which question set each quiz draws from. Giving every quiz its own set is
+    # what stops a participant seeing the same question twice across their four
+    # quizzes — isolation is structural rather than filtered after the fact.
+    quiz_set_mode: str = QUIZ_SET_MODE_PRESET
+    # ((quiz_id, set_letter), ...) — a tuple of pairs rather than a dict because
+    # this dataclass is frozen and must stay hashable. Stored in Mongo as a
+    # plain object. A quiz absent from the map draws from the whole pool.
+    quiz_set_map: tuple[tuple[str, str], ...] = ()
+
     def as_dict(self) -> dict:
         return {
             "mode": self.mode,
             "variant_order": list(self.variant_order),
             "counterbalance": self.counterbalance,
             "version": self.version,
+            "quiz_set_mode": self.quiz_set_mode,
+            "quiz_set_map": dict(self.quiz_set_map),
         }
 
 
@@ -249,6 +270,40 @@ def _reconcile_variant_order(stored: Optional[Iterable[str]]) -> tuple[str, ...]
     return tuple(ordered)
 
 
+def _reconcile_quiz_set_map(
+    stored: Optional[dict | Iterable[tuple[str, str]]],
+) -> tuple[tuple[str, str], ...]:
+    """Drop map entries the code no longer recognises.
+
+    Mirrors _reconcile_variant_order: an entry naming a quiz that is no longer
+    in the registry (a retired variant) or a set letter that is no longer in
+    SetId is discarded, so adding or removing either needs no DB edit. Unlike
+    variants, nothing is auto-appended — an unmapped quiz deliberately falls
+    back to the whole pool rather than being handed an arbitrary set.
+    """
+    if stored is None:
+        return ()
+
+    pairs = stored.items() if isinstance(stored, dict) else stored
+
+    reconciled: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for quiz_id, set_id in pairs:
+        if quiz_id in seen:
+            continue
+        if not is_known_quiz_id(quiz_id) or set_id not in ALL_SET_IDS:
+            continue
+        seen.add(quiz_id)
+        reconciled.append((quiz_id, set_id))
+
+    return tuple(reconciled)
+
+
+def quiz_set_map_dict(config: StudyConfig) -> dict[str, str]:
+    """The configured quiz -> set map as a plain dict."""
+    return dict(config.quiz_set_map)
+
+
 def load_study_config(db) -> StudyConfig:
     doc = get_study_config_collection(db).find_one({"_id": STUDY_CONFIG_ID}) or {}
 
@@ -256,11 +311,17 @@ def load_study_config(db) -> StudyConfig:
     if mode not in (MODE_ALL_VARIANTS, MODE_SINGLE_VARIANT):
         mode = MODE_ALL_VARIANTS
 
+    quiz_set_mode = doc.get("quiz_set_mode", QUIZ_SET_MODE_PRESET)
+    if quiz_set_mode not in QUIZ_SET_MODES:
+        quiz_set_mode = QUIZ_SET_MODE_PRESET
+
     return StudyConfig(
         mode=mode,
         variant_order=_reconcile_variant_order(doc.get("variant_order")),
         counterbalance=bool(doc.get("counterbalance", True)),
         version=int(doc.get("version", 1)),
+        quiz_set_mode=quiz_set_mode,
+        quiz_set_map=_reconcile_quiz_set_map(doc.get("quiz_set_map")),
     )
 
 
@@ -270,6 +331,8 @@ def save_study_config(
     mode: Optional[str] = None,
     variant_order: Optional[Iterable[str]] = None,
     counterbalance: Optional[bool] = None,
+    quiz_set_mode: Optional[str] = None,
+    quiz_set_map: Optional[dict | Iterable[tuple[str, str]]] = None,
 ) -> StudyConfig:
     """Persist an admin flow change and bump the flow version.
 
@@ -285,11 +348,19 @@ def save_study_config(
     new_counterbalance = (
         current.counterbalance if counterbalance is None else bool(counterbalance)
     )
+    new_quiz_set_mode = (
+        quiz_set_mode if quiz_set_mode in QUIZ_SET_MODES else current.quiz_set_mode
+    )
+    new_quiz_set_map = _reconcile_quiz_set_map(
+        quiz_set_map if quiz_set_map is not None else current.quiz_set_map
+    )
 
     changed = (
         new_mode != current.mode
         or new_order != current.variant_order
         or new_counterbalance != current.counterbalance
+        or new_quiz_set_mode != current.quiz_set_mode
+        or new_quiz_set_map != current.quiz_set_map
     )
 
     version = current.version + 1 if changed else current.version
@@ -302,6 +373,8 @@ def save_study_config(
                 "variant_order": list(new_order),
                 "counterbalance": new_counterbalance,
                 "version": version,
+                "quiz_set_mode": new_quiz_set_mode,
+                "quiz_set_map": dict(new_quiz_set_map),
                 "updated_at": datetime.utcnow(),
             }
         },
@@ -313,6 +386,8 @@ def save_study_config(
         variant_order=new_order,
         counterbalance=new_counterbalance,
         version=version,
+        quiz_set_mode=new_quiz_set_mode,
+        quiz_set_map=new_quiz_set_map,
     )
 
 
@@ -373,6 +448,43 @@ def build_step_order(variant_sequence: Iterable[str]) -> list[str]:
     return steps
 
 
+def quiz_ids_in_order(step_order: Iterable[str]) -> list[str]:
+    """The quiz_ids of a step order, in the order the participant meets them."""
+    ids: list[str] = []
+    for step_id in step_order:
+        step = get_step(step_id)
+        if step and step.kind == "quiz":
+            ids.append(step.key)
+    return ids
+
+
+def resolve_quiz_set_assignment(
+    config: StudyConfig, quiz_ids: Iterable[str]
+) -> dict[str, str]:
+    """Map each of this participant's quizzes to the question set it draws from.
+
+    A quiz absent from the result draws from the whole pool, which is what an
+    unmapped quiz did before this existed.
+
+    Random mode shuffles the available sets across the participant's quizzes,
+    which also counterbalances any difference in difficulty between sets. It is
+    resolved once, at signup, and snapshotted onto the user like
+    variant_sequence — so a later config change cannot move a participant who is
+    already part-way through.
+    """
+    ordered_ids = list(quiz_ids)
+
+    if config.quiz_set_mode == QUIZ_SET_MODE_RANDOM:
+        sets = list(ALL_SET_IDS)
+        random.shuffle(sets)
+        # zip stops at the shorter side: with fewer sets than quizzes the
+        # leftover quizzes stay unmapped and draw from the whole pool.
+        return dict(zip(ordered_ids, sets))
+
+    wanted = set(ordered_ids)
+    return {q: s for q, s in config.quiz_set_map if q in wanted}
+
+
 def assign_flow(db, forced_first: Optional[str] = None) -> dict:
     """Resolve this participant's whole flow.
 
@@ -408,6 +520,12 @@ def assign_flow(db, forced_first: Optional[str] = None) -> dict:
         # analytics, the participants panel and peek_next_assignment keep
         # working unchanged.
         "assigned_var": sequence[0] if sequence else AssignedVar.followup.value,
+        # Which question set each of this participant's quizzes draws from.
+        # Resolved from step_order so random mode follows the counterbalanced
+        # quiz order rather than the registry's declaration order.
+        "quiz_set_assignment": resolve_quiz_set_assignment(
+            config, quiz_ids_in_order(step_order)
+        ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
         "round_robin_seq": seq,
@@ -454,12 +572,27 @@ def ensure_user_flow(db, doc: dict) -> dict:
     in-flight participant continues where they left off.
     """
     if doc.get("step_order"):
+        patch: dict = {}
+
         if doc.get("completed_steps") is None:
-            completed = _legacy_backfill_completed(doc, list(doc["step_order"]))
-            db["users"].update_one(
-                {"_id": doc["_id"]}, {"$set": {"completed_steps": completed}}
+            patch["completed_steps"] = _legacy_backfill_completed(
+                doc, list(doc["step_order"])
             )
-            doc["completed_steps"] = completed
+
+        if doc.get("quiz_set_assignment") is None:
+            # Assigned before per-quiz sets existed. Resolve against the flow
+            # they already have. Deliberately only when the field is MISSING —
+            # this runs on every authenticated request, so it must not cost a
+            # config read once the participant has been seen. A participant
+            # whose assignment does not cover a quiz picks the map up at draw
+            # time instead (services/quiz._load_or_create_attempt).
+            patch["quiz_set_assignment"] = resolve_quiz_set_assignment(
+                load_study_config(db), quiz_ids_in_order(doc["step_order"])
+            )
+
+        if patch:
+            db["users"].update_one({"_id": doc["_id"]}, {"$set": patch})
+            doc.update(patch)
         return doc
 
     config = load_study_config(db)
@@ -483,6 +616,9 @@ def ensure_user_flow(db, doc: dict) -> dict:
         "step_order": step_order,
         "completed_steps": completed,
         "variant_sequence": sequence,
+        "quiz_set_assignment": resolve_quiz_set_assignment(
+            config, quiz_ids_in_order(step_order)
+        ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
         "assigned_var": assigned,
@@ -490,6 +626,65 @@ def ensure_user_flow(db, doc: dict) -> dict:
     db["users"].update_one({"_id": doc["_id"]}, {"$set": update})
     doc.update(update)
     return doc
+
+
+def preset_quiz_set(db, quiz_id: str) -> Optional[str]:
+    """The set the current preset map gives ``quiz_id``, if any.
+
+    The fallback for a participant whose stored assignment does not cover this
+    quiz — which is everyone assigned before the map was configured, since the
+    map starts empty. Read at draw time, so it costs nothing on the request path.
+
+    Random mode returns None: that mapping is a per-participant shuffle and
+    lives only on the participant, so there is nothing global to fall back to.
+    """
+    config = load_study_config(db)
+    if config.quiz_set_mode != QUIZ_SET_MODE_PRESET:
+        return None
+    return quiz_set_map_dict(config).get(quiz_id)
+
+
+def repoint_quiz_set(db, user_id: str, quiz_id: str) -> Optional[str]:
+    """Re-point one quiz at the set the CURRENT config gives it.
+
+    Called when an admin resets a quiz, which means "redo this from scratch" —
+    including which set it draws from. Without this, an admin who changes the
+    map and then resets would keep drawing from their originally-assigned set
+    and see no difference.
+
+    Preset mode only: in random mode the mapping is a per-participant shuffle,
+    and re-rolling one quiz in isolation could hand it a set another of their
+    quizzes already uses, which is exactly the overlap sets exist to prevent.
+    Returns the set now assigned, or None if the quiz is unmapped.
+    """
+    # Admin test runs and the Phase 13 quiz-2 ids are not part of the mapping.
+    if not is_known_quiz_id(quiz_id):
+        return None
+
+    config = load_study_config(db)
+    if config.quiz_set_mode != QUIZ_SET_MODE_PRESET:
+        doc = db["users"].find_one({"_id": ObjectId(user_id)}) or {}
+        return (doc.get("quiz_set_assignment") or {}).get(quiz_id)
+
+    users = db["users"]
+    doc = users.find_one({"_id": ObjectId(user_id)})
+    if not doc:
+        return None
+
+    assignment = dict(doc.get("quiz_set_assignment") or {})
+    new_set = quiz_set_map_dict(config).get(quiz_id)
+
+    if new_set:
+        assignment[quiz_id] = new_set
+    else:
+        assignment.pop(quiz_id, None)
+
+    if assignment != (doc.get("quiz_set_assignment") or {}):
+        users.update_one(
+            {"_id": doc["_id"]}, {"$set": {"quiz_set_assignment": assignment}}
+        )
+
+    return new_set
 
 
 def next_step_id_from(

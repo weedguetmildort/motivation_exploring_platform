@@ -373,7 +373,10 @@ class TestSubmit:
             doc,
             updated_doc,
             # study_flow.mark_step_completed reads the user doc to advance the flow
-            {"_id": user_oid, "step_order": order, "completed_steps": []},
+            {
+                "_id": user_oid, "step_order": order,
+                "completed_steps": [], "quiz_set_assignment": {},
+            },
             updated_doc,
         ]
         mock_col.update_one.side_effect = [

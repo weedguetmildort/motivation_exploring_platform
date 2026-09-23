@@ -1,4 +1,5 @@
 # backend/app/services/quiz.py
+import random
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -41,8 +42,35 @@ def _ensure_unique_index(col: Collection) -> None:
     )
 
 
+def _build_pool_query(quiz_set: Optional[str], quiz_sets: Optional[list]) -> dict:
+    """The question-pool filter for one attempt, in precedence order.
+
+    1. ``quiz_set`` — the set this specific quiz was assigned
+       (study_flow.resolve_quiz_set_assignment). Giving each quiz its own set is
+       what makes a participant's four quizzes disjoint: no question can appear
+       in two of them, because no question belongs to two sets.
+    2. ``quiz_sets`` — the Phase 11 per-participant restriction, which still
+       governs any quiz the map does not cover.
+    3. Neither — the whole bank, including unassigned (``set: null``) questions.
+
+    Note that two *unmapped* quizzes still draw from the same pool and can
+    therefore overlap; mapping every quiz to its own set is what removes that.
+    """
+    if quiz_set:
+        return {"set": quiz_set}
+    if quiz_sets:
+        # A non-empty list filters to those sets; null-set questions excluded.
+        return {"set": {"$in": quiz_sets}}
+    return {}
+
+
 def _load_or_create_attempt(
-    db, user_id: str, user_email: str, quiz_id: str, quiz_sets: Optional[list] = None
+    db,
+    user_id: str,
+    user_email: str,
+    quiz_id: str,
+    quiz_sets: Optional[list] = None,
+    quiz_set: Optional[str] = None,
 ) -> dict:
     col = get_quiz_attempts_collection(db)
     _ensure_unique_index(col)
@@ -51,39 +79,24 @@ def _load_or_create_attempt(
     if doc:
         return doc
 
-    qcol = get_questions_collection(db)
+    if quiz_set is None:
+        # The participant's stored assignment does not cover this quiz — which
+        # is every participant assigned before the map was configured, since it
+        # starts empty. Fall back to the current preset map rather than leaving
+        # them on the whole pool forever. Only read here, on the rare path where
+        # an attempt is actually created.
+        quiz_set = study_flow.preset_quiz_set(db, quiz_id)
 
-    # Phase 11: restrict the pool to the participant's allowed set(s). A non-empty
-    # `quiz_sets` filters to those sets (null-set questions excluded); None/empty
-    # means no restriction (draw from all questions — the historical behavior).
-    pool_query = {"set": {"$in": quiz_sets}} if quiz_sets else {}
+    qcol = get_questions_collection(db)
+    pool_query = _build_pool_query(quiz_set, quiz_sets)
 
     questions = list(qcol.find(pool_query, {"_id": 1}))
     if not questions:
         raise HTTPException(status_code=400, detail="No questions available for quiz")
 
     ids = [str(q["_id"]) for q in questions]
-
-    import random
     random.shuffle(ids)
 
-    # TODO(question-reuse): each attempt draws independently from the pool, so
-    # now that a participant runs the base quiz plus every variant, the same
-    # question will very likely be served to them more than once. Having already
-    # seen an item confounds the accuracy comparison between variants — a later
-    # variant looks better purely because the question is familiar.
-    #
-    # Fix by excluding question_ids already used in this user's other attempts:
-    #
-    #     used = {qid for prior in col.find({"user_id": user_id}, {"question_order": 1})
-    #                 for qid in prior.get("question_order", [])}
-    #     ids = [qid for qid in ids if qid not in used]
-    #
-    # Needs reconciling with the Phase 11 set restriction above: the pool has to
-    # hold MAX_QUIZ_QUESTIONS * (1 + len(variant_sequence)) items *within the
-    # participant's allowed sets* — 40 at present — so it also needs a clear
-    # error (or a smaller MAX_QUIZ_QUESTIONS) when the restricted pool is too
-    # small, rather than silently serving short quizzes.
     ids = ids[:MAX_QUIZ_QUESTIONS]
     incorrect_question_ids = random.sample(ids, min(3, len(ids)))
 
@@ -96,6 +109,10 @@ def _load_or_create_attempt(
         "status": "in_progress",
         "question_order": ids,
         "incorrect_question_ids": incorrect_question_ids,
+        # The set this attempt drew from, recorded at draw time so analysis can
+        # see it without re-deriving it from the participant's assignment (which
+        # an admin may since have changed). None = drew from the whole pool.
+        "question_set": quiz_set,
         "answers": [],
         "created_at": now,
         "updated_at": now,
@@ -143,6 +160,9 @@ def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
     col = get_quiz_attempts_collection(db)
     col.delete_one({"user_id": user_id, "quiz_id": quiz_id})
     study_flow.unmark_step_completed(db, user_id, study_flow.quiz_step_id(quiz_id))
+    # A reset means "redo this quiz from scratch", so pick up any change the
+    # admin has made to the question-set map since it was first drawn.
+    study_flow.repoint_quiz_set(db, user_id, quiz_id)
 
 
 def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:

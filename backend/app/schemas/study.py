@@ -52,9 +52,24 @@ class StudyConfigPublic(BaseModel):
     # Worked example of the orders participants will actually receive.
     preview: List[List[str]] = Field(default_factory=list)
 
+    # ── Per-quiz question sets ───────────────────────────────────────────────
+    # Giving each quiz its own set is what keeps a participant's quizzes
+    # disjoint. "preset" uses quiz_set_map verbatim; "random" shuffles the sets
+    # across each participant's quizzes at signup.
+    quiz_set_mode: Literal["preset", "random"] = "preset"
+    quiz_set_map: dict[str, str] = Field(default_factory=dict)
+    # The set letters and the quizzes the code declares, so the admin UI renders
+    # selects without hard-coding either.
+    known_sets: List[str] = Field(default_factory=list)
+    known_quiz_ids: List[str] = Field(default_factory=list)
+    quiz_labels: dict[str, str] = Field(default_factory=dict)
+
 
 # Admin payload for changing the flow. All fields optional - partial update.
 class StudyConfigUpdate(BaseModel):
     mode: Optional[Literal["all_variants", "single_variant"]] = None
     variant_order: Optional[List[str]] = None
     counterbalance: Optional[bool] = None
+    quiz_set_mode: Optional[Literal["preset", "random"]] = None
+    # quiz_id -> set letter. Omit a quiz to leave it drawing from the whole pool.
+    quiz_set_map: Optional[dict[str, str]] = None

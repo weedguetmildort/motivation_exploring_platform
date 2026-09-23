@@ -81,6 +81,7 @@ def make_user_doc(email="student@test.edu", password="correct-password", **overr
         # would show up as an extra update_one in these tests.
         "step_order": standard_step_order(),
         "completed_steps": [],
+        "quiz_set_assignment": {},
     }
     doc.update(overrides)
     return doc

@@ -86,6 +86,10 @@ class UserPublic(BaseModel):
     completed_steps: List[str] = Field(default_factory=list)
     variant_sequence: List[str] = Field(default_factory=list)
     study_flow_version: int = 1
+    # quiz_id -> question set. Each quiz drawing from its own set is what keeps
+    # a participant's quizzes disjoint. A quiz absent here draws from the whole
+    # pool (subject to quiz_sets below).
+    quiz_set_assignment: dict[str, SetId] = Field(default_factory=dict)
 
     # ── Derived legacy mirrors (not used for routing) ────────────────────────
     survey_pre_base_completed: bool = False
@@ -121,6 +125,7 @@ class ParticipantSummary(BaseModel):
     consent_viewed_at: Optional[datetime] = None
     consent_abandoned_at: Optional[datetime] = None
     quiz_sets: Optional[List[SetId]] = None
+    quiz_set_assignment: dict[str, SetId] = Field(default_factory=dict)
     followup_study_granted: bool = False
     created_at: Optional[datetime] = None
 
