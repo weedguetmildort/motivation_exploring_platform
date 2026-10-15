@@ -106,6 +106,48 @@ def test_after_submission_advice_not_counted_and_interval_is_clipped(study):
     assert row["pointer_chat_ms"] == 3000 and row["active_ms"] == 3000
 
 
+def test_cross_page_events_without_a_clock_bridge_do_not_invent_exposure_or_active_time(study):
+    db, _, user, qid, _, now = study
+    add_recommendation(study, exposed=False)
+    db.research_events.insert_many([
+        {"user_id": user.id, **event(qid, "ai_message_displayed", request_id="request", agent="default"),
+         "page_id": "other-page", "received_at": now + timedelta(seconds=20)},
+        {"user_id": user.id, **event(qid, "activity_interval", event_id="interval", sequence=1, elapsed=2000,
+             duration_ms=2000, active_ms=2000), "page_id": "other-page", "received_at": now + timedelta(seconds=20)},
+    ])
+    row = research_data(db)[0]
+    assert row["wrong_ai_exposed"] is None and row["active_ms"] is None
+    assert row["unsequenced_event_count"] == 2 and "unsequenced_events" in row["quality_flags"]
+
+
+def test_timer_intervals_entirely_after_submission_are_unavailable_instead_of_zero(study):
+    db, client, _, qid, _, _ = study
+    client.post("/research/events", json={"events": [event(qid, "activity_interval", elapsed=20000,
+        duration_ms=1000, active_ms=1000, focused_ms=1000, visible_ms=1000)]})
+    assert research_data(db)[0]["active_ms"] is None
+
+
+def test_selection_revisions_follow_time_instead_of_random_page_identifiers(study):
+    db, _, user, qid, _, now = study
+    values = []
+    for page, elapsed, seq, choice, second in [("z-page", 1000, 0, "a", 1), ("z-page", 2000, 1, "b", 2), ("page", 3000, 0, "b", 3)]:
+        value = event(qid, "answer_selected", event_id=f"{page}-{seq}", sequence=seq, elapsed=elapsed, choice_id=choice)
+        value.update(user_id=user.id, page_id=page, occurred_at=now + timedelta(seconds=second))
+        values.append(value)
+    anchor = event(qid, "answer_submit_clicked", event_id="submit", sequence=1, elapsed=10000)
+    anchor.update(user_id=user.id, occurred_at=now + timedelta(seconds=10))
+    db.research_events.insert_many(values + [anchor])
+    assert research_data(db)[0]["answer_revision_count"] == 1
+
+
+def test_missing_conversation_id_requires_an_attempt_id_for_legacy_joins(study):
+    db, _, user, qid, aid, now = study
+    db.quiz_attempts.update_one({}, {"$unset": {"conversation_id": ""}})
+    db.messages.insert_one({"user_id": user.id, "question_id": qid, "role": "user", "content": "Unrelated conversation", "created_at": now})
+    packet = research_data(db, include_packets=True)[0]["_conversation_packet"]
+    assert packet["turns"] == []
+
+
 def test_feature_opportunity_rates_and_missing_values(study):
     db, client, _, qid, _, _ = study
     events = [event(qid, "suggestion_displayed", event_id="a", sequence=0, item_id="s1"),

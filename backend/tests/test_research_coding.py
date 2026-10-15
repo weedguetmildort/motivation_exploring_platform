@@ -107,6 +107,16 @@ def test_coding_and_validation_are_admin_only(case):
     assert client.get("/research/coding/validation").status_code == 403
 
 
+def test_an_in_progress_evaluation_cannot_be_started_again(case, monkeypatch):
+    db, client, path, packet, _ = case
+    monkeypatch.setenv("RESEARCH_EVALUATOR_MODEL", "test-model")
+    monkeypatch.setenv("UF_OPENAI_API_KEY", "test-not-real")
+    db.research_coding_jobs.insert_one({"_id": f"{packet['packet_hash']}:{coding.RUBRIC_VERSION}:test-model",
+        "status": "running", "owner": "other", "started_at": datetime.now(timezone.utc)})
+    assert client.post(path + "/evaluate", json={"packet_hash": packet["packet_hash"]}).status_code == 409
+    assert db.research_annotations.count_documents({}) == 0
+
+
 def test_validation_requires_independent_reviewers_and_reports_class_support(case):
     _, _, _, packet, result = case
     def record(source, reviewer, label, independent=True, model=None):

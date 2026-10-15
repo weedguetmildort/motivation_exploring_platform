@@ -206,6 +206,7 @@ def mixed_effects(rows, outcome="accuracy", seed=2026, participant_slopes=False)
     field = PRIMARY[outcome]
     data = [dict(r, y=int(r[field])) for r in usable_rows(rows) if r.get("quiz_id") in ROTATED
             and isinstance(r.get(field), bool) and r.get("snapshot_available") and r.get("variant_position") is not None
+            and r.get("study_flow_version") is not None and r.get("question_version") is not None
             and (outcome != "wrong_ai_agreement" or r.get("wrong_ai_exposed") is True)]
     context = {"outcome": outcome, "included_questions": len(data), "excluded_questions": len(rows) - len(data),
                "participants": len({r["participant_id"] for r in data}), "analysis_status": "exploratory",

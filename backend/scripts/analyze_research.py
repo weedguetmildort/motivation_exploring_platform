@@ -1,7 +1,8 @@
 """Reproducible offline summaries from the administrator's research snapshot ZIP.
 
-No database access or third-party packages. Resample participants, not individual
-questions, for descriptive bootstrap intervals. These are not causal comparisons.
+No database access. Run with the backend Python environment; mixed models need
+requirements-research.txt. Resample participants for descriptive intervals.
+These are exploratory analyses, not causal comparisons.
 """
 import argparse
 import csv
@@ -72,7 +73,7 @@ def write_csv(path, records):
         writer.writerows([{key: json.dumps(value) if isinstance(value, (list, dict)) else value for key, value in row.items()} for row in records])
 
 
-def analyze(snapshot, output, seed=2026, repetitions=2000, *, mixed=False, participant_slopes=False):
+def analyze(snapshot, output, seed=2026, repetitions=2000, *, mixed=False, participant_slopes=False, coding_results=()):
     from app.services.research_statistics import paired_comparisons, survey_associations, lexical_clusters, mixed_effects
     with zipfile.ZipFile(snapshot) as archive:
         manifest = json.loads(archive.read("manifest.json"))
@@ -85,6 +86,29 @@ def analyze(snapshot, output, seed=2026, repetitions=2000, *, mixed=False, parti
         surveys = json.loads(archive.read("survey_responses.json")) if "survey_responses.json" in archive.namelist() else []
         survey_items = json.loads(archive.read("survey_items_at_export.json")) if "survey_items_at_export.json" in archive.namelist() else []
         annotations = json.loads(archive.read("research_annotations.json")) if "research_annotations.json" in archive.namelist() else []
+    from app.schemas.research_coding import ConversationCoding
+    from app.services.research_coding import coding_features, validate_evidence, validation_partition, RUBRIC_VERSION
+    packets_by_hash = {p["packet_hash"]: p for p in packets}
+    for filename in coding_results:
+        for line in Path(filename).read_text(encoding="utf-8").splitlines():
+            if not line.strip(): continue
+            annotation = json.loads(line)
+            if annotation.get("source") not in ("human", "llm") or annotation.get("status") == "failed": continue
+            if annotation.get("rubric_version") != RUBRIC_VERSION:
+                raise ValueError("Coding rubric version does not match this analyzer")
+            packet = packets_by_hash.get(annotation.get("packet_hash"))
+            if not packet or any(annotation.get(field) != packet[packet_field] for field, packet_field in
+                (("user_id", "participant_id"), ("attempt_id", "attempt_id"), ("question_id", "question_id"))):
+                raise ValueError("Coding result does not belong to a current packet")
+            validate_evidence(packet, ConversationCoding(labels=annotation["labels"], evidence=annotation.get("evidence", []), notes=annotation.get("notes", "")))
+            if annotation["source"] == "human" and (not annotation.get("reviewer_id") or annotation["reviewer_id"] == "REPLACE_WITH_STABLE_REVIEWER_ID"):
+                raise ValueError("Completed human reviews require a stable reviewer identifier")
+            annotation["partition"] = validation_partition(packet["participant_id"])
+            annotations.append(annotation)
+    for row in questions:
+        records = [a for a in annotations if a.get("attempt_id") == row["attempt_id"] and a.get("question_id") == row["question_id"]]
+        if row.get("conversation_packet_hash"):
+            row.update(coding_features(records, row["conversation_packet_hash"]))
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     write_csv(output / "questions.csv", questions)
@@ -94,6 +118,8 @@ def analyze(snapshot, output, seed=2026, repetitions=2000, *, mixed=False, parti
     report["paired_comparisons"] = paired_comparisons(questions, seed, repetitions)
     report["survey_associations"] = survey_associations(questions, participants, surveys, survey_items, seed, repetitions)
     report["conversation_clusters"] = lexical_clusters(packets)
+    from app.services.research_dashboard import comparisons
+    report["conversation_metrics"] = comparisons(questions)
     from app.services.research_coding import validation_report
     current_packets = {p["packet_hash"] for p in packets}
     report["coding_validation"] = validation_report([a for a in annotations if a.get("packet_hash") in current_packets])
@@ -113,9 +139,10 @@ if __name__ == "__main__":
     parser.add_argument("--bootstrap-repetitions", type=int, default=2000)
     parser.add_argument("--mixed-effects", action="store_true", help="Fit optional Bayesian logistic models; install requirements-research.txt first")
     parser.add_argument("--participant-slopes", action="store_true", help="Include independent participant deviations for rotated conditions in mixed models")
+    parser.add_argument("--coding-results", type=Path, action="append", default=[], help="Merge evidence-validated offline human/model JSONL annotations; may repeat")
     args = parser.parse_args()
     if not 100 <= args.bootstrap_repetitions <= 20000:
         parser.error("Use 100 to 20000 bootstrap repetitions")
     analyze(args.snapshot, args.output, args.seed, args.bootstrap_repetitions,
-            mixed=args.mixed_effects, participant_slopes=args.participant_slopes)
+            mixed=args.mixed_effects, participant_slopes=args.participant_slopes, coding_results=args.coding_results)
     print(f"Wrote question CSV, variant CSV and report to {args.output.resolve()}")

@@ -88,6 +88,7 @@ def test_missing_measurements_are_excluded_but_zero_is_retained(dashboard_study)
     attempt = db.quiz_attempts.find_one({"user_id": people["Bob"]})
     db.research_events.insert_one({"user_id": people["Bob"], "conversation_id": attempt["conversation_id"], "question_id": attempt["question_order"][0],
         "event_type": "activity_interval", "page_id": "p", "sequence": 0, "elapsed_ms": 1000,
+        "received_at": attempt["answers"][0]["answered_at"],
         "data": {"duration_ms": 1000, "active_ms": 0, "visible_ms": 0, "focused_ms": 0, "pointer_ms": 0, "region": "chat"}})
     metrics = client.get("/research/results").json()["overall"]["metrics"]
     assert metrics["active_ms"]["value"] == 0 and metrics["active_ms"]["participant_count"] == 1
@@ -191,6 +192,7 @@ def test_four_completed_records_can_have_eleven_answers_but_only_ten_grades(dash
             for qid in qids:
                 db.research_events.insert_one({"user_id": people["Alice"], "conversation_id": quiz, "question_id": qid,
                     "event_type": "activity_interval", "page_id": qid, "sequence": 0, "elapsed_ms": 9000,
+                    "received_at": now,
                     "data": {"duration_ms": 9000, "active_ms": 9000}})
     data = client.get("/research/results", params={"search": people["Alice"]}).json()
     overall = data["overall"]

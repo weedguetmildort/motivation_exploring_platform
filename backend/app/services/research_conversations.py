@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from statistics import mean
 
-PACKET_VERSION = "1"
+PACKET_VERSION = "2"
 CHALLENGE = re.compile(r"\b(wrong|incorrect|mistake|error|disagree|doesn.t match|contradict|are you sure|double[ -]?check|recheck)\b", re.I)
 SPECIFIC = re.compile(r"\d|\b(denominator|numerator|equation|calculation|subtract|multiply|divide|because|line|step)\b", re.I)
 REASONING = re.compile(r"\d\s*[+*/=−-]\s*\d|\b(i calculated|i computed|my calculation|i got|i think.+because|therefore|this means)\b", re.I)
@@ -90,17 +90,23 @@ def build_packet(row, snapshot, messages, requests, events):
                       "source": "request_ledger", "displayed": None, "stated_choice_id": None})
     turns.sort(key=lambda t: (t["created_at"], t["role"] != "user", t["turn_id"]))
     suggestions = {}
+    references = {}
     clicked = {e.get("data", {}).get("item_id") for e in events if e.get("event_type") == "suggestion_clicked"}
     for event in events:
         data = event.get("data", {})
         if event.get("event_type") == "suggestion_displayed" and data.get("item_id") and data.get("text"):
             suggestions[data["item_id"]] = {"item_id": data["item_id"], "text": data["text"], "clicked": data["item_id"] in clicked}
+        if event.get("event_type") == "reference_displayed" and data.get("item_id"):
+            references[data["item_id"]] = {"item_id": data["item_id"], "text": data.get("text"), "url": data.get("url"),
+                "clicked": any(e.get("event_type") == "reference_clicked" and e.get("data", {}).get("item_id") == data["item_id"] for e in events)}
     packet = {"packet_version": PACKET_VERSION, "participant_id": row["participant_id"], "attempt_id": row["attempt_id"],
               "question_id": row["question_id"], "quiz_id": row["quiz_id"], "question": snapshot or None,
               "answer": {"choice_id": row.get("choice_id"), "correct": row.get("correct"), "answered_at": row.get("answered_at")},
               "turns": turns, "suggestions": sorted(suggestions.values(), key=lambda s: s["item_id"]),
+              "references": sorted(references.values(), key=lambda r: r["item_id"]),
               "limitations": [flag for flag, present in (("missing_question_snapshot", not snapshot),
                   ("missing_submission_time", end is None), ("excluded_untimed_messages", unknown_times > 0),
+                  ("unsequenced_browser_events", bool(row.get("unsequenced_event_count"))),
                   ("missing_viewport_telemetry", not row.get("telemetry_available"))) if present]}
     packet["packet_hash"] = hashlib.sha256(json.dumps(packet, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
     return packet
@@ -116,6 +122,7 @@ def conversation_features(packet):
     challenges = [t for t in student if CHALLENGE.search(t["text"])]
     specific = [t for t in challenges if SPECIFIC.search(t["text"])]
     prior = {}
+    first_wrong = {}
     changes = repairs = regressions = 0
     corrected_after_challenge = False
     for turn in observed:
@@ -127,8 +134,11 @@ def conversation_features(packet):
                 was_wrong = previous["stated_choice_id"] != key
                 repairs += was_wrong and choice == key
                 regressions += not was_wrong and choice != key
-                corrected_after_challenge |= was_wrong and choice == key and any(
-                    previous["created_at"] < c["created_at"] < turn["created_at"] for c in challenges)
+        if comparable and choice != key:
+            first_wrong.setdefault(agent, turn["created_at"])
+        elif comparable and choice == key and agent in first_wrong:
+            corrected_after_challenge |= any(first_wrong[agent] < c["created_at"] < turn["created_at"] for c in challenges)
+            first_wrong.pop(agent)
         prior[agent] = turn
     opportunities = sum(any(t["agent"] == earlier["agent"] for earlier in observed[:i]) for i, t in enumerate(observed))
     challenged_wrong = any(w["created_at"] < c["created_at"] for w in wrong for c in challenges)
@@ -137,6 +147,7 @@ def conversation_features(packet):
         dual.setdefault(turn["request_id"], {})[turn["agent"]] = turn["stated_choice_id"]
     pairs = [(rid, choices) for rid, choices in dual.items() if "A" in choices and "B" in choices]
     disagreements = [rid for rid, choices in pairs if choices["A"] != choices["B"]]
+    disagreement_time = min((max(t["created_at"] for t in observed if t["request_id"] == rid) for rid in disagreements), default=None)
     prompts = [re.sub(r"\W+", " ", t["text"].casefold()).strip() for t in student]
     suggestion_verification = [s for s in packet["suggestions"] if VERIFY.search(s["text"])]
     return {
@@ -154,7 +165,7 @@ def conversation_features(packet):
         "challenge_after_wrong_ai_heuristic": challenged_wrong if wrong else None,
         "ai_repair_after_challenge_heuristic": corrected_after_challenge if challenged_wrong else None,
         "correct_after_ai_repair": packet["answer"]["correct"] if corrected_after_challenge else None,
-        "disagreement_followup_heuristic": any(COMPARE.search(t["text"]) for t in student) if disagreements else None,
+        "disagreement_followup_heuristic": any(t["created_at"] > disagreement_time and COMPARE.search(t["text"]) for t in student) if disagreements else None,
         "agents_converged": pairs[-1][1]["A"] == pairs[-1][1]["B"] if len(pairs) > 1 and pairs[0][0] in disagreements else None,
         "verification_suggestions_displayed_heuristic": len(suggestion_verification) if packet["suggestions"] else None,
         "verification_suggestions_clicked_heuristic": sum(s["clicked"] for s in suggestion_verification) if packet["suggestions"] else None,

@@ -89,29 +89,33 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
         user = users.get(attempt["user_id"], {})
         for position, qid in enumerate(attempt.get("question_order", []), 1):
             key = (attempt["user_id"], attempt.get("conversation_id"), qid)
+            records = {name: [doc for doc in grouped[key] if attempt.get("conversation_id") or doc.get("attempt_id") == str(attempt["_id"])]
+                       for name, grouped in indexes.items()}
             answer = answers.get(qid, {})
             snapshot = attempt.get("question_snapshots", {}).get(qid, {})
             submission = answer.get("telemetry_submission") or {}
             cutoff = submission.get("elapsed_ms")
             page = submission.get("page_id")
-            events = indexes["research_events"][key]
+            events = records["research_events"]
+            answered_at = timestamp(answer.get("answered_at"))
             anchors = [e for e in events if e["page_id"] == page and e["event_type"] == "answer_submit_clicked" and cutoff is not None and e["elapsed_ms"] <= cutoff]
             anchor = max(anchors, key=lambda e: e["elapsed_ms"]) if anchors else None
-            decision_client_time = (timestamp(anchor["occurred_at"]) + (cutoff - anchor["elapsed_ms"]) / 1000) if anchor else None
+            anchor_time = timestamp(anchor.get("occurred_at")) if anchor else None
+            decision_client_time = (anchor_time + (cutoff - anchor["elapsed_ms"]) / 1000) if anchor_time is not None else None
             # Same-page monotonic time excludes interactions after the submitted
             # decision without depending on the client's wall-clock accuracy.
             before = [e for e in events if (
                 e.get("elapsed_ms", 0) <= cutoff if e.get("page_id") == page and cutoff is not None
-                else (timestamp(e.get("occurred_at")) or 0) <= decision_client_time if decision_client_time is not None else True)]
+                else timestamp(e.get("occurred_at")) is not None and timestamp(e["occurred_at"]) <= decision_client_time if decision_client_time is not None
+                else timestamp(e.get("received_at")) is not None and timestamp(e["received_at"]) <= answered_at if answered_at is not None else True)]
             by_type = defaultdict(list)
             for event in before:
                 by_type[event["event_type"]].append(event)
-            answered_at = timestamp(answer.get("answered_at"))
-            messages = sorted([m for m in indexes["messages"][key] if m.get("role") == "assistant"
-                               and (answered_at is None or (timestamp(m.get("created_at")) or 0) <= answered_at)],
+            messages = sorted([m for m in records["messages"] if m.get("role") == "assistant"
+                               and (answered_at is None or timestamp(m.get("created_at")) is not None and timestamp(m["created_at"]) <= answered_at)],
                               key=lambda m: timestamp(m.get("created_at")) or 0)
-            requests = sorted([r for r in indexes["ai_requests"][key] if answered_at is None
-                               or (timestamp(r.get("started_at")) or 0) <= answered_at],
+            requests = sorted([r for r in records["ai_requests"] if answered_at is None
+                               or timestamp(r.get("started_at")) is not None and timestamp(r["started_at"]) <= answered_at],
                               key=lambda r: timestamp(r.get("started_at")) or 0)
             exposed = {(e.get("data", {}).get("request_id"), e.get("data", {}).get("agent", "default"))
                        for e in by_type["ai_message_displayed"]}
@@ -147,6 +151,10 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                 "submission_page_elapsed_ms": cutoff,
                 "telemetry_available": bool(events), "telemetry_submission_anchor": bool(page and cutoff is not None),
                 "event_count": len(events), "question_page_count": len({e["page_id"] for e in events}),
+                "pre_submission_event_count": len(before),
+                "unsequenced_event_count": sum(answered_at is not None and decision_client_time is None and
+                    not (e.get("page_id") == page and cutoff is not None) and
+                    (timestamp(e.get("received_at")) is None or timestamp(e["received_at"]) > answered_at) for e in events),
                 "ai_requests": len(requests), "ai_completed_requests": sum(r.get("main_response_completed", False) for r in requests),
                 "ai_failed_requests": sum(r.get("status") in ("failed", "interrupted", "started") for r in requests),
                 "manual_prompts": sum(r.get("trigger") == "manual" for r in requests),
@@ -166,7 +174,7 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                 "submit_failures": len(by_type["answer_submit_failed"]),
                 "chat_clicks": sum(e.get("data", {}).get("region") in ("chat", "chat_input", "agent_A", "agent_B", "suggestions", "reference") for e in by_type["region_click"]),
                 "scroll_events": len(by_type["scroll"]),
-                "copy_events": len(indexes["copy_events"][key]),
+                "copy_events": sum(answered_at is None or timestamp(c.get("created_at")) is not None and timestamp(c["created_at"]) <= answered_at for c in records["copy_events"]),
                 # Reports currently have no conversation ID; joined below by user + question + quiz.
                 "reported_issue": False,
                 "model_versions": sorted({m.get("model_version") for m in messages if m.get("model_version")}),
@@ -175,8 +183,13 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
             first_token_waits = [milliseconds(r.get("started_at"), r.get("first_token_at")) for r in requests]
             first_token_waits = [value for value in first_token_waits if value is not None]
             row["median_ai_first_token_wait_ms"] = median(first_token_waits) if first_token_waits else None
-            selections = [e.get("data", {}).get("choice_id") for e in sorted(by_type["answer_selected"], key=lambda e: (e["page_id"], e["sequence"]))]
-            row["answer_revision_count"] = sum(a != b for a, b in zip(selections, selections[1:]))
+            selection_events = by_type["answer_selected"]
+            selection_pages = {e["page_id"] for e in selection_events}
+            ordered = sorted(selection_events, key=lambda e: (e["elapsed_ms"], e["sequence"])) if len(selection_pages) <= 1 else (
+                sorted(selection_events, key=lambda e: (timestamp(e.get("occurred_at")) or 0, e["page_id"], e["sequence"]))
+                if decision_client_time is not None and all(timestamp(e.get("occurred_at")) is not None for e in selection_events) else None)
+            selections = [e.get("data", {}).get("choice_id") for e in ordered] if ordered is not None else []
+            row["answer_revision_count"] = sum(a != b for a, b in zip(selections, selections[1:])) if ordered is not None else None
             for agent in ("default", "A", "B"):
                 row[f"first_ai_choice_{agent}"] = first.get(agent)
                 row[f"latest_ai_choice_{agent}"] = last.get(agent)
@@ -195,8 +208,11 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
             row.update(observed_interval_ms=None, unobserved_timer_ms=None, focused_inactive_ms=None)
             for region in REGIONS:
                 row[f"pointer_{region}_ms"] = None
-            intervals = [e for e in events if e["event_type"] == "activity_interval"]
+            intervals = [e for e in events if e["event_type"] == "activity_interval" and (
+                e.get("page_id") == page and cutoff is not None or decision_client_time is not None or answered_at is None or
+                timestamp(e.get("received_at")) is not None and timestamp(e["received_at"]) <= answered_at)]
             if intervals:
+                observed_duration = 0.0
                 row.update(visible_ms=0.0, focused_ms=0.0, active_ms=0.0, pointer_observed_ms=0.0)
                 row.update(observed_interval_ms=0.0, unobserved_timer_ms=0.0)
                 for region in REGIONS:
@@ -212,6 +228,7 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                     else:
                         allowed = duration
                     scale = allowed / duration if duration else 0
+                    observed_duration += allowed
                     for metric in ("visible_ms", "focused_ms", "active_ms"):
                         row[metric] += min(duration, data.get(metric, 0)) * scale
                     pointer = min(duration, data.get("pointer_ms", 0)) * scale
@@ -219,7 +236,11 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                     row[f"pointer_{data.get('region', 'other')}_ms"] += pointer
                     row["observed_interval_ms"] += allowed
                     row["unobserved_timer_ms"] += data.get("unobserved_ms", 0) if allowed > 0 else 0
-                row["focused_inactive_ms"] = row["focused_ms"] - row["active_ms"]
+                if observed_duration > 0:
+                    row["focused_inactive_ms"] = row["focused_ms"] - row["active_ms"]
+                else:
+                    for metric in ("visible_ms", "focused_ms", "active_ms", "pointer_observed_ms", "observed_interval_ms", "unobserved_timer_ms", *[f"pointer_{r}_ms" for r in REGIONS]):
+                        row[metric] = None
             # Latency uses the submission page's monotonic timeline, not server/client clock subtraction.
             completions = [e for e in by_type["ai_response_completed"] if e.get("page_id") == page]
             row["last_ai_to_submit_ms"] = cutoff - max(e["elapsed_ms"] for e in completions) if completions and cutoff is not None else None
@@ -238,12 +259,13 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                     not answers.get(question_id, {}).get("answered_at") for question_id in attempt.get("question_order", [])
                 )),
                 ("event_sequence_gaps", bool(gaps)), ("unresolved_ai_request", bool(row["ai_failed_requests"])),
+                ("unsequenced_events", bool(row["unsequenced_event_count"])),
                 ("unresolved_exposed_recommendation", bool(unknown_exposures)),
                 ("message_persistence_failure", any(r.get("assistant_message_persisted") is False or r.get("user_message_persisted") is False for r in requests)),
                 ("multiple_pages", row["question_page_count"] > 1),
                 ("suspended_timer", bool(row["unobserved_timer_ms"])),
                 ("unknown_ai_recommendation", bool(messages) and not recommendations)) if missing]
-            packet = build_packet(row, snapshot, indexes["messages"][key], indexes["ai_requests"][key], before)
+            packet = build_packet(row, snapshot, records["messages"], records["ai_requests"], before)
             row.update(conversation_features(packet))
             row.update(coding_features(annotations[(row["attempt_id"], qid)], packet["packet_hash"]))
             if include_packets:

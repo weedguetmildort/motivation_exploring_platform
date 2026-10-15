@@ -2,14 +2,16 @@
 import hashlib
 import json
 import os
+import uuid
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from itertools import combinations
 from bson import ObjectId
 from fastapi import HTTPException
+from pymongo.errors import DuplicateKeyError
 from ..schemas.research_coding import ConversationCoding, ConversationLabels
 
-RUBRIC_VERSION = "conversation-1"
+RUBRIC_VERSION = "conversation-2"
 RUBRIC = {
     "student_reasoning": "Student articulates a specific calculation or reasoning step, or connected worked reasoning. Asking for an explanation is not itself student reasoning.",
     "challenge_quality": "Generic verification requests versus identifying a specific error, calculation, or unsupported assumption. Specific challenges are not necessarily correct.",
@@ -17,6 +19,8 @@ RUBRIC = {
     "disagreement_handling": "Observable comparison of agents, independent checking, or asking for reconciliation. No evidence of these is not proof of uncritical acceptance.",
     "ai_explanation_issue": "Candidate issues in a saved AI explanation, supported by text and the frozen question. Unsupported external factual claims are not verifiable from an answer key alone; abstain when necessary.",
     "ai_certainty": "Expressed linguistic certainty, not the AI's actual probability of being correct.",
+    "ai_relevance": "Whether saved AI responses address this question and the student's request, or go off topic. Word count alone does not establish quality.",
+    "reference_discussion": "Whether student text requests a source or discusses a reference. A link impression, title, or click does not establish reading or checking the full source.",
     "suggestion_quality": "Whether displayed suggestion boxes promote explanation/verification or seeking an answer. Do not assume they were clicked or understood.",
 }
 
@@ -76,9 +80,11 @@ def validate_evidence(packet, coding):
 
 def model_input(packet):
     # Deliberately blind condition, demographics, identity, and final submission outcome.
-    return {"question": packet["question"], "turns": [{k: t[k] for k in
+    question = {k: packet["question"].get(k) for k in ("stem", "subtitle", "choices", "correct_choice_id")} if packet["question"] else None
+    return {"question": question, "turns": [{k: t[k] for k in
             ("turn_id", "role", "text", "trigger", "agent", "displayed")} for t in packet["turns"]],
             "suggestions": [{"item_id": s["item_id"], "text": s["text"]} for s in packet["suggestions"]],
+            "references": [{k: r.get(k) for k in ("item_id", "text", "url")} for r in packet.get("references", [])],
             "limitations": packet["limitations"]}
 
 
@@ -112,6 +118,43 @@ async def evaluate_packet(db, packet):
     cached = [a for a in current_annotations(db, packet) if a["source"] == "llm" and a["model"] == status["model"]]
     if cached:
         return cached[-1]
+    key = f"{packet['packet_hash']}:{RUBRIC_VERSION}:{status['model']}"
+    jobs = db["research_coding_jobs"]
+    now = datetime.now(timezone.utc)
+    owner = str(uuid.uuid4())
+    job = {"_id": key, "status": "running", "owner": owner, "started_at": now}
+    try:
+        jobs.insert_one(job)
+    except DuplicateKeyError:
+        finished = [a for a in current_annotations(db, packet) if a["source"] == "llm" and a["model"] == status["model"]]
+        if finished:
+            return finished[-1]
+        previous = jobs.find_one({"_id": key})
+        started = previous["started_at"].replace(tzinfo=previous["started_at"].tzinfo or timezone.utc)
+        if previous["status"] == "running" and now - started < timedelta(minutes=5):
+            raise HTTPException(409, "This conversation is already being evaluated; reload after it finishes")
+        claimed = jobs.update_one({"_id": key, "owner": previous.get("owner")}, {"$set": {k: v for k, v in job.items() if k != "_id"}})
+        if not claimed.matched_count:
+            raise HTTPException(409, "Another evaluator claimed this conversation")
+    try:
+        result, model, metadata = await generate_coding(packet)
+        if not jobs.find_one({"_id": key, "owner": owner, "status": "running"}):
+            raise HTTPException(409, "Evaluation lease expired; reload before retrying")
+        annotation = save_annotation(db, packet, result, source="llm", model=model, metadata=metadata)
+        jobs.update_one({"_id": key, "owner": owner}, {"$set": {"status": "completed", "finished_at": datetime.now(timezone.utc)}})
+        return annotation
+    except Exception:
+        jobs.update_one({"_id": key, "owner": owner}, {"$set": {"status": "failed", "finished_at": datetime.now(timezone.utc)}})
+        raise
+
+
+async def generate_coding(packet):
+    """Shared bounded evaluator for explicit admin actions and offline batch jobs."""
+    status = evaluator_status()
+    if not status["enabled"]:
+        raise HTTPException(503, status["reason"])
+    if not packet["answer"].get("answered_at"):
+        raise HTTPException(409, "Only submitted questions can be model-coded")
     payload = json.dumps(model_input(packet), ensure_ascii=False)
     if len(payload) > 120000:
         raise HTTPException(422, "Conversation is too long for this evaluator; review manually without truncating it")
@@ -129,9 +172,10 @@ async def evaluate_packet(db, packet):
                 max_tokens=4000, response_format={"type": "json_object"},
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": payload}])
         coding = ConversationCoding.model_validate_json(response.choices[0].message.content)
-        return save_annotation(db, packet, coding, source="llm", model=status["model"], metadata={
+        validate_evidence(packet, coding)
+        return coding, status["model"], {
             "served_model": response.model, "model_input_hash": hashlib.sha256(payload.encode()).hexdigest(),
-            "prompt_hash": hashlib.sha256(system.encode()).hexdigest(), "provisional": True})
+            "prompt_hash": hashlib.sha256(system.encode()).hexdigest(), "provisional": True}
     except HTTPException:
         raise
     except Exception:
@@ -146,6 +190,8 @@ CODING_FEATURES = {
     "disagreement_handling": ("disagreement_handling", {"comparison", "own_check", "reconciliation_request"}),
     "ai_explanation_issue": ("ai_explanation_issue", {"unsupported_claim", "contradiction", "calculation_error"}),
     "ai_assertive": ("ai_certainty", {"assertive", "mixed"}),
+    "ai_off_topic": ("ai_relevance", {"off_topic", "mixed"}),
+    "reference_discussion": ("reference_discussion", {"requests_source", "discusses_reference"}),
     "learning_suggestion": ("suggestion_quality", {"explanation_or_verification", "mixed"}),
 }
 
@@ -158,12 +204,12 @@ def coding_features(records, packet_hash):
     result = {"human_coding_reviewers": len(humans), "coding_rubric_version": RUBRIC_VERSION,
               "llm_coding_model": models[-1].get("model") if models else None}
     for key, (dimension, positives) in CODING_FEATURES.items():
-        labels = {r["labels"][dimension] for r in humans.values()}
+        labels = {r["labels"][dimension] for r in humans.values() if r["labels"][dimension] != "insufficient_evidence"}
         label = next(iter(labels)) if len(labels) == 1 else None
         result[f"human_coded_{key}"] = label in positives if label and label != "insufficient_evidence" else None
         model_label = models[-1]["labels"][dimension] if models else None
         result[f"llm_coded_{key}"] = model_label in positives if model_label and model_label != "insufficient_evidence" else None
-    result["human_coding_conflict"] = any(len({r["labels"][d] for r in humans.values()}) > 1 for d in RUBRIC) if humans else None
+    result["human_coding_conflict"] = any(len({r["labels"][d] for r in humans.values() if r["labels"][d] != "insufficient_evidence"}) > 1 for d in RUBRIC) if humans else None
     return result
 
 
@@ -183,7 +229,6 @@ def validation_report(records):
         if record.get("rubric_version") == RUBRIC_VERSION and record.get("partition") == "validation":
             groups[(record["user_id"], record["attempt_id"], record["question_id"], record["packet_hash"])].append(record)
     human_pairs, model_pairs = defaultdict(list), defaultdict(list)
-    model_eligible = Counter()
     for group in groups.values():
         group.sort(key=lambda r: (str(r["created_at"]), str(r["_id"])))
         humans = {r["reviewer_id"]: r for r in group if r["source"] == "human" and r.get("independent_review")}
@@ -195,7 +240,6 @@ def validation_report(records):
             if len(usable) >= 2 and len(set(usable.values())) == 1:
                 gold = next(iter(usable.values()))
                 for model in models:
-                    model_eligible[(dimension, model)] += 1
                     model_pairs[(dimension, model)].append((gold, models[model]["labels"][dimension]))
     model_results = []
     for (dimension, model), pairs in model_pairs.items():
