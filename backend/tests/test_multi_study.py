@@ -64,6 +64,12 @@ def test_admin_only_approval_prerequisite_and_consent(setup):
     assert consent.status_code == 200
     assert raw.study_enrollments.find_one({"_id": ObjectId(student.id)})["consent"] is True
     assert raw.users.find_one({"_id": ObjectId(student.id)}).get("consent_text") is None
+    assert client.post("/studies/study-2/auth/decline", json={"consent_text": "Study 2 consent"}, headers=headers()).status_code == 200
+    status = client.get("/studies/catalog", headers=headers()).json()["studies"][1]
+    assert status["consent_required"] is True
+    assert client.get("/studies/study-2/surveys/pre_quiz/state", headers=headers()).status_code == 403
+    assert client.post("/studies/study-2/auth/consent", json={"consent_text": "Study 2 consent"}, headers=headers()).status_code == 200
+    assert client.get("/studies/catalog", headers=headers()).json()["studies"][1]["consent_required"] is False
 
 
 def test_regrant_preserves_protocol_progress_and_audit(setup):
@@ -137,6 +143,24 @@ def test_prerequisite_can_be_disabled_for_future_enrollments(setup):
     save_study_config(StudyDatabase(raw, "study-2"), requires_study1_completion=False)
     approve_study2(raw, student.id, admin, True)
     assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+
+
+def test_survey_banks_and_saved_responses_stay_separate(setup):
+    raw, db, student, admin, client = setup
+    from app.services.surveys import create_survey_item
+    from app.schemas.survey import SurveyItemCreate
+    item = create_survey_item(db, SurveyItemCreate(stage="pre_quiz", type="likert", prompt="I can use AI", required=True, order=0))
+    finish_first(raw, student)
+    approve_study2(raw, student.id, admin, True)
+    assert client.post("/studies/study-2/auth/consent", json={"consent_text": "Study 2 consent"}, headers=headers()).status_code == 200
+    response = client.get("/studies/study-2/surveys/pre_quiz/state", headers=headers())
+    assert response.status_code == 200
+    second = StudyDatabase(raw, "study-2")
+    second["survey_items"].update_one({"_id": ObjectId(item.id)}, {"$set": {"prompt": "Interview version"}})
+    assert db["survey_items"].find_one({"_id": ObjectId(item.id)})["prompt"] == "I can use AI"
+    assert second["survey_items"].find_one({"_id": ObjectId(item.id)})["prompt"] == "Interview version"
+    assert db["survey_responses"].count_documents({}) == 0
+    assert second["survey_responses"].count_documents({}) == 1
 
 
 def test_quiz_size_and_wrong_advice_are_frozen_per_enrollment(setup):

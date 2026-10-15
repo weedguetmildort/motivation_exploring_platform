@@ -1,7 +1,6 @@
 """Administrator study selection. Combined averages use enrollments; identities
 remain shared. Inferential comparisons stay within each study's protocol.
 """
-from collections import defaultdict
 from fastapi import HTTPException
 from .studies import STUDY_IDS, StudyDatabase, raw_database
 from .research_dashboard import dashboard, aggregate, comparisons, filter_rows

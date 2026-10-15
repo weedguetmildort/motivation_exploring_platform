@@ -1,5 +1,4 @@
 """Resolve explicit /studies/{id}/... API routes without shared mutable state."""
-from starlette.datastructures import State
 from starlette.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from ..services.studies import StudyDatabase, STUDY_IDS, check_access

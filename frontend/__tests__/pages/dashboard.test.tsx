@@ -46,6 +46,13 @@ describe("DashboardPage", () => {
     mockLogout.mockReset();
   });
 
+  it.each([{ consent: false }, { consent: true, consent_declined_at: "2026-10-15T12:00:00Z" }])("requires fresh Study 2 consent after a decline: %j", async consent => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, study_id: "study-2", consent_agreed_at: "2026-10-14T12:00:00Z", ...consent } });
+    render(<DashboardPage />);
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/consent"));
+    expect(screen.queryByText("Study Complete — thank you for participating!")).not.toBeInTheDocument();
+  });
+
   it("shows a loading state before the session check resolves", () => {
     mockGetMe.mockReturnValue(new Promise(() => {}));
     render(<DashboardPage />);

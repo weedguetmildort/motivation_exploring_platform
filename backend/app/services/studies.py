@@ -236,7 +236,8 @@ def enrollment_status(raw, user, study_id):
         "approved": approved, "available": eligible, "reason": reason,
         "status": "completed" if finished else "in_progress" if (doc or {}).get("started_at") or completed else "approved" if approved else "not_approved",
         "completed_steps": completed, "total_steps": len(order), "finished": finished,
-        "consent_required": study_id == "study-2" and not user.get("is_admin") and not (doc or {}).get("consent_agreed_at"),
+        "consent_required": study_id == "study-2" and not user.get("is_admin") and (
+            not (doc or {}).get("consent_agreed_at") or bool((doc or {}).get("consent_declined_at")) or (doc or {}).get("consent") is False),
         "approved_at": enrollment.get("approved_at") if study_id == "study-2" else None,
         "interview_at": enrollment.get("interview_at") if study_id == "study-2" else None}
 

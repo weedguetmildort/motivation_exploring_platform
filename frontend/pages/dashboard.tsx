@@ -17,7 +17,7 @@ export default function DashboardPage() {
       try {
         const res = await getMe();
         const u = res.user;
-        if (u.study_id === "study-2" && !u.consent_agreed_at) { router.replace("/consent"); return; }
+        if (u.study_id === "study-2" && (!u.consent_agreed_at || u.consent_declined_at || u.consent === false)) { router.replace("/consent"); return; }
         if (!cancelled && !u.demographics_completed) {
           router.replace("/demographics");
           return;
