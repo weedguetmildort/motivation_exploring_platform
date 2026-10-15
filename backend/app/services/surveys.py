@@ -5,6 +5,7 @@ from typing import List, Optional, Any, Dict
 from bson.objectid import ObjectId
 from pymongo import ReturnDocument
 from pymongo.collection import Collection
+from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException
 
 from ..schemas.survey import (
@@ -193,7 +194,14 @@ def _load_or_create_response_doc(db, user_id: str, user_email: str, stage: str) 
         "completed_at": None,
         "updated_at": now,
     }
-    res = col.insert_one(doc)
+    try:
+        res = col.insert_one(doc)
+    except DuplicateKeyError:
+        # Two tabs can open the same survey at once. Keep their shared attempt.
+        existing = col.find_one({"user_id": user_id, "stage": stage})
+        if existing:
+            return existing
+        raise
     doc["_id"] = res.inserted_id
     return doc
 
@@ -258,7 +266,13 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     doc = _load_or_create_response_doc(db, user_id, user_email, stage)
 
     if doc.get("status") == "completed":
-        raise HTTPException(status_code=400, detail="Survey already completed")
+        # A lost response or stale tab may retry after the save succeeded.
+        # Return the original answers unchanged and repair a partial transition.
+        study_flow.mark_step_completed(
+            db, user_id, study_flow.survey_step_id(stage),
+            doc.get("completed_at") or datetime.utcnow(),
+        )
+        return build_survey_state(db, user_id, user_email, stage)
 
     question_stage = _question_stage_for_stage(stage)
 
@@ -275,12 +289,12 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
 
     for a in req.answers:
         res = col.update_one(
-            {"_id": doc["_id"], "answers.item_id": a.item_id},
+            {"_id": doc["_id"], "status": {"$ne": "completed"}, "answers.item_id": a.item_id},
             {"$set": {"answers.$.value": a.value, "answers.$.answered_at": now, "updated_at": now}},
         )
         if res.matched_count == 0:
             col.update_one(
-                {"_id": doc["_id"]},
+                {"_id": doc["_id"], "status": {"$ne": "completed"}},
                 {
                     "$push": {
                         "answers": {
@@ -311,8 +325,8 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     if required_ids.issubset(answered_ids):
         completed_at = datetime.utcnow()
 
-        col.update_one(
-            {"_id": updated["_id"]},
+        completion = col.update_one(
+            {"_id": updated["_id"], "status": {"$ne": "completed"}},
             {
                 "$set": {
                     "status": "completed",
@@ -322,8 +336,18 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
             },
         )
 
+        if not completion.matched_count:
+            study_flow.mark_step_completed(
+                db, user_id, study_flow.survey_step_id(stage),
+                updated.get("completed_at") or completed_at,
+            )
+            return build_survey_state(db, user_id, user_email, stage)
+
         users = get_users_collection(db)
-        answers_map: Dict[str, Any] = {a.item_id: a.value for a in req.answers}
+        answers_map: Dict[str, Any] = {
+            answer["item_id"]: answer.get("value") for answer in updated.get("answers", [])
+            if answer.get("answered_at")
+        }
 
         # Denormalised copy of the answers on the user doc, one key per stage.
         # Keeps the existing pre_quiz_survey / post_base_survey / post_variant_survey

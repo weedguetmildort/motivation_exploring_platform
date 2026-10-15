@@ -49,9 +49,6 @@ export default function SurveyPage() {
 
   const [loadingSurvey, setLoadingSurvey] = useState(true);
   const [items, setItems] = useState<SurveyItem[]>([]);
-  const [, setStatus] = useState<"not_started" | "in_progress" | "completed">(
-    "not_started",
-  );
 
   const [values, setValues] = useState<
     Record<string, number | string | string[]>
@@ -139,6 +136,7 @@ export default function SurveyPage() {
     (async () => {
       setLoadingSurvey(true);
       setError(null);
+      let completed = false;
 
       try {
         // One request: the backend serves this stage's own saved answers while
@@ -148,7 +146,6 @@ export default function SurveyPage() {
         if (cancel) return;
 
         setItems(state.items || []);
-        setStatus(state.attempt?.status ?? "in_progress");
 
         const initial: Record<string, number | string | string[]> = {};
         for (const a of state.answers || []) {
@@ -157,14 +154,22 @@ export default function SurveyPage() {
         setValues(initial);
 
         if (state.attempt?.status === "completed") {
+          completed = true;
+          setSavedStage(activeSurveyStage);
           invalidateMeCache();
           const next = await getNextStep();
           if (cancel) return;
+          if (next.next_step?.id === `survey:${activeSurveyStage}`) {
+            setError("Your responses are saved, but study progress has not updated. Please reload or contact the study team.");
+            return;
+          }
           router.replace(next.next_route);
           return;
         }
       } catch (e) {
-        if (!cancel) handleFlowError(e, config.loadError);
+        if (!cancel) handleFlowError(e, completed
+          ? "Your responses were saved, but the next step could not open. Please try Continue again."
+          : config.loadError);
       } finally {
         if (!cancel) setLoadingSurvey(false);
       }
@@ -197,7 +202,7 @@ export default function SurveyPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!activeSurveyStage || !config) return;
+    if (!activeSurveyStage || !config || saving) return;
 
     setError(null);
 
@@ -228,6 +233,10 @@ export default function SurveyPage() {
       // Ask the backend where to go rather than optimistically re-deriving the
       // flow here — it has just recorded this step as complete.
       const next = await getNextStep();
+      if (next.next_step?.id === `survey:${activeSurveyStage}`) {
+        setError("Your responses are saved, but study progress has not updated. Please reload or contact the study team.");
+        return;
+      }
       router.replace(next.next_route);
     } catch (e) {
       handleFlowError(e, submitted
@@ -344,6 +353,14 @@ export default function SurveyPage() {
 
             {loadingSurvey ? (
               <div className="text-sm text-gray-500">Loading survey…</div>
+            ) : savedStage === activeSurveyStage ? (
+              <div className="space-y-4">
+                <p role="status" className="text-sm text-gray-600">Your responses to this survey are already saved.</p>
+                <button type="submit" disabled={saving}
+                  className="rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition">
+                  {saving ? "Opening next step…" : "Continue to next step"}
+                </button>
+              </div>
             ) : items.length === 0 ? (
               <div className="text-sm text-gray-500">{config.emptyMessage}</div>
             ) : (

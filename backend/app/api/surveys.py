@@ -1,4 +1,5 @@
 # backend/app/api/surveys.py
+from datetime import datetime
 from fastapi import APIRouter, Request, Depends, HTTPException
 from ..api.auth import get_current_user
 from ..schemas.user import UserPublic
@@ -31,7 +32,7 @@ def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
 def require_survey_access(
     request: Request, user: UserPublic = Depends(get_current_user)
 ) -> UserPublic:
-    """Allow a survey stage only when it is the participant's current step.
+    """Allow the current survey plus safe reads/retries of completed surveys.
 
     Mirrors require_quiz_access in api/quiz.py — the flow is enforced on the
     server, not just by the page's redirects. Admins are exempt so they can
@@ -52,7 +53,16 @@ def require_survey_access(
             status_code=403, detail="Survey is not part of your study flow"
         )
 
-    if not study_flow.is_step_unlocked_for(user.step_order, user.completed_steps, step_id):
+    completed_retry = step_id in user.completed_steps and (
+        request.method == "GET" or request.url.path.endswith("/submit")
+    )
+    if completed_retry and not request.app.state.db["survey_responses"].find_one(
+        {"user_id": user.id, "stage": stage, "status": "completed"}, {"_id": 1}
+    ):
+        # Legacy flags may outlive deleted data. Do not create a fresh attempt
+        # behind a step that the participant's flow already considers finished.
+        raise HTTPException(status_code=409, detail="Saved survey responses are unavailable; contact the study team")
+    if not completed_retry and not study_flow.is_step_unlocked_for(user.step_order, user.completed_steps, step_id):
         raise HTTPException(
             status_code=403, detail="This survey is not your current step"
         )
@@ -83,7 +93,11 @@ def admin_delete_item(item_id: str, request: Request, user: UserPublic = Depends
 
 @router.get("/{stage}/state", response_model=SurveyStateResponse)
 def get_state(stage: str, request: Request, user: UserPublic = Depends(require_survey_access)):
-    return build_survey_state(request.app.state.db, user.id, user.email, stage)
+    db = request.app.state.db
+    state = build_survey_state(db, user.id, user.email, stage)
+    if state.attempt.status == "completed" and study_flow.survey_step_id(stage) not in user.completed_steps:
+        study_flow.mark_step_completed(db, user.id, study_flow.survey_step_id(stage), datetime.utcnow())
+    return state
 
 @router.post("/{stage}/record_shown")
 def record_shown(stage: str, item_id: str, request: Request, user: UserPublic = Depends(require_survey_access)):

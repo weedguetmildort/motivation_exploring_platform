@@ -889,6 +889,8 @@ def mark_step_completed(db, user_id: str, step_id: str, completed_at: datetime) 
     A step_id outside this user's step_order — an admin test run, or a Phase 13
     quiz-2 id — is a no-op: no write is issued at all.
     """
+    if not ObjectId.is_valid(user_id):
+        return {}
     doc = db["users"].find_one({"_id": ObjectId(user_id)})
     if not doc:
         return {}

@@ -653,16 +653,15 @@ class TestSubmitSurvey:
             "updated_at": datetime.now(timezone.utc),
         }
 
-    def test_already_completed_raises_400(self, mock_db, mock_col):
+    def test_already_completed_returns_original_state_without_rewriting_answers(self, mock_db, mock_col):
         doc = self._response_doc(status="completed")
         mock_col.find_one.return_value = doc
+        mock_col.find.return_value.sort.return_value = []
 
         req = SurveySubmitRequest(answers=[])
-        with pytest.raises(HTTPException) as exc_info:
-            submit_survey(mock_db, "user1", "user@test.edu", "pre_quiz", req)
-
-        assert exc_info.value.status_code == 400
-        assert "already completed" in exc_info.value.detail.lower()
+        state = submit_survey(mock_db, "user1", "user@test.edu", "pre_quiz", req)
+        assert state.attempt.status == "completed"
+        mock_col.update_one.assert_not_called()
 
     def test_invalid_stage_raises_400(self, mock_db, mock_col):
         doc = self._response_doc()

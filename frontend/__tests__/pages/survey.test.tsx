@@ -254,6 +254,34 @@ describe("SurveyPage", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
   });
 
+  it("does not reopen a completed form when next-step progress is inconsistent", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem], [{ item_id: "item1", value: 5 }], "completed"));
+    render(<SurveyPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("study progress has not updated");
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+    mockGetNextStep.mockResolvedValue(nextIsRoute("/quiz/base"));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to next step" }));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
+    expect(mockSubmitSurvey).not.toHaveBeenCalled();
+  });
+
+  it("keeps a completed survey saved when loading the next step fails", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem], [], "completed"));
+    mockGetNextStep.mockResolvedValueOnce(nextIsSurvey("pre_quiz")).mockRejectedValueOnce(new Error("offline"));
+    render(<SurveyPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your responses were saved");
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    mockGetNextStep.mockResolvedValue(nextIsRoute("/quiz/base"));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to next step" }));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
+    expect(mockSubmitSurvey).not.toHaveBeenCalled();
+  });
+
   it("shows a validation error when required questions are unanswered", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser });
     mockQuery = { stage: "pre_quiz" };

@@ -318,6 +318,14 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
         raise HTTPException(status_code=400, detail="No quiz attempt found")
 
     if doc["status"] == "completed":
+        original = next((a for a in doc.get("answers", [])
+                         if a.get("question_id") == question_id and a.get("answered_at")), None)
+        if original and original.get("choice_id") == choice_id:
+            study_flow.mark_step_completed(
+                db, user_id, study_flow.quiz_step_id(quiz_id),
+                doc.get("completed_at") or datetime.utcnow(),
+            )
+            return doc
         raise HTTPException(status_code=400, detail="Quiz already completed")
 
     if question_id not in set(doc.get("question_order", [])):

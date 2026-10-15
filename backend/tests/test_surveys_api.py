@@ -297,14 +297,16 @@ class TestSubmit:
 
         assert resp.status_code == 400
 
-    def test_already_completed_returns_400(self, survey_client, mock_col):
+    def test_already_completed_returns_saved_state(self, survey_client, mock_col):
         doc = make_response_doc(status="completed")
         mock_col.find_one.return_value = doc
+        mock_col.find.return_value.sort.return_value = []
 
         resp = survey_client.post("/surveys/pre_quiz/submit", json={"answers": []})
 
-        assert resp.status_code == 400
-        assert "already completed" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        assert resp.json()["attempt"]["status"] == "completed"
+        mock_col.update_one.assert_not_called()
 
     def test_invalid_item_id_returns_400(self, survey_client, mock_col):
         doc = make_response_doc()
