@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import mongomock
 import pytest
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from app.api import auth, studies, study, quiz, surveys, research
 from app.core.study_middleware import StudyMiddleware
@@ -26,6 +26,8 @@ def setup():
     app.add_middleware(StudyMiddleware)
     for module in (auth, studies, study, quiz, surveys, research):
         app.include_router(module.router)
+    from app.api.export import router as export_router
+    app.include_router(export_router)
     client = TestClient(app)
     return raw, db, student, str(admin_id), client
 
@@ -154,3 +156,51 @@ def test_quiz_size_and_wrong_advice_are_frozen_per_enrollment(setup):
     assert len(other["incorrect_question_ids"]) == 2
     assert other["study_protocol"]["wrong_ai_rate"] == .4
     assert other["study_id"] == "study-2"
+
+
+def test_admin_preview_and_messages_use_selected_study(setup):
+    raw, db, student, admin, client = setup
+    @client.app.get("/scope-probe")
+    def probe(request: Request):
+        return {"messages": request.app.state.messages.name, "study": request.app.state.db.study_id}
+    response = client.get("/studies/study-2/auth/me", headers=headers("admin@example.com"))
+    assert response.status_code == 200
+    assert response.json()["user"]["consent"] is True
+    assert response.json()["user"]["step_order"]
+    response = client.get("/studies/study-2/scope-probe", headers=headers("admin@example.com"))
+    assert response.json() == {"messages": "study2__messages", "study": "study-2"}
+
+
+def test_combined_admin_counts_unique_people_and_separate_enrollments(setup):
+    from app.services.quiz import _load_or_create_attempt
+    import io, json, zipfile
+    raw, db, student, admin, client = setup
+    raw.questions.insert_one({"stem": "Question", "choices": [{"id": "a", "label": "A"}], "correct_choice_id": "a", "set": "a"})
+    approve_study2(raw, student.id, admin, True)
+    for sid in ("study-1", "study-2"):
+        scoped = StudyDatabase(raw, sid)
+        attempt = _load_or_create_attempt(scoped, student.id, student.email, "base", quiz_set="a")
+        scoped["quiz_attempts"].update_one({"_id": attempt["_id"]}, {"$set": {"status": "completed", "answers": [
+            {"question_id": attempt["question_order"][0], "choice_id": "a", "marked_correct": True,
+             "shown_at": datetime.now(timezone.utc), "answered_at": datetime.now(timezone.utc)}]}})
+    response = client.get("/research/results?study=all", headers=headers("admin@example.com"))
+    assert response.status_code == 200
+    data = response.json()
+    assert data["matched_accounts"] == 1 and data["matched_enrollments"] == 2
+    assert data["overall"]["attempt_count"] == 2
+    assert data["overall"]["metrics"]["accuracy"]["participant_count"] == 2
+    assert len({p["participant_id"] for p in data["participants"]}) == 2
+    for person in data["participants"]:
+        detail = client.get(f"/research/participants/{person['participant_id']}", headers=headers("admin@example.com"))
+        assert detail.status_code == 200
+        assert detail.json()["participant"]["study_id"] == person["study_id"]
+    assert client.get("/research/results?study=study-2", headers=headers("admin@example.com")).json()["overall"]["attempt_count"] == 1
+    assert client.get("/research/results?study=all", headers=headers()).status_code == 403
+    exported = client.get("/export/research-bundle?study=all", headers=headers("admin@example.com"))
+    assert exported.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        assert "study-2_snapshot.zip" in archive.namelist()
+        with zipfile.ZipFile(io.BytesIO(archive.read("study-2_snapshot.zip"))) as snapshot:
+            manifest = json.loads(snapshot.read("manifest.json"))
+            assert manifest["study_id"] == "study-2"
+            assert json.loads(snapshot.read("questions.json"))[0]["study_id"] == "study-2"

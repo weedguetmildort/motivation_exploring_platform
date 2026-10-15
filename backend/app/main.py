@@ -106,6 +106,7 @@ def _startup():
         app.state.messages = messages
         app.state.settings = settings
         ensure_research_indexes(db)
+        ensure_research_indexes(StudyDatabase(db, "study-2"))
 
         # Chat cache: only READY links are surfaced to the chatbot
         app.state.knowledge_links = reload_knowledge_links_cache(links_col)

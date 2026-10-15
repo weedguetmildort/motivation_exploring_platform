@@ -30,6 +30,9 @@ class StudyMiddleware:
         try:
             user = await run_in_threadpool(get_current_user_doc, Request(scope, receive))
             await run_in_threadpool(check_access, raw, user, sid)
+            if sid == "study-2" and user.get("is_admin"):
+                from ..services.studies import ensure_admin_preview
+                await run_in_threadpool(ensure_admin_preview, raw, user)
             inner_path = "/" + (parts[3] if len(parts) > 3 else "")
             if sid == "study-2" and not user.get("is_admin") and inner_path.startswith(("/quiz/", "/surveys/", "/chat/", "/research/events")):
                 enrollment = await run_in_threadpool(raw["study_enrollments"].find_one, {"_id": user["_id"]})

@@ -2,8 +2,9 @@
 
 Study 1 retains legacy collection names and progress, avoiding destructive
 migration. Study 2 stores progress in study_enrollments and results in study2__
-collections in the SAME database. Question/survey definitions are shared; each
-attempt retains its immutable question snapshot. Collection.database is scoped
+collections in the SAME database. Question definitions are shared; each
+attempt retains its immutable question snapshot. Survey definitions are copied
+once, then edited independently per study. Collection.database is scoped
 as well, so service helpers cannot accidentally use another study's counters.
 """
 from datetime import datetime, timezone
@@ -11,11 +12,12 @@ from types import SimpleNamespace
 from bson import ObjectId
 from fastapi import HTTPException
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 STUDY_IDS = ("study-1", "study-2")
 GLOBAL_FIELDS = {"email", "password_hash", "first_name", "last_name", "is_admin", "is_test",
                  "demographics", "demographics_completed", "created_at", "last_active_at"}
-SHARED_COLLECTIONS = {"questions", "survey_items", "knowledge_links", "allowlist"}
+SHARED_COLLECTIONS = {"questions", "knowledge_links", "allowlist"}
 PROFILES = {
     "study-1": {"mode": "single_variant", "questions_per_quiz": 10, "quiz_set_mode": "preset"},
     "study-2": {"mode": "all_variants", "questions_per_quiz": 5, "quiz_set_mode": "balanced_random"},
@@ -150,6 +152,8 @@ class StudyDatabase:
             return StudyUsers(self, self.raw["users"])
         if name in SHARED_COLLECTIONS:
             return self.raw[name]
+        if name == "survey_items" and self.study_id == "study-2":
+            initialize_survey_bank(self.raw)
         physical = name if self.study_id == "study-1" else f"study2__{name}"
         return StudyCollection(self, self.raw[physical])
 
@@ -181,6 +185,18 @@ def initialize_studies(raw):
             "version": 1, "quiz_set_map": {}, "wrong_ai_count": 3, "wrong_ai_rate": None,
             "requires_study1_completion": sid == "study-2",
         }}, upsert=True)
+    initialize_survey_bank(raw)
+
+
+def initialize_survey_bank(raw):
+    marker = {"_id": "survey_bank_initialized"}
+    config = raw["study2__study_config"]
+    if config.find_one(marker) or not raw["survey_items"].count_documents({}):
+        return
+    for item in raw["survey_items"].find({}):
+        raw["study2__survey_items"].update_one({"_id": item["_id"]}, {"$setOnInsert": {
+            **item, "study_id": "study-2"}}, upsert=True)
+    config.update_one(marker, {"$setOnInsert": {"initialized_at": datetime.now(timezone.utc)}}, upsert=True)
 
 
 def study1_complete(raw, user):
@@ -220,9 +236,26 @@ def enrollment_status(raw, user, study_id):
         "approved": approved, "available": eligible, "reason": reason,
         "status": "completed" if finished else "in_progress" if (doc or {}).get("started_at") or completed else "approved" if approved else "not_approved",
         "completed_steps": completed, "total_steps": len(order), "finished": finished,
-        "consent_required": study_id == "study-2" and not (doc or {}).get("consent_agreed_at"),
+        "consent_required": study_id == "study-2" and not user.get("is_admin") and not (doc or {}).get("consent_agreed_at"),
         "approved_at": enrollment.get("approved_at") if study_id == "study-2" else None,
         "interview_at": enrollment.get("interview_at") if study_id == "study-2" else None}
+
+
+def ensure_admin_preview(raw, user):
+    """Admin previews do not consume participant counterbalancing slots."""
+    from .study_flow import load_study_config, build_step_order, quiz_ids_in_order
+    db = StudyDatabase(raw, "study-2")
+    config = load_study_config(db)
+    order = build_step_order(config.variant_order if config.mode == "all_variants" else config.variant_order[:1])
+    raw["study_enrollments"].update_one({"_id": user["_id"]}, {"$setOnInsert": {
+        "user_id": str(user["_id"]), "study_id": "study-2", "approved": True,
+        "admin_preview": True, "consent": True, "consent_agreed_at": datetime.now(timezone.utc),
+        "study_protocol": config.as_dict(), "study_flow_version": config.version,
+        "study_flow_mode": config.mode, "step_order": order, "completed_steps": [],
+        "variant_sequence": list(config.variant_order), "assigned_var": config.variant_order[0],
+        "quiz_set_assignment": dict(zip(quiz_ids_in_order(order), ("a", "b", "c", "d"))),
+        "progress_reconciled_version": 1,
+    }}, upsert=True)
 
 
 def approve_study2(raw, user_id, admin_id, approved, interview_at=None, notes=""):
@@ -239,11 +272,16 @@ def approve_study2(raw, user_id, admin_id, approved, interview_at=None, notes=""
         db = StudyDatabase(raw, "study-2")
         config = load_study_config(db)
         flow = assign_flow(db)
-        raw["study_enrollments"].update_one({"_id": user["_id"], "step_order": {"$exists": False}}, {"$set": {
-            **flow, "user_id": user_id, "study_id": "study-2", "approved": False,
-            "consent": False, "completed_steps": [], "requires_study1_completion": config.requires_study1_completion,
-            "created_at": now,
-        }}, upsert=enrollment is None)
+        try:
+            raw["study_enrollments"].update_one({"_id": user["_id"], "step_order": {"$exists": False}}, {"$set": {
+                **flow, "user_id": user_id, "study_id": "study-2", "approved": False,
+                "consent": False, "completed_steps": [], "requires_study1_completion": config.requires_study1_completion,
+                "created_at": now,
+            }}, upsert=enrollment is None)
+        except DuplicateKeyError:
+            # Another administrator froze the same enrollment concurrently.
+            # Keep their snapshot instead of replacing it or failing the grant.
+            pass
     # Atomically append the audit record with the access change.
     change = {"approved": approved, "admin_id": admin_id, "at": now, "notes": notes,
               "interview_at": interview_at}
