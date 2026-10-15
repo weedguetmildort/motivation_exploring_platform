@@ -24,7 +24,7 @@ QUIZ2_BASE_ID = "base2"
 QUIZ2_VARIANT_QUIZ_IDS = {"followup2", "double2", "links2"}
 QUIZ2_QUIZ_IDS = {QUIZ2_BASE_ID, *QUIZ2_VARIANT_QUIZ_IDS}
 
-MAX_QUIZ_QUESTIONS = 10
+MAX_QUIZ_QUESTIONS = 5
 
 
 def get_users_collection(db) -> Collection:
