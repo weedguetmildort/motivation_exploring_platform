@@ -60,6 +60,8 @@ class UserCreate(BaseModel):
 # Safe user representation returned to the client.
 # Omits password_hash and exposes study-progress flags used to gate pages.
 class UserPublic(BaseModel):
+    study_id: str = "study-1"
+    study_protocol: dict = Field(default_factory=dict)
     id: str
     email: EmailStr
     first_name: Optional[str] = None

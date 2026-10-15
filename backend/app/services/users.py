@@ -35,6 +35,8 @@ def user_to_public(doc: dict) -> UserPublic:
     """
     return UserPublic(
         id=str(doc["_id"]),
+        study_id=doc.get("study_id", "study-1"),
+        study_protocol=doc.get("study_protocol") or {},
         email=doc["email"],
         first_name=doc.get("first_name"),
         last_name=doc.get("last_name"),

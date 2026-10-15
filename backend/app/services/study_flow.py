@@ -229,6 +229,10 @@ class StudyConfig:
     variant_order: tuple[str, ...] = ()
     counterbalance: bool = True
     version: int = 1
+    questions_per_quiz: int = 5
+    wrong_ai_count: int = 3
+    wrong_ai_rate: Optional[float] = None
+    requires_study1_completion: bool = True
 
     # Which question set each quiz draws from. Giving every quiz its own set is
     # what stops a participant seeing the same question twice across their four
@@ -245,6 +249,10 @@ class StudyConfig:
             "variant_order": list(self.variant_order),
             "counterbalance": self.counterbalance,
             "version": self.version,
+            "questions_per_quiz": self.questions_per_quiz,
+            "wrong_ai_count": self.wrong_ai_count,
+            "wrong_ai_rate": self.wrong_ai_rate,
+            "requires_study1_completion": self.requires_study1_completion,
             "quiz_set_mode": self.quiz_set_mode,
             "quiz_set_map": dict(self.quiz_set_map),
         }
@@ -326,6 +334,10 @@ def load_study_config(db) -> StudyConfig:
         variant_order=_reconcile_variant_order(doc.get("variant_order")),
         counterbalance=bool(doc.get("counterbalance", True)),
         version=int(doc.get("version", 1)),
+        questions_per_quiz=int(doc.get("questions_per_quiz", 5)),
+        wrong_ai_count=int(doc.get("wrong_ai_count", 3)),
+        wrong_ai_rate=doc.get("wrong_ai_rate"),
+        requires_study1_completion=bool(doc.get("requires_study1_completion", True)),
         quiz_set_mode=quiz_set_mode,
         quiz_set_map=_reconcile_quiz_set_map(doc.get("quiz_set_map")),
     )
@@ -335,6 +347,11 @@ def save_study_config(
     db,
     *,
     mode: Optional[str] = None,
+    questions_per_quiz: Optional[int] = None,
+    wrong_ai_count: Optional[int] = None,
+    wrong_ai_rate: Optional[float] = None,
+    wrong_ai_rate_supplied: bool = False,
+    requires_study1_completion: Optional[bool] = None,
     variant_order: Optional[Iterable[str]] = None,
     counterbalance: Optional[bool] = None,
     quiz_set_mode: Optional[str] = None,
@@ -361,8 +378,17 @@ def save_study_config(
         quiz_set_map if quiz_set_map is not None else current.quiz_set_map
     )
 
+    protocol = dict(questions_per_quiz=current.questions_per_quiz if questions_per_quiz is None else questions_per_quiz,
+        wrong_ai_count=current.wrong_ai_count if wrong_ai_count is None else wrong_ai_count,
+        wrong_ai_rate=wrong_ai_rate if wrong_ai_rate_supplied else current.wrong_ai_rate,
+        requires_study1_completion=current.requires_study1_completion if requires_study1_completion is None else requires_study1_completion)
+    if not 1 <= protocol["questions_per_quiz"] <= 100 or not 0 <= protocol["wrong_ai_count"] <= 100:
+        raise ValueError("Invalid question or wrong-advice count")
+    if protocol["wrong_ai_rate"] is not None and not 0 <= protocol["wrong_ai_rate"] <= 1:
+        raise ValueError("Wrong-advice rate must be between zero and one")
     changed = (
-        new_mode != current.mode
+        any(getattr(current, key) != value for key, value in protocol.items())
+        or         new_mode != current.mode
         or new_order != current.variant_order
         or new_counterbalance != current.counterbalance
         or new_quiz_set_mode != current.quiz_set_mode
@@ -375,6 +401,7 @@ def save_study_config(
         {"_id": STUDY_CONFIG_ID},
         {
             "$set": {
+                **protocol,
                 "mode": new_mode,
                 "variant_order": list(new_order),
                 "counterbalance": new_counterbalance,
@@ -388,6 +415,7 @@ def save_study_config(
     )
 
     return StudyConfig(
+        **protocol,
         mode=new_mode,
         variant_order=new_order,
         counterbalance=new_counterbalance,
@@ -576,6 +604,7 @@ def assign_flow(db, forced_first: Optional[str] = None) -> dict:
         ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
+        "study_protocol": config.as_dict(),
         "round_robin_seq": seq,
         "assignment_source": source,
         "progress_reconciled_version": 1,
@@ -671,6 +700,7 @@ def ensure_user_flow(db, doc: dict) -> dict:
         ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
+        "study_protocol": doc.get("study_protocol") or config.as_dict(),
         "assigned_var": assigned,
     }
     db["users"].update_one({"_id": doc["_id"]}, {"$set": update})

@@ -92,6 +92,8 @@ def get_current_user_doc(request: Request) -> dict:
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
 
+    from ..services.studies import snapshot_legacy_protocol
+    doc = snapshot_legacy_protocol(db, doc)
     maybe_touch_last_active(users, doc)
 
     return reconcile_saved_progress(db, ensure_user_flow(db, doc))
@@ -136,6 +138,8 @@ def login(data: LoginRequest, request: Request, response: Response):
     if not doc or not check_user_password(doc, data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    from ..services.studies import snapshot_legacy_protocol
+    doc = snapshot_legacy_protocol(db, doc)
     # Backfill pre-multi-variant accounts at the door rather than on first
     # quiz load, so their first /study/next already reflects the new flow.
     user_pub = build_user_public(reconcile_saved_progress(db, ensure_user_flow(db, doc)))
@@ -173,6 +177,8 @@ def record_consent_agreement(
         {
             "$set": {
                 "consent_text": data.consent_text,
+                "consent": True,
+                "consent_declined_at": None,
                 "consent_agreed_at": now,
                 "updated_at": now,
             }
@@ -199,6 +205,7 @@ def record_consent_decline(
         {
             "$set": {
                 "consent_text": data.consent_text,
+                "consent": False,
                 "consent_declined_at": now,
                 "updated_at": now,
             }

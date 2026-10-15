@@ -22,7 +22,12 @@ from .api import study as study_router
 
 from .core.config import get_settings
 
+from .api.studies import router as studies_router
+from .core.study_middleware import StudyMiddleware
+from .services.studies import StudyDatabase, initialize_studies
+
 app = FastAPI()
+app.add_middleware(StudyMiddleware)
 settings = get_settings()
 
 app.add_middleware(
@@ -94,8 +99,10 @@ def _startup():
         allowlist_col = get_allowlist_collection(db)
         ensure_allowlist_indexes(allowlist_col)
 
+        initialize_studies(db)
+        app.state.raw_db = db
         app.state.mongo_client = client
-        app.state.db = db
+        app.state.db = StudyDatabase(db, "study-1")
         app.state.messages = messages
         app.state.settings = settings
         ensure_research_indexes(db)
@@ -158,3 +165,5 @@ app.include_router(users_router)
 app.include_router(messages_router)
 app.include_router(export_router)
 app.include_router(research_router)
+
+app.include_router(studies_router)

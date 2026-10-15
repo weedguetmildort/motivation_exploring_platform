@@ -100,8 +100,14 @@ def _load_or_create_attempt(
     ids = [str(q["_id"]) for q in questions]
     random.shuffle(ids)
 
-    ids = ids[:MAX_QUIZ_QUESTIONS]
-    incorrect_question_ids = random.sample(ids, min(3, len(ids)))
+    user_doc = db["users"].find_one({"_id": ObjectId(user_id)}) if ObjectId.is_valid(user_id) else None
+    user_doc = user_doc or {}
+    protocol = user_doc.get("study_protocol") or study_flow.load_study_config(db).as_dict()
+    question_count = protocol.get("questions_per_quiz", MAX_QUIZ_QUESTIONS)
+    ids = ids[:question_count]
+    rate = protocol.get("wrong_ai_rate")
+    wrong_count = int(len(ids) * rate + 0.5) if rate is not None else protocol.get("wrong_ai_count", 3)
+    incorrect_question_ids = random.sample(ids, min(wrong_count, len(ids)))
 
     now = datetime.utcnow()
     user_doc = db["users"].find_one({"_id": ObjectId(user_id)}) if ObjectId.is_valid(user_id) else None
@@ -123,6 +129,10 @@ def _load_or_create_attempt(
         "question_order": ids,
         "question_snapshots": snapshots,
         "analytics_schema_version": 1,
+        "study_id": getattr(db, "study_id", "study-1") if isinstance(getattr(db, "study_id", None), str) else "study-1",
+        "study_protocol": protocol,
+        "requested_question_count": question_count,
+        "actual_question_count": len(ids),
         "study_flow_version": user_doc.get("study_flow_version"),
         "variant_sequence": user_doc.get("variant_sequence", []),
         "step_order": user_doc.get("step_order", []),

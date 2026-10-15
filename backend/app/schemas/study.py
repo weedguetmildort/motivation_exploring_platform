@@ -45,6 +45,10 @@ class StudyConfigPublic(BaseModel):
     variant_order: List[str]
     counterbalance: bool
     version: int
+    questions_per_quiz: int = 5
+    wrong_ai_count: int = 3
+    wrong_ai_rate: Optional[float] = None
+    requires_study1_completion: bool = True
     # Every variant the code currently declares, so the admin UI can render the
     # full list even if the stored order is stale.
     known_variants: List[str] = Field(default_factory=list)
@@ -68,6 +72,10 @@ class StudyConfigPublic(BaseModel):
 
 # Admin payload for changing the flow. All fields optional - partial update.
 class StudyConfigUpdate(BaseModel):
+    questions_per_quiz: Optional[int] = Field(None, ge=1, le=100)
+    wrong_ai_count: Optional[int] = Field(None, ge=0, le=100)
+    wrong_ai_rate: Optional[float] = Field(None, ge=0, le=1)
+    requires_study1_completion: Optional[bool] = None
     mode: Optional[Literal["all_variants", "single_variant"]] = None
     variant_order: Optional[List[str]] = None
     counterbalance: Optional[bool] = None
