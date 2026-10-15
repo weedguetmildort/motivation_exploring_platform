@@ -118,6 +118,42 @@ function isActiveRecently(p: Participant): boolean {
   return Date.now() - new Date(p.last_active_at).getTime() < 7 * 24 * 60 * 60 * 1000;
 }
 
+// Local Y-M-D for a participant's join date, comparable against the
+// <input type="date"> values (also local Y-M-D). Comparing these strings rather
+// than Date objects keeps the filter aligned with the "Joined" date shown on
+// each card, so a participant never drops out of a range that visibly contains
+// them. Returns null when there is no usable date.
+function joinDateKey(p: Participant): string | null {
+  if (!p.created_at) return null;
+  const d = new Date(p.created_at);
+  if (Number.isNaN(d.getTime())) return null;
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day   = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+// Both bounds are inclusive and independently optional. A participant with no
+// join date can't be placed in a range, so they drop out while one is active
+// (the filter card reports how many that is rather than hiding them silently).
+function inJoinRange(p: Participant, from: string, to: string): boolean {
+  if (!from && !to) return true;
+  const key = joinDateKey(p);
+  if (!key) return false;
+  if (from && key < from) return false;
+  if (to && key > to) return false;
+  return true;
+}
+
+// Enrolled / complete tallies for a slice of the roster. "Enrolled" excludes
+// anyone who declined consent (not a usable case); "complete" is those who
+// finished the full study.
+function tally(list: Participant[]) {
+  return {
+    enrolled: list.filter((p) => p.consent_declined_at == null).length,
+    complete: list.filter((p) => p.survey_stage === "complete").length,
+  };
+}
+
 function StageProgress({ p }: { p: Participant }) {
   return (
     <div className="flex flex-wrap gap-1 mt-1">
@@ -151,6 +187,8 @@ export default function ParticipantsPanelPage() {
   const [nextAssignment, setNextAssignment] = useState<NextAssignment | null>(null);
   const [assignmentBusy, setAssignmentBusy] = useState(false);
   const [defaultSets, setDefaultSets] = useState<SetId[]>([]);
+  const [fromDate, setFromDate]       = useState("");
+  const [toDate, setToDate]           = useState("");
 
   // Auth gate
   useEffect(() => {
@@ -272,7 +310,15 @@ export default function ParticipantsPanelPage() {
   }
   if (!user) return null;
 
-  const filtered = participants.filter((p) => {
+  // The join-date range is the outermost filter: tab counts, both case-count
+  // rows and the roster all read from `scoped`. Tabs then narrow only the list.
+  const dateFilterActive = Boolean(fromDate || toDate);
+  const scoped = participants.filter((p) => inJoinRange(p, fromDate, toDate));
+  const undatedHidden = dateFilterActive
+    ? participants.filter((p) => joinDateKey(p) === null).length
+    : 0;
+
+  const filtered = scoped.filter((p) => {
     if (activeTab === "active")   return isActiveRecently(p) && p.survey_stage !== "complete";
     if (activeTab === "complete") return p.survey_stage === "complete";
     if (activeTab === "declined") return p.consent_declined_at != null;
@@ -280,10 +326,10 @@ export default function ParticipantsPanelPage() {
   });
 
   const counts = {
-    all:      participants.length,
-    active:   participants.filter((p) => isActiveRecently(p) && p.survey_stage !== "complete").length,
-    complete: participants.filter((p) => p.survey_stage === "complete").length,
-    declined: participants.filter((p) => p.consent_declined_at != null).length,
+    all:      scoped.length,
+    active:   scoped.filter((p) => isActiveRecently(p) && p.survey_stage !== "complete").length,
+    complete: scoped.filter((p) => p.survey_stage === "complete").length,
+    declined: scoped.filter((p) => p.consent_declined_at != null).length,
   };
 
   const tabs: { key: Tab; label: string }[] = [
@@ -294,18 +340,31 @@ export default function ParticipantsPanelPage() {
   ];
 
   // Cases per study condition: how many participants we have in each arm.
-  // "Enrolled" excludes anyone who declined consent (not a usable case);
-  // "complete" is those who finished the full study.
-  const caseCounts = VARIANT_ORDER.map((variant) => {
-    const inVariant = participants.filter((p) => p.assigned_var === variant);
-    return {
-      variant,
-      label: VARIANT_LABELS[variant].label,
-      color: VARIANT_LABELS[variant].color,
-      enrolled: inVariant.filter((p) => p.consent_declined_at == null).length,
-      complete: inVariant.filter((p) => p.survey_stage === "complete").length,
-    };
-  });
+  const caseCounts = VARIANT_ORDER.map((variant) => ({
+    variant,
+    label: VARIANT_LABELS[variant].label,
+    color: VARIANT_LABELS[variant].color,
+    ...tally(scoped.filter((p) => p.assigned_var === variant)),
+  }));
+
+  // Cases per question set. Sets are not mutually exclusive — a participant
+  // restricted to A and B counts under both — so these do not sum to the roster
+  // size. Participants with no restriction draw from every set, so they get
+  // their own bucket rather than inflating all four.
+  const setCounts = [
+    ...ALL_SETS.map((s) => ({
+      key: s as string,
+      label: s.toUpperCase(),
+      color: "bg-indigo-100 text-indigo-800",
+      ...tally(scoped.filter((p) => (p.quiz_sets ?? []).includes(s))),
+    })),
+    {
+      key: "unrestricted",
+      label: "No restriction",
+      color: "bg-gray-100 text-gray-700",
+      ...tally(scoped.filter((p) => !p.quiz_sets || p.quiz_sets.length === 0)),
+    },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -317,6 +376,61 @@ export default function ParticipantsPanelPage() {
       />
 
       <div className="page-container">
+        {/* Join-date range — scopes the tabs, the case counts and the roster */}
+        <div
+          role="group"
+          aria-label="Filter by join date"
+          className="mb-4 rounded-lg border bg-white px-4 py-3 shadow-sm"
+        >
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Filter by join date
+            </span>
+            <span className="text-xs text-gray-400">empty = all dates</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-1.5 text-sm text-gray-600">
+              From
+              <input
+                type="date"
+                value={fromDate}
+                max={toDate || undefined}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="rounded border px-2 py-1 text-sm text-gray-700"
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-sm text-gray-600">
+              To
+              <input
+                type="date"
+                value={toDate}
+                min={fromDate || undefined}
+                onChange={(e) => setToDate(e.target.value)}
+                className="rounded border px-2 py-1 text-sm text-gray-700"
+              />
+            </label>
+            {dateFilterActive && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setFromDate(""); setToDate(""); }}
+                  className="rounded-full border px-3 py-1 text-sm font-medium text-gray-500 hover:bg-gray-50"
+                >
+                  Clear
+                </button>
+                <span className="text-xs text-gray-500">
+                  Showing {scoped.length} of {participants.length}
+                </span>
+              </>
+            )}
+          </div>
+          {undatedHidden > 0 && (
+            <div className="mt-2 text-xs text-gray-400">
+              {undatedHidden} participant{undatedHidden !== 1 ? "s" : ""} hidden — no join date recorded.
+            </div>
+          )}
+        </div>
+
         {/* Tabs */}
         <div className="mb-4 flex flex-wrap gap-2">
           {tabs.map((t) => (
@@ -334,26 +448,47 @@ export default function ParticipantsPanelPage() {
           ))}
         </div>
 
-        {/* Cases by condition — usable N per study arm */}
-        <div
-          role="group"
-          aria-label="Cases by condition"
-          className="mb-4 rounded-lg border bg-white px-4 py-3 shadow-sm"
-        >
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-            Cases by condition
+        {/* Case counts — usable N per study arm and per question set */}
+        <div className="mb-4 space-y-3 rounded-lg border bg-white px-4 py-3 shadow-sm">
+          <div role="group" aria-label="Cases by condition">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Cases by condition
+            </div>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {caseCounts.map((c) => (
+                <div key={c.variant} className="flex items-center gap-2 text-sm">
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.color}`}>
+                    {c.label}
+                  </span>
+                  <span className="text-gray-700">{c.enrolled} enrolled</span>
+                  <span className="text-gray-300">·</span>
+                  <span className="text-gray-700">{c.complete} complete</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
-            {caseCounts.map((c) => (
-              <div key={c.variant} className="flex items-center gap-2 text-sm">
-                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.color}`}>
-                  {c.label}
-                </span>
-                <span className="text-gray-700">{c.enrolled} enrolled</span>
-                <span className="text-gray-300">·</span>
-                <span className="text-gray-700">{c.complete} complete</span>
-              </div>
-            ))}
+
+          <div role="group" aria-label="Cases by question set" className="border-t pt-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Cases by question set
+              </span>
+              <span className="text-xs text-gray-400">
+                sets overlap — a participant counts under each set they draw from
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {setCounts.map((c) => (
+                <div key={c.key} className="flex items-center gap-2 text-sm">
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.color}`}>
+                    {c.label}
+                  </span>
+                  <span className="text-gray-700">{c.enrolled} enrolled</span>
+                  <span className="text-gray-300">·</span>
+                  <span className="text-gray-700">{c.complete} complete</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -423,7 +558,11 @@ export default function ParticipantsPanelPage() {
         {error && <p className="text-red-600">{error}</p>}
 
         {!loading && !error && filtered.length === 0 && (
-          <p className="text-gray-500">No participants in this tab.</p>
+          <p className="text-gray-500">
+            {dateFilterActive
+              ? "No participants in this date range."
+              : "No participants in this tab."}
+          </p>
         )}
 
         <div className="space-y-3">
