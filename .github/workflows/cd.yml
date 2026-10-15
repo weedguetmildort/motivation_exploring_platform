@@ -11,10 +11,12 @@ concurrency:
 
 jobs:
   tests:
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/tests.yml
 
   build-and-deploy:
     needs: tests
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     env:
@@ -36,7 +38,7 @@ jobs:
 
       - name: Login to Heroku Container Registry
         run: |
-          echo "${HEROKU_API_KEY}" | docker login -u "${HEROKU_EMAIL}" --password-stdin ${HEROKU_REGISTRY}
+          echo "${HEROKU_API_KEY}" | docker login -u "${HEROKU_EMAIL}" --password-stdin "${HEROKU_REGISTRY}"
 
       # ------------ Backend ------------
       - name: Build & Push Backend Image

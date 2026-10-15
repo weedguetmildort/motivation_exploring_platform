@@ -1,0 +1,93 @@
+name: CD (research study)
+
+on:
+  push:
+    branches: ["feat/second-deployment"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-research-study
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    if: github.ref == 'refs/heads/feat/second-deployment'
+    uses: ./.github/workflows/tests.yml
+
+  deploy:
+    needs: tests
+    if: github.ref == 'refs/heads/feat/second-deployment'
+    runs-on: ubuntu-latest
+    env:
+      HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY_RESEARCH }}
+      RESEARCH_BACKEND_APP: ${{ secrets.HEROKU_APP_BACKEND_RESEARCH }}
+      RESEARCH_FRONTEND_APP: ${{ secrets.HEROKU_APP_FRONTEND_RESEARCH }}
+      EXISTING_BACKEND_APP: ${{ secrets.HEROKU_APP_BACKEND }}
+      EXISTING_FRONTEND_APP: ${{ secrets.HEROKU_APP_FRONTEND }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Read-only checks run before pushing images or changing either app.
+      # Config values stay in memory; only the two public URLs are outputs.
+      - name: Check separate apps, database, and session configuration
+        id: preflight
+        run: python backend/scripts/research_deployment.py preflight
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Login to Heroku Container Registry
+        run: printf '%s' "$HEROKU_API_KEY" | docker login --username=_ --password-stdin registry.heroku.com
+
+      - name: Build and push research backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          tags: registry.heroku.com/${{ env.RESEARCH_BACKEND_APP }}/web
+          outputs: type=image,oci-mediatypes=false,push=true
+          cache-from: type=gha,scope=research-backend
+          cache-to: type=gha,mode=max,scope=research-backend
+
+      - name: Build and push research frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          build-args: |
+            BACKEND_URL=${{ steps.preflight.outputs.backend_url }}
+          tags: registry.heroku.com/${{ env.RESEARCH_FRONTEND_APP }}/web
+          outputs: type=image,oci-mediatypes=false,push=true
+          cache-from: type=gha,scope=research-frontend
+          cache-to: type=gha,mode=max,scope=research-frontend
+
+      - name: Install Heroku CLI
+        run: curl --fail --silent --show-error https://cli-assets.heroku.com/install-ubuntu.sh | sh
+
+      - name: Release research apps
+        run: |
+          python backend/scripts/research_deployment.py preflight
+          heroku container:release web --app "$RESEARCH_BACKEND_APP"
+          heroku container:release web --app "$RESEARCH_FRONTEND_APP"
+          heroku ps:scale web=1 --app "$RESEARCH_BACKEND_APP"
+          heroku ps:scale web=1 --app "$RESEARCH_FRONTEND_APP"
+
+      - name: Verify health and study routing
+        env:
+          BACKEND_URL: ${{ steps.preflight.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+        run: python backend/scripts/research_deployment.py smoke
+
+      - name: Show new study URL
+        env:
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+        run: |
+          printf 'Research study: %s\n' "$FRONTEND_URL" >> "$GITHUB_STEP_SUMMARY"
