@@ -50,18 +50,21 @@ def milliseconds(start, end):
     return max(0, (b - a) * 1000) if a is not None and b is not None else None
 
 
-def research_data(db, include_tests=False, include_archived=False):
+def research_data(db, include_tests=False, include_archived=False, participant_ids=None):
+    if participant_ids is not None and not participant_ids:
+        return []
+    query = {"user_id": {"$in": list(participant_ids)}} if participant_ids is not None else {}
     users = {str(u["_id"]): u for u in db["users"].find({})}
-    attempts = list(db["quiz_attempts"].find({}))
+    attempts = list(db["quiz_attempts"].find(query))
     if include_archived:
-        attempts += list(db["quiz_attempt_archive"].find({}))
+        attempts += list(db["quiz_attempt_archive"].find(query))
     attempts = [a for a in attempts if include_tests or not (
         a.get("is_test") or users.get(a["user_id"], {}).get("is_admin") or users.get(a["user_id"], {}).get("is_test"))]
     # One read per collection, then keyed joins; no per-question database queries.
     indexes = {}
     for collection in ("research_events", "messages", "ai_requests", "copy_events", "reports"):
         grouped = defaultdict(list)
-        for doc in db[collection].find({}):
+        for doc in db[collection].find(query):
             grouped[(doc.get("user_id"), doc.get("conversation_id"), doc.get("question_id"))].append(doc)
         indexes[collection] = grouped
     rows = []
@@ -221,7 +224,7 @@ def research_data(db, include_tests=False, include_archived=False):
                 ("suspended_timer", bool(row["unobserved_timer_ms"])),
                 ("unknown_ai_recommendation", bool(messages) and not recommendations)) if missing]
             rows.append(row)
-    reports = list(db["reports"].find({}))
+    reports = list(db["reports"].find(query))
     for row in rows:
         row["reported_issue"] = any(r.get("user_id") == row["participant_id"] and r.get("quiz_id") == row["quiz_id"]
                                     and r.get("question_id") == row["question_id"] for r in reports)
