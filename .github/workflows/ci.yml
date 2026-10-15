@@ -4,7 +4,6 @@ on:
   push:
     branches-ignore:
       - main
-      - feat/second-deployment  # cd-research.yml runs the same tests before release
   pull_request:
     branches:
       - main

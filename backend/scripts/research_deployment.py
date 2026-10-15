@@ -1,4 +1,7 @@
-"""Read-only preflight and post-release checks for the separate Heroku study.
+"""Read-only preflight and post-release checks for the shared two-study app.
+
+Legacy separate-study validators are retained for compatibility; the single CD
+workflow uses shared-preflight/shared-smoke and deploys only two apps.
 
 Uses only Python's standard library so it can run directly on an Actions runner.
 Never print config dictionaries, API credentials, or private API response bodies.
@@ -143,14 +146,64 @@ def smoke():
             time.sleep(5)
 
 
+def validate_shared_config(config, frontend_url):
+    required = ("MONGO_URL", "MONGO_DB", "JWT_SECRET", "COOKIE_NAME", "COOKIE_SECURE",
+                "COOKIE_SAMESITE", "FRONTEND_ORIGIN", "ENV", "UF_OPENAI_API_KEY",
+                "UF_OPENAI_BASE_URL", "UF_OPENAI_API_MODEL")
+    missing = [key for key in required if not str(config.get(key) or "").strip()]
+    if missing:
+        raise DeploymentError("Missing shared backend config vars: " + ", ".join(missing))
+    if not config["MONGO_URL"].startswith(("mongodb://", "mongodb+srv://")):
+        raise DeploymentError("MONGO_URL must be a MongoDB connection string")
+    if len(config["JWT_SECRET"]) < 32 or config["JWT_SECRET"] == "dev-secret-change-me":
+        raise DeploymentError("Use a JWT_SECRET of at least 32 characters")
+    if config["COOKIE_SECURE"].lower() not in ("1", "true", "yes") or config["COOKIE_SAMESITE"].lower() != "lax":
+        raise DeploymentError("Use secure host-only cookies with COOKIE_SAMESITE=Lax")
+    if config.get("COOKIE_DOMAIN") or config["ENV"] != "production":
+        raise DeploymentError("Use ENV=production and omit COOKIE_DOMAIN")
+    if public_origin(config["FRONTEND_ORIGIN"]) != frontend_url:
+        raise DeploymentError("FRONTEND_ORIGIN must match the shared frontend")
+    endpoint = urlsplit(config["UF_OPENAI_BASE_URL"])
+    if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password:
+        raise DeploymentError("UF_OPENAI_BASE_URL must be an HTTPS API endpoint")
+
+
+def shared_preflight():
+    backend, frontend = require_env("APP_BACKEND"), require_env("APP_FRONTEND")
+    if backend == frontend or any(not re.fullmatch(r"[a-z][a-z0-9-]{1,29}", name) for name in (backend, frontend)):
+        raise DeploymentError("Supply two distinct Heroku app names for the shared frontend and backend")
+    token = require_env("HEROKU_API_KEY")
+    back, front = heroku_get(f"/apps/{backend}", token), heroku_get(f"/apps/{frontend}", token)
+    if any(info.get("stack", {}).get("name") != "container" for info in (back, front)):
+        raise DeploymentError("Both shared apps must use the container stack")
+    backend_url, frontend_url = public_origin(back["web_url"]), public_origin(front["web_url"])
+    validate_shared_config(heroku_get(f"/apps/{backend}/config-vars", token), frontend_url)
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with open(output, "a", encoding="utf-8") as handle:
+            handle.write(f"backend_url={backend_url}\nfrontend_url={frontend_url}\n")
+    print(f"Shared study preflight passed. Frontend: {frontend_url}; backend: {backend_url}")
+
+
+def shared_smoke():
+    smoke()
+    frontend = public_origin(require_env("FRONTEND_URL"))
+    for route in ("/api/studies/catalog", "/api/studies/study-2/study/next", "/api/studies/participants"):
+        probe(frontend + route, 401, {"detail": "Not authenticated"})
+    print("Shared Study 1, Study 2, and interview approval routing passed")
+
+
 def main():
     try:
-        if sys.argv[1:] == ["preflight"]:
+        if sys.argv[1:] == ["shared-preflight"]:
+            shared_preflight()
+        elif sys.argv[1:] == ["shared-smoke"]:
+            shared_smoke()
+        elif sys.argv[1:] == ["preflight"]:
             preflight()
         elif sys.argv[1:] == ["smoke"]:
             smoke()
         else:
-            raise DeploymentError("Usage: research_deployment.py preflight|smoke")
+            raise DeploymentError("Usage: research_deployment.py shared-preflight|shared-smoke")
     except HTTPError as error:
         print(f"Heroku API returned HTTP {error.code}; check app access and the research API key", file=sys.stderr)
         return 1

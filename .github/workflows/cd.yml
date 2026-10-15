@@ -1,9 +1,12 @@
-name: CD
+name: Deploy shared studies
 
 on:
   push:
-    branches: [ "main" ]   # change if your default branch is different
-  workflow_dispatch:       # allow manual runs from the Actions tab
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-main
@@ -14,34 +17,23 @@ jobs:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/tests.yml
 
-  build-and-deploy:
+  deploy:
     needs: tests
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-
     env:
       HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
-      HEROKU_EMAIL:   ${{ secrets.HEROKU_EMAIL }}
-      APP_BACKEND:    ${{ secrets.HEROKU_APP_BACKEND }}   # e.g., mep-backend
-      APP_FRONTEND:   ${{ secrets.HEROKU_APP_FRONTEND }}  # e.g., mep-frontend
-      HEROKU_REGISTRY: registry.heroku.com
-
+      APP_BACKEND: ${{ secrets.HEROKU_APP_BACKEND }}
+      APP_FRONTEND: ${{ secrets.HEROKU_APP_FRONTEND }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up QEMU (multi-arch, optional)
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
+      - uses: actions/checkout@v5
+      - name: Check shared apps and database configuration
+        id: preflight
+        run: python backend/scripts/research_deployment.py shared-preflight
+      - uses: docker/setup-buildx-action@v4
       - name: Login to Heroku Container Registry
-        run: |
-          echo "${HEROKU_API_KEY}" | docker login -u "${HEROKU_EMAIL}" --password-stdin "${HEROKU_REGISTRY}"
-
-      # ------------ Backend ------------
-      - name: Build & Push Backend Image
+        run: printf '%s' "$HEROKU_API_KEY" | docker login --username=_ --password-stdin registry.heroku.com
+      - name: Build and push shared backend
         uses: docker/build-push-action@v7
         with:
           context: ./backend
@@ -49,19 +41,11 @@ jobs:
           platforms: linux/amd64
           provenance: false
           sbom: false
-          # Heroku requires the image to be tagged as registry.heroku.com/<app>/web
-          tags: |
-            ${{ env.HEROKU_REGISTRY }}/${{ env.APP_BACKEND }}/web
-          # Heroku's Container Registry only accepts Docker v2 schema-2 manifests.
-          # BuildKit now defaults the image exporter to OCI media types, which the
-          # registry rejects with "failed to push ...: unsupported". Push via an
-          # explicit output (replaces `push: true`) so we can force Docker types.
+          tags: registry.heroku.com/${{ env.APP_BACKEND }}/web
           outputs: type=image,oci-mediatypes=false,push=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # ------------ Frontend ------------
-      - name: Build & Push Frontend Image
+          cache-from: type=gha,scope=shared-backend
+          cache-to: type=gha,mode=max,scope=shared-backend
+      - name: Build and push shared frontend
         uses: docker/build-push-action@v7
         with:
           context: ./frontend
@@ -69,35 +53,27 @@ jobs:
           platforms: linux/amd64
           provenance: false
           sbom: false
-          no-cache: true
           build-args: |
-            BACKEND_URL=https://${{ secrets.BACKEND_URL }}
-          tags: |
-            ${{ env.HEROKU_REGISTRY }}/${{ env.APP_FRONTEND }}/web
-          # Same Heroku OCI-manifest constraint as the backend step above.
+            BACKEND_URL=${{ steps.preflight.outputs.backend_url }}
+          tags: registry.heroku.com/${{ env.APP_FRONTEND }}/web
           outputs: type=image,oci-mediatypes=false,push=true
-          cache-to: type=gha,mode=max
-
-      # Install Heroku CLI to run container:release
+          cache-from: type=gha,scope=shared-frontend
+          cache-to: type=gha,mode=max,scope=shared-frontend
       - name: Install Heroku CLI
+        run: curl --fail --silent --show-error https://cli-assets.heroku.com/install-ubuntu.sh | sh
+      - name: Release shared apps
         run: |
-          curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
-
-      - name: Set stack to container (backend)
+          python backend/scripts/research_deployment.py shared-preflight
+          heroku container:release web --app "$APP_BACKEND"
+          heroku container:release web --app "$APP_FRONTEND"
+          heroku ps:scale web=1 --app "$APP_BACKEND"
+          heroku ps:scale web=1 --app "$APP_FRONTEND"
+      - name: Verify health and study access routing
         env:
-          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
-        run: heroku stack:set container -a ${{ secrets.HEROKU_APP_BACKEND }}
-
-      - name: Set stack to container (frontend)
+          BACKEND_URL: ${{ steps.preflight.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+        run: python backend/scripts/research_deployment.py shared-smoke
+      - name: Show shared study URL
         env:
-          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
-        run: heroku stack:set container -a ${{ secrets.HEROKU_APP_FRONTEND }}
-
-      # Release both apps (uses HEROKU_API_KEY from env; no interactive login)
-      - name: Release Backend
-        run: |
-          heroku container:release web -a "${APP_BACKEND}"
-
-      - name: Release Frontend
-        run: |
-          heroku container:release web -a "${APP_FRONTEND}"
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+        run: printf 'Both studies:%s\n' "$FRONTEND_URL" >> "$GITHUB_STEP_SUMMARY"
