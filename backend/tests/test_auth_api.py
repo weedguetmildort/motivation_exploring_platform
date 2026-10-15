@@ -82,6 +82,7 @@ def make_user_doc(email="student@test.edu", password="correct-password", **overr
         "step_order": standard_step_order(),
         "completed_steps": [],
         "quiz_set_assignment": {},
+        "progress_reconciled_version": 1,
     }
     doc.update(overrides)
     return doc

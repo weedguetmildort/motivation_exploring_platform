@@ -5,6 +5,7 @@ updates. They exercise the actual signup, quiz, survey and next-step services.
 No live database or AI calls are needed.
 """
 from datetime import datetime, timedelta, timezone
+from bson import ObjectId
 
 import mongomock
 import pytest
@@ -123,3 +124,67 @@ def test_session_failure_after_first_survey_or_quiz_can_resume(
     assert client.post("/auth/login", json={"email": "student@example.com", "password": "test-password"}).status_code == 200
     assert client.get("/study/next").json()["next_step"] == step_before
     assert client.get(f"{prefix}/state").status_code == 200
+
+
+@pytest.mark.parametrize("has_flow_snapshot", [False, True])
+def test_old_account_restores_completed_results_even_when_flags_are_false(session_app, has_flow_snapshot):
+    client = TestClient(session_app)
+    user = signup(client)
+    db = session_app.state.db
+    uid = user["id"]
+    original_assignment = user["quiz_set_assignment"]
+    for _ in range(2):
+        complete_current_step(client, client.get("/study/next").json()["next_step"])
+    saved_survey = db.survey_responses.find_one({"user_id": uid, "stage": "pre_quiz"})
+    unset = {"progress_reconciled_version": ""}
+    if not has_flow_snapshot:
+        unset.update(step_order="", completed_steps="")
+    db.users.update_one({"_id": ObjectId(uid)}, {
+        "$unset": unset,
+        "$set": {"survey_pre_base_completed": False, "quiz_base_completed": False,
+                 **({"completed_steps": []} if has_flow_snapshot else {})},
+    })
+    client.cookies.clear()
+    login = client.post("/auth/login", json={"email": user["email"], "password": "test-password"})
+    assert login.status_code == 200, login.text
+    restored = login.json()["user"]
+    assert restored["completed_steps"] == ["survey:pre_quiz", "quiz:base"]
+    assert restored["quiz_set_assignment"] == original_assignment
+    assert client.get("/study/next").json()["next_step"]["id"] == "survey:post_base"
+    assert client.get("/auth/me").json()["user"]["completed_steps"] == restored["completed_steps"]
+    assert db.survey_responses.find_one({"_id": saved_survey["_id"]}) == saved_survey
+
+
+def test_legacy_post_variant_only_completes_the_assigned_variant_survey(session_app):
+    client = TestClient(session_app)
+    user = signup(client)
+    db = session_app.state.db
+    db.users.update_one({"_id": ObjectId(user["id"])}, {"$unset": {"progress_reconciled_version": ""}})
+    db.survey_responses.insert_one({"user_id": user["id"], "stage": "post_variant", "status": "completed"})
+    db.survey_responses.insert_one({"user_id": user["id"], "stage": "post_base", "status": "in_progress"})
+    db.survey_responses.insert_one({"user_id": str(ObjectId()), "stage": "pre_quiz", "status": "completed"})
+    db.quiz_attempt_archive.insert_one({"user_id": user["id"], "quiz_id": "base", "status": "completed"})
+    me = client.get("/auth/me").json()["user"]
+    assert me["completed_steps"] == [sf.survey_step_id(sf.post_variant_stage(user["assigned_var"]))]
+    assert me["quiz_set_assignment"] == user["quiz_set_assignment"]
+    assert client.get("/study/next").json()["next_step"]["id"] == "survey:pre_quiz"
+
+
+def test_progress_repair_preserves_a_concurrent_completion(session_app, monkeypatch):
+    client = TestClient(session_app)
+    user = signup(client)
+    db = session_app.state.db
+    db.users.update_one({"_id": ObjectId(user["id"])}, {"$unset": {"progress_reconciled_version": ""}})
+    db.survey_responses.insert_one({"user_id": user["id"], "stage": "pre_quiz", "status": "completed"})
+    original_update = db.users.update_one
+    raced = False
+
+    def concurrent_update(query, update, *args, **kwargs):
+        nonlocal raced
+        if "progress_reconciled_version" in query and not raced:
+            raced = True
+            original_update({"_id": ObjectId(user["id"])}, {"$set": {"completed_steps": ["quiz:base"]}})
+        return original_update(query, update, *args, **kwargs)
+
+    monkeypatch.setattr(db.users, "update_one", concurrent_update)
+    assert client.get("/auth/me").json()["user"]["completed_steps"] == ["survey:pre_quiz", "quiz:base"]

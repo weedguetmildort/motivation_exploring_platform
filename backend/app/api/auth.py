@@ -22,7 +22,7 @@ from ..services.users import (
     maybe_touch_last_active,
     user_to_public,
 )
-from ..services.study_flow import ensure_user_flow
+from ..services.study_flow import ensure_user_flow, reconcile_saved_progress
 from ..core.security import create_access_token, decode_token
 from ..core.config import get_settings
 
@@ -69,9 +69,8 @@ def get_current_user_doc(request: Request) -> dict:
     """Authenticate the request and return the raw user document.
 
     Also lazily backfills step_order/completed_steps for accounts created before
-    the multi-variant flow existed, so a participant mid-study picks up where
-    they left off instead of restarting. The backfill is a no-op (one dict
-    lookup, no extra query) once a user has a step_order.
+    the multi-variant flow existed and reconciles older snapshots with saved
+    results. Once repaired, neither migration scans the result collections.
     """
     s = get_settings()
     token = request.cookies.get(s.COOKIE_NAME)
@@ -95,7 +94,7 @@ def get_current_user_doc(request: Request) -> dict:
 
     maybe_touch_last_active(users, doc)
 
-    return ensure_user_flow(db, doc)
+    return reconcile_saved_progress(db, ensure_user_flow(db, doc))
 
 
 def get_current_user(request: Request) -> UserPublic:
@@ -139,7 +138,7 @@ def login(data: LoginRequest, request: Request, response: Response):
 
     # Backfill pre-multi-variant accounts at the door rather than on first
     # quiz load, so their first /study/next already reflects the new flow.
-    user_pub = build_user_public(ensure_user_flow(db, doc))
+    user_pub = build_user_public(reconcile_saved_progress(db, ensure_user_flow(db, doc)))
 
     token = create_access_token(user_pub.email)
     set_session_cookie(response, token)

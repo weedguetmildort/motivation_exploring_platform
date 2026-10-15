@@ -578,6 +578,7 @@ def assign_flow(db, forced_first: Optional[str] = None) -> dict:
         "study_flow_mode": config.mode,
         "round_robin_seq": seq,
         "assignment_source": source,
+        "progress_reconciled_version": 1,
     }
 
 
@@ -664,8 +665,9 @@ def ensure_user_flow(db, doc: dict) -> dict:
         "step_order": step_order,
         "completed_steps": completed,
         "variant_sequence": sequence,
-        "quiz_set_assignment": resolve_quiz_set_assignment(
-            config, quiz_ids_in_order(step_order), db=db
+        "quiz_set_assignment": (
+            doc["quiz_set_assignment"] if doc.get("quiz_set_assignment") is not None
+            else resolve_quiz_set_assignment(config, quiz_ids_in_order(step_order), db=db)
         ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
@@ -673,6 +675,51 @@ def ensure_user_flow(db, doc: dict) -> dict:
     }
     db["users"].update_one({"_id": doc["_id"]}, {"$set": update})
     doc.update(update)
+    return doc
+
+
+def reconcile_saved_progress(db, doc: dict) -> dict:
+    """Repair old progress snapshots from completed, live result records once.
+
+    Response stages are distinct from their shared question banks. In
+    particular, a legacy post_variant response belongs only to assigned_var;
+    it must never complete every variant survey. Archived quiz runs are excluded.
+    """
+    if doc.get("progress_reconciled_version", 0) >= 1:
+        return doc
+
+    uid = str(doc["_id"])
+    # Retry against a fresh snapshot if another request advances or resets a
+    # step while migration is running. Never replace concurrent progress.
+    while doc.get("progress_reconciled_version", 0) < 1:
+        order = list(doc.get("step_order") or [])
+        saved_steps = set()
+        for response in db["survey_responses"].find({"user_id": uid, "status": "completed"}):
+            stage = response.get("stage")
+            if stage == SurveyStage.post_variant.value:
+                stage = post_variant_stage(doc.get("assigned_var") or AssignedVar.followup.value)
+            if stage:
+                saved_steps.add(survey_step_id(stage))
+        for attempt in db["quiz_attempts"].find({"user_id": uid, "status": "completed"}):
+            if attempt.get("quiz_id"):
+                saved_steps.add(quiz_step_id(attempt["quiz_id"]))
+        previous = doc.get("completed_steps")
+        completed = set(previous or []) | saved_steps
+        patch = {
+            "completed_steps": [step for step in order if step in completed],
+            "progress_reconciled_version": 1,
+        }
+        patch.update(derive_legacy_flags({**doc, **patch}))
+        result = db["users"].update_one(
+            {"_id": doc["_id"], "completed_steps": previous,
+             "progress_reconciled_version": doc.get("progress_reconciled_version")},
+            {"$set": patch},
+        )
+        if result.matched_count:
+            return {**doc, **patch}
+        doc = db["users"].find_one({"_id": doc["_id"]})
+        if not doc:
+            return {}
     return doc
 
 
