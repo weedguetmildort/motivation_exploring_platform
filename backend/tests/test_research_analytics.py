@@ -231,7 +231,7 @@ def test_snapshot_export_is_admin_only_and_omits_direct_identity(study):
     assert response.status_code == 200
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["analysis_version"] == "1.2"
+        assert manifest["analysis_version"] == "1.3"
         assert manifest["record_counts"]["questions"] == 1
         assert b"private@test.edu" not in archive.read("quiz_attempts.json")
         assert qid in archive.read("questions.json").decode()

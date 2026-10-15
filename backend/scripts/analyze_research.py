@@ -77,7 +77,7 @@ def analyze(snapshot, output, seed=2026, repetitions=2000, *, mixed=False, parti
     from app.services.research_statistics import paired_comparisons, survey_associations, lexical_clusters, mixed_effects
     with zipfile.ZipFile(snapshot) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("analysis_version") not in ("1.0", "1.1", "1.2"):
+        if manifest.get("analysis_version") not in ("1.0", "1.1", "1.2", "1.3"):
             raise ValueError("Unsupported analysis version; use the matching analysis script")
         questions = json.loads(archive.read("questions.json"))
         variants = json.loads(archive.read("variants.json"))

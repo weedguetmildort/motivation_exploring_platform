@@ -14,7 +14,7 @@ from .quiz_grading import answer_correctness
 from .research_conversations import build_packet, conversation_features
 from .research_coding import coding_features
 
-ANALYSIS_VERSION = "1.2"
+ANALYSIS_VERSION = "1.3"
 REGIONS = ("question", "answers", "submit", "chat", "chat_input", "suggestions", "reference", "agent_A", "agent_B", "other")
 INTENTS = {
     "explanation": r"\b(why|how|explain|reasoning|derive|derivation|steps?)\b",
@@ -71,6 +71,20 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
         return []
     query = {"user_id": {"$in": list(participant_ids)}} if participant_ids is not None else {}
     users = {str(u["_id"]): u for u in db["users"].find({})}
+    from .studies import StudyDatabase
+    other_shown = {}
+    other_assigned = set()
+    if isinstance(db, StudyDatabase):
+        other = StudyDatabase(db.raw, "study-2" if db.study_id == "study-1" else "study-1")
+        for collection in ("quiz_attempts", "quiz_attempt_archive"):
+            for prior in other[collection].find(query):
+                for qid in prior.get("question_order", []):
+                    other_assigned.add((prior["user_id"], qid))
+                for answer in prior.get("answers", []):
+                    at = timestamp(answer.get("shown_at") or answer.get("answered_at"))
+                    key = (prior["user_id"], answer.get("question_id"))
+                    if at is not None:
+                        other_shown[key] = min(other_shown.get(key, at), at)
     if attempts is None:
         attempts = research_attempts(db, include_tests, include_archived, participant_ids, users=users)
     # One read per collection, then keyed joins; no per-question database queries.
@@ -136,13 +150,16 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
             row = {
                 "analysis_version": ANALYSIS_VERSION, "participant_id": attempt["user_id"],
                 "attempt_id": str(attempt["_id"]), "conversation_id": attempt.get("conversation_id"),
-                "study_flow_version": attempt.get("study_flow_version"), "quiz_id": attempt["quiz_id"],
+                "study_flow_version": attempt.get("study_flow_version"), "study_id": attempt.get("study_id", "study-1"),
+                "study_protocol": attempt.get("study_protocol"), "quiz_id": attempt["quiz_id"],
                 "variant_position": attempt.get("variant_position"), "question_set": attempt.get("question_set"),
                 "question_id": qid, "question_position": position, "question_version": snapshot.get("version"),
                 "question_stem": snapshot.get("stem"), "correct_choice_id": correct_key,
                 "snapshot_available": bool(snapshot), "attempt_status": attempt.get("status"),
                 "archived": bool(attempt.get("archived_at")), "is_test": bool(attempt.get("is_test") or user.get("is_admin") or user.get("is_test")),
                 "shown_at": iso(answer.get("shown_at")), "answered_at": iso(answer.get("answered_at")),
+                "other_study_assigned_same_question": (attempt["user_id"], qid) in other_assigned if isinstance(db, StudyDatabase) else None,
+                "other_study_exposure_before_question": ((attempt["user_id"], qid) in other_shown and other_shown[(attempt["user_id"], qid)] < timestamp(answer["shown_at"])) if isinstance(db, StudyDatabase) and timestamp(answer.get("shown_at")) is not None else None,
                 "was_shown": bool(answer.get("shown_at") or by_type["question_visible"]),
                 "answered": bool(answer.get("answered_at")), "choice_id": selected,
                 "correct": answer_correctness(answer, snapshot),

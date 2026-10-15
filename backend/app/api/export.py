@@ -263,11 +263,7 @@ def _json_value(value):
     return str(value)
 
 
-@router.get("/research-bundle")
-def export_research_bundle(request: Request, include_tests: bool = False, include_archived: bool = False,
-                           _: UserPublic = Depends(_require_admin)):
-    """Pseudonymous, versioned snapshot with raw records for reproducible re-analysis."""
-    db = request.app.state.db
+def _research_bundle_bytes(db, include_tests=False, include_archived=False):
     selected_attempts = research_attempts(db, include_tests, include_archived)
     questions = research_data(db, include_tests, include_archived, attempts=selected_attempts, include_packets=True)
     packets = [row.pop("_conversation_packet") for row in questions]
@@ -292,11 +288,12 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
                 records[-1]["reviewer_id"] = hashlib.sha256(str(doc["reviewer_id"]).encode()).hexdigest()
         files[collection] = records
     files["participants"] = [{"participant_id": str(u["_id"]), **{key: u.get(key) for key in (
-        "study_flow_version", "variant_sequence", "assigned_var", "step_order", "completed_steps", "quiz_set_assignment",
+        "study_id", "study_protocol", "started_at", "study1_finished_at_start", "study_flow_version", "variant_sequence", "assigned_var", "step_order", "completed_steps", "quiz_set_assignment",
         "demographics", "created_at", "last_active_at", "consent", "consent_agreed_at")}}
         for u in db["users"].find({}) if str(u["_id"]) in participant_ids]
     files["survey_items_at_export"] = list(db["survey_items"].find({}))
     manifest = {"analysis_version": ANALYSIS_VERSION, "schema_version": 1,
+                "study_id": getattr(db, "study_id", "study-1") if isinstance(getattr(db, "study_id", None), str) else "study-1",
                 "exported_at": datetime.now(timezone.utc).isoformat(), "include_tests": include_tests,
                 "include_archived": include_archived, "record_counts": {key: len(value) for key, value in files.items()},
                 "definitions": {"accuracy": "Correct submitted answers divided by submitted answers with a stored boolean grade or an immutable attempt answer key. Missing grades are excluded, not counted as incorrect.",
@@ -312,5 +309,23 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))
         for name, records in files.items():
             archive.writestr(f"{name}.json", json.dumps(_json_value(records), indent=2))
-    return StreamingResponse(iter([output.getvalue()]), media_type="application/zip",
+    return output.getvalue()
+
+
+@router.get("/research-bundle")
+def export_research_bundle(request: Request, include_tests: bool = False, include_archived: bool = False,
+                           _: UserPublic = Depends(_require_admin)):
+    from ..services.research_studies import sources
+    selected = sources(request)
+    if len(selected) == 1:
+        content = _research_bundle_bytes(selected[0][1], include_tests, include_archived)
+    else:
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("manifest.json", json.dumps({"studies": [sid for sid, _ in selected],
+                "definition": "Each nested snapshot preserves study-specific packets and protocol. Shared participant_id identifies the same account across studies. Analyze effects within each study."}))
+            for sid, db in selected:
+                archive.writestr(f"{sid}_snapshot.zip", _research_bundle_bytes(db, include_tests, include_archived))
+        content = output.getvalue()
+    return StreamingResponse(iter([content]), media_type="application/zip",
                              headers={"Content-Disposition": 'attachment; filename="research_snapshot.zip"'})

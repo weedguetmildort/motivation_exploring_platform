@@ -48,6 +48,11 @@ def sign_flip_test(differences, rng, repetitions):
 def paired_comparisons(rows, seed=2026, repetitions=1000):
     if not 100 <= repetitions <= 20000:
         raise ValueError("Use 100 to 20000 bootstrap repetitions")
+    studies = {row.get("study_id", "study-1") for row in rows}
+    if len(studies) > 1:
+        reports = [(sid, paired_comparisons([r for r in rows if r.get("study_id", "study-1") == sid], seed=seed, repetitions=repetitions)) for sid in sorted(studies)]
+        return {**reports[0][1], "comparisons": [{**r, "study_id": sid} for sid, report in reports for r in report["comparisons"]],
+            "limitations": reports[0][1]["limitations"] + ["Separate study protocols are analyzed independently; Holm adjustment is within each study."]}
     eligible = usable_rows(rows)
     rng = random.Random(seed)
     results = []

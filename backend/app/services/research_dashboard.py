@@ -60,6 +60,7 @@ for region in REGIONS:
     METRICS.append(definition(f"pointer_{region}_share", f"Pointer share: {label}", "Pointer regions", kind="ratio",
                               numerator=f"pointer_{region}_ms", denominator="pointer_observed_ms"))
 METRICS.extend([
+    definition("other_study_exposure_before_question", "Previously seen in the other study", "Data quality", eligibility="shown"),
     definition("telemetry_coverage", "Questions with telemetry", "Data quality", field="telemetry_available", eligibility="shown"),
     definition("quality_flag_rate", "Questions with quality flags", "Data quality", field="quality_flags", eligibility="shown"),
     definition("unresolved_recommendations", "Unresolved AI recommendations", "Data quality", "count", "number", field="ai_recommendations_unresolved", eligibility="tracked"),
@@ -94,7 +95,7 @@ def demographic_values(user, key):
 
 
 def profile(user):
-    return {"participant_id": str(user["_id"]), "email": user.get("email", ""),
+    return {"participant_id": str(user["_id"]), "study_id": user.get("study_id", "study-1"), "email": user.get("email", ""),
             "name": " ".join(str(user.get(k) or "").strip() for k in ("first_name", "last_name")).strip(),
             "demographics": user.get("demographics") or {}, "is_test": bool(user.get("is_admin") or user.get("is_test")),
             "study_flow_version": user.get("study_flow_version"), "completed_steps": user.get("completed_steps", []),

@@ -13,6 +13,8 @@ from ..services import research_coding as coding
 from ..schemas.research_coding import HumanCodingRequest, ModelCodingRequest, ConversationCoding
 from ..services.research_statistics import paired_comparisons, survey_associations
 
+from ..services.research_studies import sources, detail_database, combined_dashboard
+
 router = APIRouter(prefix="/research", tags=["research"])
 
 
@@ -81,9 +83,15 @@ def research_results(request: Request, _: UserPublic = Depends(require_research_
                      version: int | None = Query(None, ge=1), question_set: Literal["a", "b", "c", "d"] | None = None,
                      variant_position: int | None = Query(None, ge=1), page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
     values = _filters(filters, age_min, age_max)
-    return dashboard(request.app.state.db, filters=values, search=search, age_min=age_min, age_max=age_max,
-                     include_tests=include_tests, include_archived=include_archived, quiz_id=quiz_id, status=status,
-                     version=version, question_set=question_set, variant_position=variant_position, page=page, page_size=page_size)
+    options = dict(filters=values, search=search, age_min=age_min, age_max=age_max,
+        include_tests=include_tests, include_archived=include_archived, quiz_id=quiz_id, status=status,
+        version=version, question_set=question_set, variant_position=variant_position, page=page, page_size=page_size)
+    selected = sources(request)
+    if len(selected) > 1:
+        return combined_dashboard(selected, **options)
+    result = dashboard(selected[0][1], **options)
+    result["study_id"] = selected[0][0]
+    return result
 
 
 @router.get("/statistics")
@@ -95,14 +103,26 @@ def research_statistics(request: Request, _: UserPublic = Depends(require_resear
                         version: int | None = Query(None, ge=1), question_set: Literal["a", "b", "c", "d"] | None = None,
                         variant_position: int | None = Query(None, ge=1)):
     from ..services.research_dashboard import filter_users, filter_rows
-    db = request.app.state.db
-    users = [u for u in db["users"].find({}) if include_tests or not (u.get("is_admin") or u.get("is_test"))]
-    selected = filter_users(users, _filters(filters, age_min, age_max), search, age_min, age_max)
-    ids = {str(u["_id"]) for u in selected}
-    rows = filter_rows(research_data(db, include_tests, include_archived, participant_ids=ids), quiz_id, status, version, question_set, variant_position)
-    return {"paired": paired_comparisons(rows), "surveys": survey_associations(rows,
-        [{"participant_id": str(u["_id"]), "assigned_var": u.get("assigned_var")} for u in selected],
-        list(db["survey_responses"].find({"user_id": {"$in": list(ids)}})), list(db["survey_items"].find({})))}
+    selected_sources = sources(request)
+    reports = []
+    for sid, db in selected_sources:
+        users = [u for u in db["users"].find({}) if include_tests or not (u.get("is_admin") or u.get("is_test"))]
+        selected = filter_users(users, _filters(filters, age_min, age_max), search, age_min, age_max)
+        ids = {str(u["_id"]) for u in selected}
+        rows = filter_rows(research_data(db, include_tests, include_archived, participant_ids=ids), quiz_id, status, version, question_set, variant_position)
+        report = {"paired": paired_comparisons(rows), "surveys": survey_associations(rows,
+            [{"participant_id": str(u["_id"]), "assigned_var": u.get("assigned_var")} for u in selected],
+            list(db["survey_responses"].find({"user_id": {"$in": list(ids)}})), list(db["survey_items"].find({})))}
+        for row in report["paired"]["comparisons"] + report["surveys"]["associations"]:
+            row["study_id"] = sid
+        reports.append(report)
+    if len(reports) == 1:
+        return reports[0]
+    return {"paired": {"comparisons": [r for report in reports for r in report["paired"]["comparisons"]],
+                       "limitations": list(dict.fromkeys(text for report in reports for text in report["paired"]["limitations"])) + ["Effects are estimated separately within each study; different protocols are not pooled."]},
+            "surveys": {"associations": [r for report in reports for r in report["surveys"]["associations"]],
+                        "limitations": reports[0]["surveys"]["limitations"]}}
+
 
 
 def _participant(db, participant_id, include_tests):
@@ -117,17 +137,19 @@ def _participant(db, participant_id, include_tests):
 @router.get("/coding/validation")
 def coding_validation(request: Request, include_tests: bool = False, include_archived: bool = False,
                       _: UserPublic = Depends(require_research_admin)):
-    db = request.app.state.db
-    rows = research_data(db, include_tests, include_archived)
-    current = {(r["participant_id"], r["attempt_id"], r["question_id"], r["conversation_packet_hash"]) for r in rows}
-    records = [a for a in db["research_annotations"].find({}) if
-               (a["user_id"], a["attempt_id"], a["question_id"], a["packet_hash"]) in current]
+    records = []
+    for sid, db in sources(request):
+        rows = research_data(db, include_tests, include_archived)
+        current = {(r["participant_id"], r["attempt_id"], r["question_id"], r["conversation_packet_hash"]) for r in rows}
+        records.extend(a for a in db["research_annotations"].find({}) if
+            (a["user_id"], a["attempt_id"], a["question_id"], a["packet_hash"]) in current)
     return coding.validation_report(records)
 
 
 def _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived):
-    _participant(request.app.state.db, participant_id, include_tests)
-    return coding.load_packet(request.app.state.db, participant_id, attempt_id, question_id, include_tests, include_archived)
+    participant_id, db = detail_database(request, participant_id)
+    _participant(db, participant_id, include_tests)
+    return coding.load_packet(db, participant_id, attempt_id, question_id, include_tests, include_archived)
 
 
 @router.get("/participants/{participant_id}/questions/{attempt_id}/{question_id}/coding")
@@ -136,8 +158,8 @@ def question_coding(participant_id: str, attempt_id: str, question_id: str, requ
                     _: UserPublic = Depends(require_research_admin)):
     packet = _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived)
     return {"packet": packet, "rubric": coding.rubric_public(), "rubric_version": coding.RUBRIC_VERSION,
-            "annotations": coding.current_annotations(request.app.state.db, packet), "evaluator": coding.evaluator_status(),
-            "partition": coding.validation_partition(participant_id)}
+            "annotations": coding.current_annotations(detail_database(request, participant_id)[1], packet), "evaluator": coding.evaluator_status(),
+            "partition": coding.validation_partition(packet["participant_id"])}
 
 
 @router.post("/participants/{participant_id}/questions/{attempt_id}/{question_id}/coding/review")
@@ -149,7 +171,7 @@ def review_question(participant_id: str, attempt_id: str, question_id: str, data
         raise HTTPException(409, "Conversation changed; reload the packet before reviewing")
     if not packet["answer"].get("answered_at"):
         raise HTTPException(409, "Only submitted questions can be reviewed")
-    return coding.save_annotation(request.app.state.db, packet, ConversationCoding(
+    return coding.save_annotation(detail_database(request, participant_id)[1], packet, ConversationCoding(
         labels=data.labels, evidence=data.evidence, notes=data.notes), source="human", reviewer_id=user.id,
         independent_review=data.independent_review)
 
@@ -161,13 +183,13 @@ async def evaluate_question(participant_id: str, attempt_id: str, question_id: s
     packet = _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived)
     if packet["packet_hash"] != data.packet_hash:
         raise HTTPException(409, "Conversation changed; reload the packet before evaluating")
-    return await coding.evaluate_packet(request.app.state.db, packet)
+    return await coding.evaluate_packet(detail_database(request, participant_id)[1], packet)
 
 
 @router.get("/participants/{participant_id}")
 def research_participant(participant_id: str, request: Request, include_tests: bool = False, include_archived: bool = False,
                          _: UserPublic = Depends(require_research_admin)):
-    db = request.app.state.db
+    participant_id, db = detail_database(request, participant_id)
     user = _participant(db, participant_id, include_tests)
     attempts = research_attempts(db, include_tests, include_archived, participant_ids={participant_id}, users={participant_id: user})
     rows = research_data(db, include_tests, include_archived, participant_ids={participant_id}, attempts=attempts)
@@ -181,7 +203,7 @@ def research_question(participant_id: str, attempt_id: str, question_id: str, re
                       include_tests: bool = False, include_archived: bool = False,
                       event_page: int = Query(1, ge=1), event_page_size: int = Query(100, ge=1, le=500),
                       _: UserPublic = Depends(require_research_admin)):
-    db = request.app.state.db
+    participant_id, db = detail_database(request, participant_id)
     _participant(db, participant_id, include_tests)
     if not ObjectId.is_valid(attempt_id):
         raise HTTPException(404, "Attempt not found")
