@@ -11,9 +11,9 @@ from app.services.quiz import (
     get_quiz_attempts_collection,
     _ensure_unique_index,
     _load_or_create_attempt,
+    _build_pool_query,
     _find_next_unanswered,
     _mark_quiz_completed,
-    _get_user_quiz_update_fields,
     reset_quiz_attempt,
     build_quiz_state_response,
     record_question_shown,
@@ -22,6 +22,7 @@ from app.services.quiz import (
     MAX_QUIZ_QUESTIONS,
 )
 from app.schemas.user import SurveyStage
+from app.services import study_flow
 
 
 # ── get_users_collection / get_quiz_attempts_collection ─────────────────────
@@ -203,37 +204,73 @@ class TestFindNextUnanswered:
         assert _find_next_unanswered(doc, None) == qid
 
 
-# ── _get_user_quiz_update_fields ─────────────────────────────────────────────
+# ── legacy flag derivation ───────────────────────────────────────────────────
+#
+# _get_user_quiz_update_fields used to decide, per quiz_id, which user flag and
+# survey_stage to set. That branching now lives in study_flow.derive_legacy_flags,
+# driven by the participant's step_order rather than hard-coded quiz ids — these
+# tests assert the same observable outcomes through the new path.
 
-class TestGetUserQuizUpdateFields:
-    def test_base_quiz(self):
-        completed_at = datetime.utcnow()
-        result = _get_user_quiz_update_fields("base", completed_at)
-        assert result["quiz_base_completed"] is True
-        assert result["survey_stage"] == SurveyStage.post_base.value
-        assert result["updated_at"] == completed_at
+class TestDerivedLegacyFlagsFromQuizCompletion:
+    def _flow(self):
+        cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+        return study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
 
-    def test_variant_quiz(self):
-        completed_at = datetime.utcnow()
-        result = _get_user_quiz_update_fields("followup", completed_at)
-        assert result["quiz_variant_completed"] is True
-        assert result["survey_stage"] == SurveyStage.post_variant.value
-        assert result["updated_at"] == completed_at
+    def test_base_quiz_sets_base_flag_and_post_base_stage(self):
+        order = self._flow()
+        doc = {"step_order": order, "completed_steps": ["survey:pre_quiz", "quiz:base"]}
+        flags = study_flow.derive_legacy_flags(doc)
+        assert flags["quiz_base_completed"] is True
+        assert flags["survey_stage"] == SurveyStage.post_base.value
 
-    def test_unknown_quiz_id(self):
-        completed_at = datetime.utcnow()
-        result = _get_user_quiz_update_fields("some-admin-test", completed_at)
-        assert result == {"updated_at": completed_at}
-        assert "quiz_base_completed" not in result
-        assert "quiz_variant_completed" not in result
+    def test_variant_flag_only_once_every_variant_quiz_is_done(self):
+        order = self._flow()
+        quiz_steps = [s for s in order if s.startswith("quiz:")]
+
+        partial = {"step_order": order, "completed_steps": quiz_steps[:2]}
+        assert study_flow.derive_legacy_flags(partial)["quiz_variant_completed"] is False
+
+        done = {"step_order": order, "completed_steps": order}
+        assert study_flow.derive_legacy_flags(done)["quiz_variant_completed"] is True
+        assert study_flow.derive_legacy_flags(done)["survey_stage"] == SurveyStage.complete.value
+
+    def test_quiz_id_outside_the_flow_is_ignored(self, mock_db, mock_col):
+        """Admin test runs and the Phase 13 quiz-2 ids must not move a flow."""
+        order = self._flow()
+        user_doc = {
+            "_id": ObjectId(), "step_order": order,
+            "completed_steps": [], "quiz_set_assignment": {},
+        }
+        mock_col.find_one.return_value = user_doc
+
+        study_flow.mark_step_completed(
+            mock_db, str(user_doc["_id"]), study_flow.quiz_step_id("base2"), datetime.utcnow()
+        )
+
+        # No write at all — the step isn't part of this participant's flow.
+        mock_col.update_one.assert_not_called()
 
 
 # ── _mark_quiz_completed ───────────────────────────────────────────────────────
 
+def _flow_user_doc(user_id, completed=None):
+    """A user document positioned in a standard multi-variant flow."""
+    cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+    order = study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
+    return {
+        "_id": ObjectId(user_id),
+        "step_order": order,
+        "completed_steps": completed or [],
+        "quiz_set_assignment": {},
+    }
+
+
 class TestMarkQuizCompleted:
-    def test_marks_completed_and_updates_user(self, mock_db, mock_col):
-        doc = {"_id": ObjectId(), "quiz_id": "base", "user_id": str(ObjectId())}
-        mock_col.update_one.return_value = MagicMock(matched_count=1)
+    def test_marks_completed_and_advances_the_flow(self, mock_db, mock_col):
+        user_id = str(ObjectId())
+        doc = {"_id": ObjectId(), "quiz_id": "base", "user_id": user_id}
+        mock_col.count_documents.return_value = 1
+        mock_col.find_one.return_value = _flow_user_doc(user_id, ["survey:pre_quiz"])
 
         _mark_quiz_completed(mock_db, doc)
 
@@ -242,13 +279,40 @@ class TestMarkQuizCompleted:
         assert first_call[0][0] == {"_id": doc["_id"]}
         assert first_call[0][1]["$set"]["status"] == "completed"
 
-        # Second call updates the user
-        second_call = mock_col.update_one.call_args_list[1]
-        assert second_call[0][1]["$set"]["quiz_base_completed"] is True
+        # The user update ticks the step off and refreshes the derived flags
+        set_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
+        assert "quiz:base" in set_doc["completed_steps"]
+        assert set_doc["quiz_base_completed"] is True
+        assert set_doc["survey_stage"] == SurveyStage.post_base.value
+
+    def test_variant_quiz_advances_to_its_own_survey(self, mock_db, mock_col):
+        user_id = str(ObjectId())
+        cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+        order = study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
+        first_variant_quiz = next(s for s in order if s.startswith("quiz:") and s != "quiz:base")
+        upto = order.index(first_variant_quiz)
+
+        doc = {
+            "_id": ObjectId(),
+            "quiz_id": first_variant_quiz.split(":", 1)[1],
+            "user_id": user_id,
+        }
+        mock_col.count_documents.return_value = 1
+        mock_col.find_one.return_value = {
+            "_id": ObjectId(user_id), "step_order": order,
+            "completed_steps": order[:upto], "quiz_set_assignment": {},
+        }
+
+        _mark_quiz_completed(mock_db, doc)
+
+        set_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
+        assert first_variant_quiz in set_doc["completed_steps"]
+        # Not finished — several variants still to go.
+        assert set_doc["quiz_variant_completed"] is False
 
     def test_user_not_found_raises_404(self, mock_db, mock_col):
         doc = {"_id": ObjectId(), "quiz_id": "base", "user_id": str(ObjectId())}
-        mock_col.update_one.return_value = MagicMock(matched_count=0)
+        mock_col.count_documents.return_value = 0
 
         with pytest.raises(HTTPException) as exc_info:
             _mark_quiz_completed(mock_db, doc)
@@ -261,29 +325,49 @@ class TestMarkQuizCompleted:
 class TestResetQuizAttempt:
     def test_reset_base_quiz(self, mock_db, mock_col):
         user_id = str(ObjectId())
+        mock_col.find_one.return_value = _flow_user_doc(
+            user_id, ["survey:pre_quiz", "quiz:base"]
+        )
+
         reset_quiz_attempt(mock_db, user_id, "base")
 
         mock_col.delete_one.assert_called_once_with({"user_id": user_id, "quiz_id": "base"})
-        # user update called with reverted flags
-        update_call = mock_col.update_one.call_args
-        assert update_call[0][1]["$set"]["quiz_base_completed"] is False
-        assert update_call[0][1]["$set"]["survey_stage"] == SurveyStage.pre_base.value
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert "quiz:base" not in set_doc["completed_steps"]
+        assert set_doc["quiz_base_completed"] is False
+        assert set_doc["survey_stage"] == SurveyStage.pre_base.value
 
     def test_reset_variant_quiz(self, mock_db, mock_col):
         user_id = str(ObjectId())
+        cfg = study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
+        order = study_flow.build_step_order(study_flow.variant_sequence_for_seq(1, cfg))
+        mock_col.find_one.return_value = {
+            "_id": ObjectId(user_id), "step_order": order,
+            "completed_steps": list(order), "quiz_set_assignment": {},
+        }
+
         reset_quiz_attempt(mock_db, user_id, "followup")
 
-        mock_col.delete_one.assert_called_once_with({"user_id": user_id, "quiz_id": "followup"})
-        update_call = mock_col.update_one.call_args
-        assert update_call[0][1]["$set"]["quiz_variant_completed"] is False
-        assert update_call[0][1]["$set"]["survey_stage"] == SurveyStage.post_base.value
+        mock_col.delete_one.assert_called_once_with(
+            {"user_id": user_id, "quiz_id": "followup"}
+        )
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert "quiz:followup" not in set_doc["completed_steps"]
+        # No longer "all variant quizzes done".
+        assert set_doc["quiz_variant_completed"] is False
 
-    def test_reset_unknown_quiz_id_only_deletes(self, mock_db, mock_col):
+    def test_reset_unknown_quiz_id_leaves_the_flow_untouched(self, mock_db, mock_col):
+        """Admin test runs and quiz-2 ids aren't flow steps — nothing to revert."""
         user_id = str(ObjectId())
+        completed = ["survey:pre_quiz", "quiz:base"]
+        mock_col.find_one.return_value = _flow_user_doc(user_id, completed)
+
         reset_quiz_attempt(mock_db, user_id, "unknown-quiz")
 
-        mock_col.delete_one.assert_called_once_with({"user_id": user_id, "quiz_id": "unknown-quiz"})
-        # update_one should NOT be called for unknown quiz ids
+        mock_col.delete_one.assert_called_once_with(
+            {"user_id": user_id, "quiz_id": "unknown-quiz"}
+        )
+        # The attempt is deleted, but the flow is left completely untouched.
         mock_col.update_one.assert_not_called()
 
 
@@ -545,7 +629,10 @@ class TestRecordAnswer:
         completed_doc = {**updated_doc, "status": "completed"}
 
         # find_one sequence: attempt lookup, question lookup, post-update fetch, post-completion fetch
-        mock_col.find_one.side_effect = [attempt_doc, {"correct_choice_id": "a"}, updated_doc, completed_doc]
+        # _mark_quiz_completed now advances the study flow, which reads the user
+        # document; count_documents confirms the user exists.
+        mock_col.count_documents.return_value = 1
+        mock_col.find_one.side_effect = [attempt_doc, {"correct_choice_id": "a"}, updated_doc, _flow_user_doc(user_id), completed_doc]
         # found existing answer subdoc -> matched_count = 1, no completion needed
         mock_col.update_one.return_value = MagicMock(matched_count=1)
 
@@ -604,7 +691,10 @@ class TestRecordAnswer:
         completed_doc = {**updated_doc, "status": "completed"}
 
         # find_one sequence: attempt lookup, question lookup, post-update fetch, post-completion fetch
-        mock_col.find_one.side_effect = [attempt_doc, {"correct_choice_id": "a"}, updated_doc, completed_doc]
+        # _mark_quiz_completed now advances the study flow, which reads the user
+        # document; count_documents confirms the user exists.
+        mock_col.count_documents.return_value = 1
+        mock_col.find_one.side_effect = [attempt_doc, {"correct_choice_id": "a"}, updated_doc, _flow_user_doc(user_id), completed_doc]
         # First update_one (positional) doesn't match -> matched_count = 0
         # Second update_one ($push) -> matched_count = 1
         # Third update_one (mark completed: attempt status) -> matched_count = 1
@@ -677,7 +767,10 @@ class TestRecordAnswer:
         # 2. question lookup (correct_choice_id)
         # 3. find_one after update -> "updated"
         # 4. find_one after marking completed -> "completed_doc"
-        mock_col.find_one.side_effect = [attempt_doc, {"correct_choice_id": "a"}, updated_doc_after_answer, completed_doc]
+        # _mark_quiz_completed now advances the study flow, which reads the user
+        # document; count_documents confirms the user exists.
+        mock_col.count_documents.return_value = 1
+        mock_col.find_one.side_effect = [attempt_doc, {"correct_choice_id": "a"}, updated_doc_after_answer, _flow_user_doc(user_id), completed_doc]
         mock_col.update_one.return_value = MagicMock(matched_count=1)
         # _find_next_unanswered -> question_order has 1 item, which is now answered -> returns None
         # (count_documents not even reached because answered_map already filters it out)
@@ -835,3 +928,129 @@ class TestGetQuizResults:
         assert result.total_questions == 0
         assert result.correct_count == 0
         assert result.items == []
+
+
+# ── question-pool selection ──────────────────────────────────────────────────
+#
+# Each quiz drawing from its own set is what keeps a participant's quizzes
+# disjoint: no question can appear in two of them, because no question belongs
+# to two sets. These cover the precedence between that per-quiz set, the older
+# per-participant restriction, and the unrestricted default.
+
+class TestBuildPoolQuery:
+    def test_per_quiz_set_wins_over_the_participant_restriction(self):
+        assert _build_pool_query("c", ["a", "b"]) == {"set": "c"}
+
+    def test_falls_back_to_the_participant_restriction(self):
+        assert _build_pool_query(None, ["a", "b"]) == {"set": {"$in": ["a", "b"]}}
+
+    def test_unrestricted_when_neither_is_set(self):
+        assert _build_pool_query(None, None) == {}
+
+    def test_empty_participant_restriction_is_unrestricted(self):
+        assert _build_pool_query(None, []) == {}
+
+
+class TestLoadOrCreateAttemptQuizSet:
+    def _prime(self, mock_col, count=4):
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(count)]
+        mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+
+    def test_draws_only_from_the_quizzes_own_set(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(
+            mock_db, "u1", "u1@test.edu", "followup", quiz_set="b"
+        )
+
+        mock_col.find.assert_called_once_with({"set": "b"}, {"_id": 1})
+
+    def test_quiz_set_overrides_the_participant_restriction(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(
+            mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a"], quiz_set="d"
+        )
+
+        mock_col.find.assert_called_once_with({"set": "d"}, {"_id": 1})
+
+    def test_unmapped_quiz_falls_back_to_the_whole_pool(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
+
+        mock_col.find.assert_called_once_with({}, {"_id": 1})
+
+    def test_unassigned_quiz_falls_back_to_the_configured_map(self, mock_db, mock_col):
+        """A participant assigned before the map was configured still picks it up.
+
+        The map starts empty, so their stored assignment covers nothing; the
+        draw consults the current preset map rather than stranding them on the
+        whole pool.
+        """
+        self._prime(mock_col)
+
+        with patch.object(study_flow, "preset_quiz_set", return_value="c") as m:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
+
+        m.assert_called_once_with(mock_db, "double")
+        mock_col.find.assert_called_once_with({"set": "c"}, {"_id": 1})
+        assert mock_col.insert_one.call_args[0][0]["question_set"] == "c"
+
+    def test_an_explicit_set_skips_the_fallback_lookup(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        with patch.object(study_flow, "preset_quiz_set") as m:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="a")
+
+        m.assert_not_called()
+
+    def test_records_the_set_on_the_attempt(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="a")
+
+        assert mock_col.insert_one.call_args[0][0]["question_set"] == "a"
+
+    def test_records_none_when_drawing_from_the_whole_pool(self, mock_db, mock_col):
+        self._prime(mock_col)
+
+        _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base")
+
+        assert mock_col.insert_one.call_args[0][0]["question_set"] is None
+
+    def test_an_empty_set_raises_rather_than_serving_an_empty_quiz(self, mock_db, mock_col):
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = []
+
+        with pytest.raises(HTTPException) as exc:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="c")
+
+        assert exc.value.status_code == 400
+        assert "No questions available" in exc.value.detail
+
+    def test_four_mapped_quizzes_draw_disjoint_questions(self, mock_db, mock_col):
+        """The point of the whole design: no id appears in two attempts."""
+        by_set = {
+            letter: [ObjectId() for _ in range(MAX_QUIZ_QUESTIONS)]
+            for letter in ("a", "b", "c", "d")
+        }
+        assignment = {"base": "a", "followup": "b", "double": "c", "links": "d"}
+
+        inserted = []
+        mock_col.find_one.return_value = None
+        mock_col.insert_one.side_effect = lambda doc: (
+            inserted.append(doc), MagicMock(inserted_id=ObjectId())
+        )[1]
+
+        for quiz_id, letter in assignment.items():
+            mock_col.find.return_value = [{"_id": oid} for oid in by_set[letter]]
+            _load_or_create_attempt(
+                mock_db, "u1", "u1@test.edu", quiz_id, quiz_set=letter
+            )
+
+        orders = [set(doc["question_order"]) for doc in inserted]
+        assert len(inserted) == 4
+        assert all(len(o) == MAX_QUIZ_QUESTIONS for o in orders)
+        assert len(set().union(*orders)) == 4 * MAX_QUIZ_QUESTIONS

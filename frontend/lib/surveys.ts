@@ -26,9 +26,18 @@ export type SurveyAnswer = {
   value: number | string | string[];
 };
 
-export type SurveyStateResponse = {
+export type SurveyAttemptPublic = {
   stage: string;
   status: "not_started" | "in_progress" | "completed";
+  answered_count: number;
+  total_items: number;
+};
+
+// Mirrors backend SurveyStateResponse. Status lives under `attempt` — this type
+// previously declared `stage`/`status` at the top level, which the API has never
+// returned, so every completion check against it silently read undefined.
+export type SurveyStateResponse = {
+  attempt: SurveyAttemptPublic;
   items: SurveyItem[];
   answers: { item_id: string; value: any }[];
 };

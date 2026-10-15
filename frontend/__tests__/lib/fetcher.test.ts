@@ -1,4 +1,4 @@
-import { apiFetch } from "../../lib/fetcher";
+import { apiFetch, ApiError } from "../../lib/fetcher";
 
 describe("apiFetch", () => {
   beforeEach(() => {
@@ -101,5 +101,15 @@ describe("apiFetch", () => {
     });
 
     await expect(apiFetch("/api/thing")).rejects.toThrow("503 Service Unavailable");
+  });
+
+  it.each([401, 404])("preserves HTTP %s and the request path for flow diagnostics", async (status) => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false, status, statusText: "Error",
+      text: async () => JSON.stringify({ detail: "Request failed" }),
+    });
+    const error = await apiFetch("/api/study/next").catch(e => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status, url: "/api/study/next", message: "Request failed" });
   });
 });

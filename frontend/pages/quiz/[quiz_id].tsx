@@ -16,70 +16,19 @@ import QuizCompletionCard from "../../components/QuizCompletionCard";
 import PageHeader from "../../components/PageHeader";
 import {
   STEP_SUBTITLES,
-  isVariantQuizId,
-  type QuizId,
+  buildStudySteps,
+  quizPath,
+  quizStepId,
+  stepIndexForPath,
 } from "../../lib/studySteps";
+import { getNextStep } from "../../lib/study";
 import { createReport, type ReportCategory } from "../../lib/reports";
+import { ApiError } from "../../lib/fetcher";
 
-function isValidQuizId(value: string, user?: User | null): boolean {
-  if (user?.is_admin) return true;
-  return value === "base" || isVariantQuizId(value);
-}
-
-function isUsersAssignedVariant(
-  quizId: string,
-  user?: User | null,
-): boolean {
-  return Boolean(user?.assigned_var && quizId === user.assigned_var);
-}
-
-function canAccessQuiz(quizId: QuizId, user: User): boolean {
-  if (user.is_admin) {
-    return true;
-  }
-
-  if (quizId === "base") {
-    return !!user.survey_pre_base_completed && !user.quiz_base_completed;
-  }
-
-  return (
-    isUsersAssignedVariant(quizId, user) &&
-    !!user.survey_post_base_completed &&
-    !user.quiz_variant_completed
-  );
-}
-
-function getBlockedQuizRedirect(quizId: QuizId, user: User): string {
-  const assignedVariantPath = user.assigned_var
-    ? `/quiz/${user.assigned_var}`
-    : "/dashboard";
-
-  if (quizId === "base") {
-    if (!user.survey_pre_base_completed) return "/survey";
-
-    if (!user.survey_post_base_completed) {
-      return "/survey";
-    }
-
-    if (!user.quiz_variant_completed) {
-      return assignedVariantPath;
-    }
-
-    if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-      return "/survey";
-    }
-
-    return "/dashboard";
-  }
-
-  if (!user.survey_post_base_completed) return "/survey";
-
-  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-    return "/survey";
-  }
-
-  return "/dashboard";
-}
+// Access and post-completion routing are decided by the backend
+// (GET /study/next), which is also enforced server-side in api/quiz.py. The
+// four ladders that used to live here duplicated that logic and assumed a
+// single variant quiz per participant.
 
 export default function QuizPage() {
   const router = useRouter();
@@ -107,10 +56,25 @@ export default function QuizPage() {
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const lastResetQuestionId = useRef<string | undefined>(undefined);
 
-  const quizId =
-    rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
-      ? (rawQuizId as QuizId)
-      : null;
+  const quizId = rawQuizId;
+
+  // Position and label come from the participant's own flow, which is no longer
+  // a fixed 5 steps with exactly two quizzes.
+  const allSteps = user ? buildStudySteps(user) : [];
+  const thisStepIndex = quizId
+    ? stepIndexForPath(allSteps, quizPath(quizId))
+    : -1;
+  const thisStep = thisStepIndex === -1 ? null : allSteps[thisStepIndex];
+
+  function handleFlowError(cause: unknown, message: string) {
+    console.error(cause);
+    if (cause instanceof ApiError && cause.status === 401) {
+      invalidateMeCache();
+      router.replace("/login");
+      return;
+    }
+    setError(cause instanceof ApiError ? `${message} (${cause.status}: ${cause.message})` : message);
+  }
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -125,31 +89,21 @@ export default function QuizPage() {
 
         const u = res.user as User;
 
-        if (!isValidQuizId(rawQuizId, u)) {
-          router.replace("/dashboard");
-          return;
-        }
-
+        // Admins may open any quiz to test it; a participant may only be on the
+        // step the backend says is current.
         if (!u.is_admin) {
-          if (rawQuizId !== "base" && !isUsersAssignedVariant(rawQuizId, u)) {
-            router.replace("/dashboard");
+          const next = await getNextStep();
+          if (cancel) return;
+
+          if (next.next_step?.id !== quizStepId(rawQuizId)) {
+            router.replace(next.next_route);
             return;
           }
         }
 
-        if (!quizId) {
-          router.replace("/dashboard");
-          return;
-        }
-
-        if (!canAccessQuiz(quizId, u)) {
-          router.replace(getBlockedQuizRedirect(quizId, u));
-          return;
-        }
-
         setUser(u);
-      } catch {
-        if (!cancel) router.replace("/login");
+      } catch (e) {
+        if (!cancel) handleFlowError(e, "Unable to load your study. Please reload or contact the study team.");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -181,8 +135,7 @@ export default function QuizPage() {
           setSelectedChoice(null);
         }
       } catch (e) {
-        console.error(e);
-        if (!cancel) setError("Failed to load quiz.");
+        if (!cancel) handleFlowError(e, "Failed to load quiz.");
       }
     })();
 
@@ -221,51 +174,15 @@ export default function QuizPage() {
     if (!quizId) return;
     try {
       invalidateMeCache();
-      const res = await getMe();
-      const refreshedUser = res.user as User;
-
-      if (quizId === "base") {
-        if (!refreshedUser.survey_post_base_completed) {
-          router.replace("/survey?stage=post_base");
-          return;
-        }
-
-        if (!refreshedUser.quiz_variant_completed) {
-          router.replace(
-            refreshedUser.assigned_var
-              ? `/quiz/${refreshedUser.assigned_var}`
-              : "/dashboard",
-          );
-          return;
-        }
-
-        if (
-          refreshedUser.quiz_variant_completed &&
-          !refreshedUser.survey_post_variant_completed
-        ) {
-          router.replace("/survey");
-          return;
-        }
-
-        router.replace("/dashboard");
-        return;
-      }
-
-      // Variant quiz completed
-      if (!refreshedUser.survey_post_variant_completed) {
-        router.replace("/survey?stage=post_variant");
-        return;
-      }
-
-      router.replace("/dashboard");
+      const next = await getNextStep();
+      router.replace(next.next_route);
     } catch (e) {
-      console.error(e);
-      router.replace("/survey");
+      handleFlowError(e, "Unable to open the next step. Please try Continue again.");
     }
   }
 
   useEffect(() => {
-    if (!quizCompleted || !user || !quizId) return;
+    if (!quizCompleted || !user?.is_admin || !quizId) return;
     let cancel = false;
     getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
     return () => { cancel = true; };
@@ -279,7 +196,7 @@ export default function QuizPage() {
     );
   }
 
-  if (!user) return null;
+  if (!user) return error ? <div className="p-8" role="alert">{error}</div> : null;
 
   async function onLogout() {
     try {
@@ -339,8 +256,7 @@ export default function QuizPage() {
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
-      console.error(e);
-      setError("Failed to submit answer.");
+      handleFlowError(e, "Failed to submit answer.");
     } finally {
       setSubmitting(false);
     }
@@ -353,17 +269,19 @@ export default function QuizPage() {
         className="shrink-0"
         title={
           <>
-            {quizId === "base" ? "Quiz Part 1" : "Quiz Part 2"}
+            {thisStep?.label ?? "Quiz"}
             {quizCompleted ? (
               <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
             ) : (
-              <span className="ml-3 text-base font-normal text-gray-400">
-                Step {quizId === "base" ? 2 : 4} of 5
-              </span>
+              thisStepIndex !== -1 && (
+                <span className="ml-3 text-base font-normal text-gray-400">
+                  Step {thisStepIndex + 1} of {allSteps.length}
+                </span>
+              )
             )}
           </>
         }
-        subtitle={!quizCompleted ? STEP_SUBTITLES[quizId === "base" ? "quiz_base" : "quiz_variant"] : undefined}
+        subtitle={!quizCompleted ? STEP_SUBTITLES.quiz_base : undefined}
         onDashboard={() => router.replace("/dashboard")}
         onLogout={onLogout}
       />

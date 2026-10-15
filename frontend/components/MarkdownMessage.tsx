@@ -32,6 +32,18 @@ function convertListBody(body: string, ordered: boolean): string {
     .join("\n");
 }
 
+// Re-indent the body of a display-math block so every line sits at `indent`.
+// The common leading whitespace is stripped first, so a body the model indented
+// to match its list item doesn't arrive at KaTeX with that indent baked in.
+function reindentMathBody(body: string, indent: string): string {
+  const lines = body.replace(/^[ \t]*\n/, "").replace(/\s+$/, "").split("\n");
+  const widths = lines
+    .filter((l) => l.trim().length > 0)
+    .map((l) => (/^[ \t]*/.exec(l) as RegExpExecArray)[0].length);
+  const common = widths.length > 0 ? Math.min(...widths) : 0;
+  return lines.map((l) => indent + l.slice(common)).join("\n");
+}
+
 function wrapExpressions(text: string): string {
   // Step 0: Unwrap fenced code blocks whose content is LaTeX so the inner
   // content gets processed as math/text instead of shown as raw code.
@@ -51,7 +63,26 @@ function wrapExpressions(text: string): string {
   text = text.replace(/(?:^|\n)\[\n([\s\S]+?)\n\](?:\n|$)/g,
     (_, inner) => `\n$$\n${inner.trim()}\n$$\n`);
   text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, inner) => `$${inner.trim()}$`);
-  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, inner) => `$$\n${inner.trim()}\n$$`);
+
+  // \[...\] opening its own line is a display block. Both fences MUST keep that
+  // line's indentation: models routinely put these inside a list item —
+  //     - ...the combination formula:
+  //       \[
+  //       \binom{6}{2} = 15
+  //       \]
+  // — and emitting the opening fence indented (in the list item) while hoisting
+  // the closing fence to column 0 (outside it) left the block unterminated. Every
+  // later $$ then paired with the wrong partner, so formulas rendered as literal
+  // text and the prose between them rendered as math (or as a red KaTeX error).
+  text = text.replace(
+    /(^|\n)([ \t]*)\\\[([\s\S]+?)\\\][ \t]*(?=\n|$)/g,
+    (_m, lead: string, indent: string, inner: string) =>
+      `${lead}${indent}$$\n${reindentMathBody(inner, indent)}\n${indent}$$`,
+  );
+
+  // Any remaining \[...\] sits mid-line, so keep it inline rather than forcing a
+  // block that would split the sentence around it.
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, inner) => `$$${inner.trim()}$$`);
 
   // Step 2: Collapse inline $...$ that spans a single newline.
   // remark-math only parses single-line inline math. The AI sometimes wraps a

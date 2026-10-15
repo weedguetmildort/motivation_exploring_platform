@@ -13,6 +13,7 @@ from app.api.auth import router as auth_router, get_current_user
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
 from app.schemas.user import AssignedVar, SurveyStage, UserPublic
+from tests.conftest import standard_step_order
 
 
 # ── Local app/fixtures (do not touch conftest.py) ────────────────────────────
@@ -75,6 +76,12 @@ def make_user_doc(email="student@test.edu", password="correct-password", **overr
         "quiz_variant_completed": False,
         "survey_post_variant_completed": False,
         "survey_stage": SurveyStage.pre_base.value,
+        # Every stored participant carries a flow; without one, reading the user
+        # triggers a one-time backfill write (study_flow.ensure_user_flow) that
+        # would show up as an extra update_one in these tests.
+        "step_order": standard_step_order(),
+        "completed_steps": [],
+        "quiz_set_assignment": {},
     }
     doc.update(overrides)
     return doc
@@ -98,7 +105,7 @@ class TestSignup:
         oid = ObjectId()
         auth_mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         auth_mock_col.database.__getitem__.return_value.find_one_and_update.return_value = {
-            "_id": "user_signup_round_robin", "seq": 1
+            "_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"
         }
 
         resp = auth_client.post("/auth/signup", json=VALID_SIGNUP_PAYLOAD)
@@ -118,7 +125,7 @@ class TestSignup:
         oid = ObjectId()
         auth_mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         auth_mock_col.database.__getitem__.return_value.find_one_and_update.return_value = {
-            "_id": "user_signup_round_robin", "seq": 1
+            "_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"
         }
 
         auth_client.post("/auth/signup", json=VALID_SIGNUP_PAYLOAD)
@@ -251,6 +258,33 @@ class TestMe:
 
         assert resp.status_code == 200
         assert resp.json()["user"]["email"] == "student@test.edu"
+
+    def test_me_returns_the_study_flow_fields(self, auth_client, auth_mock_col):
+        """/auth/me must carry step_order/completed_steps.
+
+        These drive every routing decision (the dashboard's step list, GET
+        /study/next, require_quiz_access). When the serializer dropped them the
+        API reported an empty flow, so /study/next answered "finished" and the
+        quiz page bounced participants straight back to the dashboard.
+        """
+        order = standard_step_order()
+        doc = make_user_doc(
+            email="student@test.edu",
+            step_order=order,
+            completed_steps=[order[0]],
+            variant_sequence=["double", "links", "followup"],
+            study_flow_version=3,
+        )
+        token = create_access_token("student@test.edu")
+        auth_client.cookies.set(get_settings().COOKIE_NAME, token)
+        auth_mock_col.find_one.return_value = doc
+
+        user = auth_client.get("/auth/me").json()["user"]
+
+        assert user["step_order"] == order
+        assert user["completed_steps"] == [order[0]]
+        assert user["variant_sequence"] == ["double", "links", "followup"]
+        assert user["study_flow_version"] == 3
 
     def test_touches_last_active_at_on_request(self, auth_client, auth_mock_col):
         """get_current_user runs on every authenticated request and should

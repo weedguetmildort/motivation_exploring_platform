@@ -304,7 +304,7 @@ class TestCreateUser:
         oid = ObjectId()
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
-        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"}
 
         result = create_user(
             mock_col,
@@ -333,16 +333,23 @@ class TestCreateUser:
         assert inserted_doc["is_admin"] is False
         assert inserted_doc["survey_stage"] == SurveyStage.pre_base.value
 
-        # assigned_var update_one called with the round-robin result
-        mock_col.update_one.assert_called_once_with(
-            {"_id": oid}, {"$set": {"assigned_var": AssignedVar.followup.value}}
-        )
+        # Assignment now writes the participant's whole flow, not just a single
+        # condition: the sequence, the assembled step order, and the flow version.
+        mock_col.update_one.assert_called_once()
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert mock_col.update_one.call_args[0][0] == {"_id": oid}
+        assert set_doc["assigned_var"] == AssignedVar.followup.value
+        # assigned_var stays the FIRST variant of the sequence.
+        assert set_doc["variant_sequence"][0] == AssignedVar.followup.value
+        assert set_doc["step_order"][0] == "survey:pre_quiz"
+        assert set_doc["step_order"][1] == "quiz:base"  # base quiz always first
+        assert set_doc["assignment_source"] == "rotation"
 
     def test_password_is_hashed(self, mock_col):
         oid = ObjectId()
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
-        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"}
 
         create_user(
             mock_col,
@@ -361,9 +368,10 @@ class TestCreateUser:
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
         # The override-consume claims a pending "links"; rotation must be skipped.
-        counters.find_one_and_update.return_value = {
-            "_id": "next_assignment_override", "variant": "links",
-        }
+        counters.find_one_and_update.side_effect = [
+            {"_id": "next_assignment_override", "variant": "links"},
+            {"seq": 1, "seed": "test-seed"},
+        ]
 
         result = create_user(
             mock_col, email="u@example.com", password="plainpassword",
@@ -371,14 +379,23 @@ class TestCreateUser:
         )
 
         assert result.assigned_var == AssignedVar.links
-        mock_col.update_one.assert_called_once_with(
-            {"_id": oid}, {"$set": {"assigned_var": "links"}}
+        mock_col.update_one.assert_called_once()
+        set_doc = mock_col.update_one.call_args[0][1]["$set"]
+        assert set_doc["assigned_var"] == "links"
+        # The override pins the FIRST variant; the rest rotate around it.
+        assert set_doc["variant_sequence"][0] == "links"
+        assert sorted(set_doc["variant_sequence"]) == sorted(
+            v.value for v in AssignedVar
         )
-        # Rotation counter was NOT advanced — only the override was consumed.
-        counters.find_one_and_update.assert_called_once()
-        assert counters.find_one_and_update.call_args[0][0] == {
+        assert set_doc["assignment_source"] == "override"
+        # Consume the override and claim a set slot, without advancing rotation.
+        assert counters.find_one_and_update.call_count == 2
+        assert counters.find_one_and_update.call_args_list[0].args[0] == {
             "_id": "next_assignment_override", "variant": {"$ne": None},
         }
+        assert counters.find_one_and_update.call_args_list[1].args[0]["_id"].startswith(
+            "quiz_sets:balanced_random:"
+        )
 
     def test_falls_back_to_rotation_when_no_override(self, mock_col):
         oid = ObjectId()
@@ -388,6 +405,7 @@ class TestCreateUser:
         counters.find_one_and_update.side_effect = [
             None,
             {"_id": "user_signup_round_robin", "seq": 2},
+            {"seq": 1, "seed": "test-seed"},
         ]
 
         result = create_user(
@@ -396,14 +414,14 @@ class TestCreateUser:
         )
 
         assert result.assigned_var == AssignedVar.double  # seq 2 → double
-        assert counters.find_one_and_update.call_count == 2
+        assert counters.find_one_and_update.call_count == 3
 
     def test_stamps_default_quiz_sets(self, mock_col):
         oid = ObjectId()
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
         counters.find_one.return_value = {"_id": "quiz_default_sets", "sets": ["a", "b"]}
-        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"}
 
         result = create_user(
             mock_col, email="u@example.com", password="plainpassword",

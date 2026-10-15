@@ -99,12 +99,15 @@ def export_quiz_answers(
         user_email = doc.get("user_email", "")
         quiz_id = doc.get("quiz_id", "")
         status = doc.get("status", "")
+        # Which question set this attempt drew from; blank = the whole pool.
+        question_set = doc.get("question_set") or ""
         attempt_created = _fmt(doc.get("created_at"))
         for answer in doc.get("answers", []):
             rows.append({
                 "user_email": user_email,
                 "quiz_id": quiz_id,
                 "quiz_status": status,
+                "question_set": question_set,
                 "question_id": answer.get("question_id", ""),
                 "choice_id": _fmt(answer.get("choice_id")),
                 "marked_correct": _fmt(answer.get("marked_correct")),
