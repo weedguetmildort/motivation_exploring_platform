@@ -131,6 +131,56 @@ def test_legacy_rows_and_test_accounts(study):
     assert len(research_data(db, include_tests=True)) == 1
 
 
+@pytest.mark.parametrize("grade,snapshot,expected", [
+    (True, {}, True), (False, {}, False), (None, {}, None),
+    (None, {"correct_choice_id": "b"}, True), (None, {"correct_choice_id": "a"}, False),
+])
+def test_grades_use_stored_results_or_frozen_keys_without_current_bank_fallback(study, grade, snapshot, expected):
+    db, _, _, qid, _, _ = study
+    db.quiz_attempts.update_one({}, {"$set": {
+        "answers.0.marked_correct": grade, "question_snapshots": {qid: snapshot},
+    }})
+    db.questions.insert_one({"_id": ObjectId(qid), "correct_choice_id": "b"})
+    row = research_data(db)[0]
+    assert row["correct"] is expected
+    assert ("missing_grade" in row["quality_flags"]) is (expected is None)
+
+
+def test_dashboard_export_and_offline_accuracy_use_only_known_grades(study):
+    from app.services.research_dashboard import aggregate
+    from scripts.analyze_research import describe
+    db, _, _, _, _, now = study
+    other = str(ObjectId())
+    db.quiz_attempts.update_one({}, {
+        "$set": {"answers.0.marked_correct": True},
+        "$push": {"question_order": other, "answers": {
+            "question_id": other, "choice_id": "a", "answered_at": now,
+        }},
+    })
+    rows = research_data(db)
+    metric = aggregate(rows)["metrics"]["accuracy"]
+    assert metric["value"] == 1 and metric["denominator"] == 1
+    variant = variant_summaries(rows)[0]
+    assert variant["accuracy"] == 1
+    assert variant["questions_answered"] == 2 and variant["questions_graded"] == 1
+    assert variant["answers_missing_grade"] == 1
+    offline = describe(rows, [])["variants"]["links"]
+    assert offline["participant_mean_accuracy"] == 1
+    assert offline["questions_answered"] == 2 and offline["questions_graded"] == 1
+
+
+def test_unknown_only_accuracy_is_unavailable_everywhere(study):
+    from app.services.analytics import get_question_accuracy, get_user_quiz_accuracy, get_quiz_accuracy
+    from scripts.analyze_research import describe
+    db, _, user, qid, _, _ = study
+    db.quiz_attempts.update_one({}, {"$unset": {"question_snapshots": "", "answers.0.marked_correct": ""}})
+    rows = research_data(db)
+    assert variant_summaries(rows)[0]["accuracy"] is None
+    assert describe(rows, [])["variants"]["links"]["participant_mean_accuracy"] is None
+    for result in (get_question_accuracy(db, qid), get_user_quiz_accuracy(db, user.id, "variant"), get_quiz_accuracy(db, "links")):
+        assert result["accuracy"] is None and result["answers_missing_grade"] == 1
+
+
 def test_snapshot_export_is_admin_only_and_omits_direct_identity(study):
     db, client, user, qid, _, _ = study
     assert client.get("/export/research-bundle").status_code == 403
@@ -139,7 +189,7 @@ def test_snapshot_export_is_admin_only_and_omits_direct_identity(study):
     assert response.status_code == 200
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["analysis_version"] == "1.0"
+        assert manifest["analysis_version"] == "1.1"
         assert manifest["record_counts"]["questions"] == 1
         assert b"private@test.edu" not in archive.read("quiz_attempts.json")
         assert qid in archive.read("questions.json").decode()

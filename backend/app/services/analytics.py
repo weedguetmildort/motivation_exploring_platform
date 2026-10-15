@@ -7,10 +7,13 @@ get_quiz_accuracy(): query overall accuracy for a quiz type across all users.
 get_user_quiz_accuracy(): query accuracy for a specific user on a specific quiz.
 
 Useful for determining how the quiz type impacts accuracy overall and for different types of questions.
+Accuracy denominators (total / total_answers) include only submitted answers
+with a stored grade or an immutable answer key. Missing grades are counted separately.
 '''
 
 from .quiz import get_quiz_attempts_collection
 from ..schemas.user import AssignedVar
+from .quiz_grading import answer_correctness
 
 _VARIANT_QUIZ_IDS = [v.value for v in AssignedVar]
 
@@ -24,13 +27,17 @@ def get_question_accuracy(db, question_id: str, quiz_id: str | None = None) -> d
     if quiz_id:
         query["quiz_id"] = quiz_id
 
-    attempts = col.find(query, {"answers": 1, "quiz_id": 1})
-    total, correct = 0, 0
+    attempts = col.find(query, {"answers": 1, "quiz_id": 1, "question_snapshots": 1})
+    total, correct, ungraded = 0, 0, 0
     for attempt in attempts:
         for ans in attempt.get("answers", []):
             if ans.get("question_id") == question_id and ans.get("answered_at"):
+                grade = answer_correctness(ans, attempt.get("question_snapshots", {}).get(question_id))
+                if grade is None:
+                    ungraded += 1
+                    continue
                 total += 1
-                if ans.get("marked_correct"):
+                if grade:
                     correct += 1
 
     accuracy = correct / total if total > 0 else None
@@ -40,6 +47,7 @@ def get_question_accuracy(db, question_id: str, quiz_id: str | None = None) -> d
         "total": total,
         "correct": correct,
         "accuracy": accuracy,
+        "answers_missing_grade": ungraded,
     }
 
 
@@ -55,7 +63,7 @@ def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
 
     col = get_quiz_attempts_collection(db)
     query = {"user_id": user_id, "quiz_id": quiz_filter, "status": "completed"}
-    projection = {"answers": 1, "quiz_id": 1}
+    projection = {"answers": 1, "quiz_id": 1, "question_snapshots": 1}
     if quiz_type == "base":
         attempt = col.find_one(query, projection)
         attempts = [attempt] if attempt else []
@@ -69,14 +77,19 @@ def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
             "total": 0,
             "correct": 0,
             "accuracy": None,
+              "answers_missing_grade": 0,
         }
 
-    total, correct = 0, 0
+    total, correct, ungraded = 0, 0, 0
     for attempt in attempts:
         for ans in attempt.get("answers", []):
             if ans.get("answered_at"):
+                grade = answer_correctness(ans, attempt.get("question_snapshots", {}).get(ans.get("question_id")))
+                if grade is None:
+                    ungraded += 1
+                    continue
                 total += 1
-                if ans.get("marked_correct"):
+                if grade:
                     correct += 1
 
     accuracy = correct / total if total > 0 else None
@@ -87,6 +100,7 @@ def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
         "total": total,
         "correct": correct,
         "accuracy": accuracy,
+        "answers_missing_grade": ungraded,
     }
 
 
@@ -95,13 +109,17 @@ def get_quiz_accuracy(db, quiz_id: str) -> dict:
     Returns overall accuracy (% correct) for a specific quiz type across all users.
     """
     col = get_quiz_attempts_collection(db)
-    attempts = list(col.find({"quiz_id": quiz_id, "status": "completed"}, {"answers": 1}))
-    total, correct = 0, 0
+    attempts = list(col.find({"quiz_id": quiz_id, "status": "completed"}, {"answers": 1, "question_snapshots": 1}))
+    total, correct, ungraded = 0, 0, 0
     for attempt in attempts:
         for ans in attempt.get("answers", []):
             if ans.get("answered_at"):
+                grade = answer_correctness(ans, attempt.get("question_snapshots", {}).get(ans.get("question_id")))
+                if grade is None:
+                    ungraded += 1
+                    continue
                 total += 1
-                if ans.get("marked_correct"):
+                if grade:
                     correct += 1
 
     accuracy = correct / total if total > 0 else None
@@ -111,4 +129,5 @@ def get_quiz_accuracy(db, quiz_id: str) -> dict:
         "total_answers": total,
         "correct": correct,
         "accuracy": accuracy,
+        "answers_missing_grade": ungraded,
     }

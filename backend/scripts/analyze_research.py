@@ -26,7 +26,7 @@ def describe(questions, participants, seed=2026, repetitions=2000):
     rng = random.Random(seed)
     report = {"bootstrap_seed": seed, "bootstrap_repetitions": repetitions,
               "enrolled_participants": len(participants), "participants_with_attempts": len({q["participant_id"] for q in questions}),
-              "definitions": ["Accuracy intervals bootstrap participant mean accuracies, weighting each participant equally.",
+              "definitions": ["Accuracy intervals bootstrap participant mean accuracies over graded answers, weighting each participant equally. Missing grades are excluded.",
                 "Wrong-AI agreement describes final matching of exposed advice; initial unaided answers were not collected.",
                 "Base is always first in the current protocol; base comparisons are confounded with position.",
                 "Small pilot intervals and exploratory intent labels are not confirmatory findings."], "variants": {}}
@@ -35,7 +35,8 @@ def describe(questions, participants, seed=2026, repetitions=2000):
         for row in rows:
             if row["answered"]:
                 people[row["participant_id"]].append(row)
-        accuracies = [sum(r["correct"] is True for r in person) / len(person) for person in people.values()]
+        graded_people = {pid: [r for r in person if isinstance(r.get("correct"), bool)] for pid, person in people.items()}
+        accuracies = [sum(r["correct"] is True for r in person) / len(person) for person in graded_people.values() if person]
         wrong = [r for r in rows if r["answered"] and r["wrong_ai_exposed"] is True and r["matched_wrong_ai"] is not None]
         wrong_by_person = defaultdict(list)
         for row in wrong:
@@ -44,6 +45,9 @@ def describe(questions, participants, seed=2026, repetitions=2000):
         report["variants"][variant] = {
             "participants_assigned": len({r["participant_id"] for r in rows}), "participants_with_answers": len(people),
             "questions_assigned": len(rows), "questions_answered": sum(r["answered"] for r in rows),
+            "questions_graded": sum(len(person) for person in graded_people.values()),
+            "answers_missing_grade": sum(r["answered"] and r.get("correct") is None for r in rows),
+            "participants_with_graded_answers": len(accuracies),
             "participant_mean_accuracy": sum(accuracies) / len(accuracies) if accuracies else None,
             "participant_bootstrap_accuracy_95_interval": interval(accuracies, rng, repetitions),
             "wrong_ai_exposure_questions": len(wrong), "participants_with_wrong_ai_opportunities": len(agreement),
@@ -71,7 +75,7 @@ def write_csv(path, records):
 def analyze(snapshot, output, seed=2026, repetitions=2000):
     with zipfile.ZipFile(snapshot) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("analysis_version") != "1.0":
+        if manifest.get("analysis_version") not in ("1.0", "1.1"):
             raise ValueError("Unsupported analysis version; use the matching analysis script")
         questions = json.loads(archive.read("questions.json"))
         variants = json.loads(archive.read("variants.json"))

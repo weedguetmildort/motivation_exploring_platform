@@ -10,8 +10,9 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from statistics import median
+from .quiz_grading import answer_correctness
 
-ANALYSIS_VERSION = "1.0"
+ANALYSIS_VERSION = "1.1"
 REGIONS = ("question", "answers", "submit", "chat", "chat_input", "suggestions", "reference", "agent_A", "agent_B", "other")
 INTENTS = {
     "explanation": r"\b(why|how|explain|reasoning|derive|derivation|steps?)\b",
@@ -125,7 +126,7 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                 "shown_at": iso(answer.get("shown_at")), "answered_at": iso(answer.get("answered_at")),
                 "was_shown": bool(answer.get("shown_at") or by_type["question_visible"]),
                 "answered": bool(answer.get("answered_at")), "choice_id": selected,
-                "correct": answer.get("marked_correct") if answer.get("answered_at") else None,
+                "correct": answer_correctness(answer, snapshot),
                 "planned_wrong_ai": qid in attempt.get("incorrect_question_ids", []),
                 "server_elapsed_ms": milliseconds(answer.get("shown_at"), answer.get("answered_at")),
                 "submission_page_elapsed_ms": cutoff,
@@ -217,6 +218,10 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
             row["quality_flags"] = [name for name, missing in (
                 ("missing_snapshot", not snapshot), ("missing_telemetry", not events),
                 ("missing_submission_anchor", bool(answer.get("answered_at")) and not row["telemetry_submission_anchor"]),
+                ("missing_grade", row["answered"] and row["correct"] is None),
+                ("incomplete_completed_attempt", attempt.get("status") == "completed" and any(
+                    not answers.get(question_id, {}).get("answered_at") for question_id in attempt.get("question_order", [])
+                )),
                 ("event_sequence_gaps", bool(gaps)), ("unresolved_ai_request", bool(row["ai_failed_requests"])),
                 ("unresolved_exposed_recommendation", bool(unknown_exposures)),
                 ("message_persistence_failure", any(r.get("assistant_message_persisted") is False or r.get("user_message_persisted") is False for r in requests)),
@@ -239,11 +244,13 @@ def variant_summaries(rows):
     for group in groups.values():
         first = group[0]
         answered = [r for r in group if r["answered"]]
+        graded = [r for r in answered if isinstance(r["correct"], bool)]
         wrong = [r for r in answered if r["wrong_ai_exposed"] is True and r["matched_wrong_ai"] is not None]
         summary = {key: first[key] for key in ("analysis_version", "participant_id", "attempt_id", "quiz_id", "study_flow_version", "variant_position", "question_set", "attempt_status", "archived", "is_test")}
         summary.update(questions_assigned=len(group), questions_shown=sum(r["was_shown"] for r in group),
-                       questions_answered=len(answered), correct_answers=sum(r["correct"] is True for r in answered),
-                       accuracy=sum(r["correct"] is True for r in answered) / len(answered) if answered else None,
+                       questions_answered=len(answered), questions_graded=len(graded),
+                       answers_missing_grade=len(answered) - len(graded), correct_answers=sum(r["correct"] is True for r in graded),
+                       accuracy=sum(r["correct"] is True for r in graded) / len(graded) if graded else None,
                        wrong_ai_exposure_questions=len(wrong), wrong_ai_matching_answers=sum(r["matched_wrong_ai"] is True for r in wrong),
                        wrong_ai_agreement_rate=sum(r["matched_wrong_ai"] is True for r in wrong) / len(wrong) if wrong else None,
                        telemetry_questions=sum(r["telemetry_available"] for r in group),
