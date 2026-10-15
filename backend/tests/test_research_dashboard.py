@@ -146,6 +146,7 @@ def test_individual_detail_and_interaction_pagination(dashboard_study):
     qid = attempt["question_order"][0]
     query = {"user_id": people["Alice"], "conversation_id": attempt["conversation_id"], "question_id": qid}
     db.messages.insert_one({**query, "role": "user", "content": "Please double check", "trigger": "manual", "created_at": datetime.utcnow()})
+    db.copy_events.insert_one({**query, "copied_text": "Selected explanation", "created_at": datetime.utcnow()})
     for index in range(3):
         db.research_events.insert_one({**query, "event_id": str(index), "event_type": "question_visible", "sequence": index, "page_id": "p", "elapsed_ms": index, "occurred_at": datetime.utcnow()})
     person = client.get(f'/research/participants/{people["Alice"]}').json()
@@ -153,6 +154,7 @@ def test_individual_detail_and_interaction_pagination(dashboard_study):
     trace = client.get(f'/research/participants/{people["Alice"]}/questions/{attempts["Alice"]}/{qid}', params={"event_page_size": 2, "event_page": 2}).json()
     assert trace["messages"][0]["intent_labels_heuristic"] == ["double_check"]
     assert trace["events_total"] == 3 and len(trace["events"]) == 1
+    assert trace["copies"][0]["text"] == "Selected explanation"
 
 
 def test_nan_age_does_not_pass_range_filters():

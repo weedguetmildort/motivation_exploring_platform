@@ -127,5 +127,8 @@ def research_question(participant_id: str, attempt_id: str, question_id: str, re
                  "first_token_at": iso(r.get("first_token_at")), "response_completed_at": iso(r.get("response_completed_at")),
                  "partial_visible_replies": r.get("partial_visible_replies"), "followup_text": r.get("followup_text")}
                 for r in db["ai_requests"].find(query).sort("started_at", 1)]
+    copies = [{"id": str(c["_id"]), "text": c.get("copied_text"), "created_at": iso(c.get("created_at"))}
+              for c in db["copy_events"].find(query).sort("created_at", 1)]
     return {"snapshot": attempt.get("question_snapshots", {}).get(question_id), "messages": messages, "events": events, "requests": requests,
+            "copies": copies,
             "events_total": event_count, "events_pages": (event_count + event_page_size - 1) // event_page_size}
