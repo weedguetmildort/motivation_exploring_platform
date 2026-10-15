@@ -34,6 +34,8 @@ export type QuestionTrace = {
   events_total: number; events_pages: number;
   copies: { id: string; text: string; created_at: string }[];
   snapshot: { stem?: string; subtitle?: string; choices?: { id: string; label: string }[]; correct_choice_id?: string } | null;
+  snapshot_source?: "attempt" | "unavailable";
+  answer?: { choice_id: string | null; correct_choice_id: string | null; correct: boolean | null; answered_at: string };
   messages: { id: string; role: string; content: string | string[]; created_at: string; trigger: string | null; request_id: string | null; stated_choice_id: Record<string, string | null> | null; intent_labels_heuristic: string[] }[];
   events: { event_id: string; event_type: string; occurred_at: string; elapsed_ms: number; page_id: string; sequence: number; data: Record<string, unknown> }[];
   requests: { request_id: string; prompt: string; trigger: string | null; status: string; started_at: string; partial_visible_replies: Record<string, string> | null; followup_text: string | null }[];

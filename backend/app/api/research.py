@@ -8,6 +8,7 @@ from ..schemas.user import UserPublic
 from ..schemas.research import ResearchEventBatch
 from ..services.research_dashboard import DEMOGRAPHICS, dashboard, profile, aggregate, comparisons, METRICS
 from ..services.research_analytics import research_data, research_attempts, iso, prompt_intents
+from ..services.quiz_grading import answer_correctness
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -112,7 +113,15 @@ def research_question(participant_id: str, attempt_id: str, question_id: str, re
         attempt = db["quiz_attempt_archive"].find_one(query)
     if not attempt or question_id not in attempt.get("question_order", []):
         raise HTTPException(404, "Question not found for this participant")
-    query = {"user_id": participant_id, "conversation_id": attempt["conversation_id"], "question_id": question_id}
+    query = {"user_id": participant_id, "question_id": question_id}
+    if attempt.get("conversation_id"):
+        query["conversation_id"] = attempt["conversation_id"]
+    else:
+        # Legacy attempts can lack conversation IDs. Do not join unrelated
+        # conversations just because they used the same question.
+        query["attempt_id"] = str(attempt["_id"])
+    snapshot = attempt.get("question_snapshots", {}).get(question_id) or None
+    answer = next((a for a in attempt.get("answers", []) if a.get("question_id") == question_id and a.get("answered_at")), {})
     messages = [{"id": str(m["_id"]), "role": m.get("role"), "content": m.get("content"),
                  "created_at": iso(m.get("created_at")), "request_id": m.get("request_id"), "trigger": m.get("trigger"),
                  "stated_choice_id": (m.get("metadata") or {}).get("stated_choice_id"),
@@ -130,6 +139,9 @@ def research_question(participant_id: str, attempt_id: str, question_id: str, re
                 for r in db["ai_requests"].find(query).sort("started_at", 1)]
     copies = [{"id": str(c["_id"]), "text": c.get("copied_text"), "created_at": iso(c.get("created_at"))}
               for c in db["copy_events"].find(query).sort("created_at", 1)]
-    return {"snapshot": attempt.get("question_snapshots", {}).get(question_id), "messages": messages, "events": events, "requests": requests,
+    return {"snapshot": snapshot, "snapshot_source": "attempt" if snapshot else "unavailable",
+            "answer": {"choice_id": answer.get("choice_id"), "correct_choice_id": (snapshot or {}).get("correct_choice_id"),
+                       "correct": answer_correctness(answer, snapshot), "answered_at": iso(answer.get("answered_at"))},
+            "messages": messages, "events": events, "requests": requests,
             "copies": copies,
             "events_total": event_count, "events_pages": (event_count + event_page_size - 1) // event_page_size}

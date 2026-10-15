@@ -218,3 +218,54 @@ def test_empty_completed_attempt_is_counted_without_fabricating_question_rows(da
     assert data["participants"][0]["attempt_count"] == 1
     assert data["variants"][0]["quiz_id"] == "base"
     assert client.get(f'/research/participants/{people["Alice"]}').json()["overall"] == overall
+
+
+def test_inspect_returns_the_frozen_question_and_answer_after_bank_changes(dashboard_study):
+    db, client, people, _ = dashboard_study
+    attempt = db.quiz_attempts.find_one({"user_id": people["Alice"]})
+    qid = attempt["question_order"][0]
+    frozen = {"stem": "Original math question", "subtitle": "Find $x$.", "correct_choice_id": "a",
+              "choices": [{"id": "a", "label": "Original correct option"}, {"id": "b", "label": "Original wrong option"}]}
+    db.quiz_attempts.update_one({"_id": attempt["_id"]}, {"$set": {
+        f"question_snapshots.{qid}": frozen, "answers.0.choice_id": "b", "answers.0.marked_correct": False,
+    }})
+    db.questions.insert_one({"_id": ObjectId(qid), "stem": "Replaced question", "correct_choice_id": "b"})
+    path = f'/research/participants/{people["Alice"]}/questions/{attempt["_id"]}/{qid}'
+    trace = client.get(path)
+    assert trace.status_code == 200, trace.text
+    assert trace.json()["snapshot"] == frozen
+    assert trace.json()["snapshot_source"] == "attempt"
+    assert trace.json()["answer"]["choice_id"] == "b"
+    assert trace.json()["answer"]["correct_choice_id"] == "a"
+    assert trace.json()["answer"]["correct"] is False
+    db.questions.delete_many({})
+    assert client.get(path).json()["snapshot"] == frozen
+
+
+def test_legacy_inspect_without_conversation_or_snapshot_reports_unavailable(dashboard_study):
+    db, client, people, _ = dashboard_study
+    attempt = db.quiz_attempts.find_one({"user_id": people["Alice"]})
+    qid = attempt["question_order"][0]
+    db.quiz_attempts.update_one({"_id": attempt["_id"]}, {"$unset": {"conversation_id": "", "question_snapshots": "", "answers.0.marked_correct": ""}})
+    db.messages.insert_one({"user_id": people["Alice"], "question_id": qid, "role": "assistant", "content": "Unrelated attempt"})
+    path = f'/research/participants/{people["Alice"]}/questions/{attempt["_id"]}/{qid}'
+    trace = client.get(path)
+    assert trace.status_code == 200, trace.text
+    assert trace.json()["snapshot"] is None and trace.json()["snapshot_source"] == "unavailable"
+    assert trace.json()["answer"]["correct"] is None
+    assert trace.json()["messages"] == []
+
+
+def test_inspect_archived_question_uses_its_original_attempt(dashboard_study):
+    db, client, people, _ = dashboard_study
+    attempt = db.quiz_attempts.find_one({"user_id": people["Alice"]})
+    qid = attempt["question_order"][0]
+    db.quiz_attempt_archive.insert_one({**attempt, "archived_at": datetime.utcnow()})
+    db.quiz_attempts.delete_one({"_id": attempt["_id"]})
+    db.quiz_attempts.insert_one({**attempt, "_id": ObjectId(), "conversation_id": "new-run",
+        "question_snapshots": {qid: {"stem": "Different run", "correct_choice_id": "b"}}})
+    path = f'/research/participants/{people["Alice"]}/questions/{attempt["_id"]}/{qid}'
+    assert client.get(path).status_code == 404
+    trace = client.get(path, params={"include_archived": True})
+    assert trace.status_code == 200, trace.text
+    assert trace.json()["snapshot"]["stem"] == "Frozen question"

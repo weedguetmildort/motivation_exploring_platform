@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/fetcher";
 import { demographicLabel, formatMetric, type ParticipantResults, type QuestionResult, type QuestionTrace } from "../lib/researchResults";
 import ResearchComparison from "./ResearchComparison";
@@ -6,12 +6,19 @@ import MarkdownMessage from "./MarkdownMessage";
 
 const yesNo = (value: boolean | null) => value == null ? "—" : value ? "Yes" : "No";
 
-function QuestionDetails({ participantId, question, options }: { participantId: string; question: QuestionResult; options: string }) {
+function QuestionDetails({ participantId, question, options, onClose }: { participantId: string; question: QuestionResult; options: string; onClose: () => void }) {
   const [trace, setTrace] = useState<QuestionTrace | null>(null);
   const [error, setError] = useState(false);
   const [eventPage, setEventPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showIntervals, setShowIntervals] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (element?.showModal) element.showModal();
+    else element?.setAttribute("open", "");
+    return () => element?.close?.();
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError(false);
@@ -21,15 +28,31 @@ function QuestionDetails({ participantId, question, options }: { participantId: 
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [participantId, question.attempt_id, question.question_id, options, eventPage]);
-  return <div className="rounded-lg border bg-gray-50 p-4 mt-3 space-y-4">
-    <h4 className="font-semibold">Question {question.question_position}: {question.question_stem || question.question_id}</h4>
-    <p className="text-sm">Selected: {question.choice_id || "—"} · Correct: {question.correct_choice_id || "—"} · Matched wrong AI: {yesNo(question.matched_wrong_ai)}</p>
+  const selected = trace?.answer ? trace.answer.choice_id : question.choice_id;
+  const correct = trace?.answer ? trace.answer.correct_choice_id : question.correct_choice_id;
+  const grade = trace?.answer ? trace.answer.correct : question.correct;
+  return <dialog ref={dialog} aria-labelledby="inspected-question-title" onClose={onClose} onCancel={onClose}
+    className="m-auto max-h-[90vh] w-[calc(100%_-_2rem)] max-w-[960px] overflow-y-auto rounded-xl border bg-white p-5 shadow-xl backdrop:bg-black/40">
+    <div className="space-y-4">
+    <div className="flex items-start justify-between gap-4"><h4 id="inspected-question-title" className="font-semibold text-lg">{question.quiz_id} · Question {question.question_position}{question.archived ? " (reset attempt)" : ""}</h4>
+      <button type="button" onClick={onClose} className="shrink-0 rounded border px-3 py-1 text-sm">Close question</button></div>
+    <p className="text-sm">Student answer: {selected || "—"} · Correct answer: {correct || "—"} · Result: {grade == null ? "Unscored" : grade ? "Correct" : "Incorrect"} · Matched wrong AI: {yesNo(question.matched_wrong_ai)}</p>
     {question.quality_flags.length > 0 && <p className="text-sm text-amber-800">Data quality: {question.quality_flags.map(v => v.replaceAll("_", " ")).join(", ")}</p>}
     <details><summary className="cursor-pointer text-sm font-medium">All recorded question measurements</summary><dl className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-3 text-sm">{Object.entries(question).filter(([key]) => !["participant_id", "question_stem", "quality_flags"].includes(key)).map(([key, value]) => <div key={key} className="rounded border bg-white p-2"><dt className="text-gray-600">{key.replaceAll("_", " ")}</dt><dd className="break-words">{value == null ? "—" : Array.isArray(value) ? value.join(", ") || "—" : String(value)}</dd></div>)}</dl></details>
     {loading && <p role="status">Loading question interactions…</p>}
-    {error && <p role="alert">Unable to load this question’s interactions.</p>}
+    {error && <p role="alert">Unable to load this question’s details. Close it and try Inspect question again.</p>}
     {trace && !loading && !error && <>
-      {trace.snapshot?.choices && <div><h5 className="font-medium mb-2">Question as presented</h5><p className="text-sm mb-2">{trace.snapshot.subtitle}</p><ul className="space-y-1 text-sm">{trace.snapshot.choices.map(choice => <li key={choice.id}>{choice.id}: {choice.label}</li>)}</ul></div>}
+      {trace.snapshot ? <section aria-label="Question as presented" className="rounded-lg border p-4 space-y-3">
+        <h5 className="font-medium">Question as presented</h5>
+        <p className="text-xs text-gray-500">Saved with this quiz attempt.</p>
+        {trace.snapshot.stem && <MarkdownMessage content={trace.snapshot.stem} />}
+        {trace.snapshot.subtitle && <MarkdownMessage content={trace.snapshot.subtitle} />}
+        <ul className="space-y-2 text-sm">{trace.snapshot.choices?.map(choice => <li key={choice.id}
+          className={`rounded border p-3 ${choice.id === correct ? "border-green-400 bg-green-50" : choice.id === selected ? "border-red-300 bg-red-50" : "border-gray-200"}`}>
+          <div className="flex gap-2 mb-1"><strong className="uppercase">{choice.id}.</strong>{choice.id === selected && <span className="font-medium">Student selected</span>}{choice.id === correct && <span className="font-medium text-green-800">Correct answer</span>}</div>
+          <MarkdownMessage content={choice.label} />
+        </li>)}</ul>
+      </section> : <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The exact question and choices were not saved with this older attempt. They cannot be reconstructed reliably from the current question bank. Any saved conversation is shown below.</p>}
       <div><h5 className="font-medium mb-2">Conversation</h5>{!trace.messages.length && <p className="text-sm text-gray-600">No completed messages were saved for this question.</p>}
         <div className="space-y-3">{trace.messages.map(message => <div key={message.id} className="rounded border bg-white p-3">
           <p className="text-sm text-gray-600 mb-2">{message.role === "user" ? "Student" : "Assistant"} · {message.created_at}{message.trigger ? ` · ${message.trigger.replaceAll("_", " ")}` : ""}</p>
@@ -46,7 +69,8 @@ function QuestionDetails({ participantId, question, options }: { participantId: 
       </details>
       <details><summary className="cursor-pointer text-sm font-medium">Copied text ({trace.copies.length})</summary><div className="space-y-2 mt-3">{trace.copies.map(copy => <div key={copy.id} className="rounded border bg-white p-3 text-sm"><p className="text-gray-600">{copy.created_at}</p><p className="whitespace-pre-wrap mt-1">{copy.text}</p></div>)}</div></details>
     </>}
-  </div>;
+    </div>
+  </dialog>;
 }
 
 export default function ResearchParticipant({ participantId, includeTests, includeArchived, onClose }: { participantId: string; includeTests: boolean; includeArchived: boolean; onClose: () => void }) {
@@ -75,9 +99,9 @@ export default function ResearchParticipant({ participantId, includeTests, inclu
         <td className="p-2">{question.quiz_id} / {question.question_position}{question.archived ? " (reset)" : ""}<div className="text-xs text-gray-500">Set {question.question_set ?? "—"} · Position {question.variant_position ?? "—"} · {question.attempt_status}</div></td>
         <td className="p-2">{question.choice_id || "—"}</td><td className="p-2">{yesNo(question.correct)}</td><td className="p-2">{yesNo(question.wrong_ai_exposed)}</td><td className="p-2">{yesNo(question.matched_wrong_ai)}</td><td className="p-2">{formatMetric(question.active_ms, "seconds")}</td>
         <td className="p-2">{question.ai_requests ? `${question.manual_prompts} / ${question.suggested_prompts}` : "—"}</td><td className="p-2">{question.telemetry_available ? question.answer_revision_count : "—"}</td>
-        <td className="p-2"><button type="button" className="text-blue-700 underline" aria-label={`Inspect ${question.quiz_id} question ${question.question_position}`} onClick={() => setSelectedQuestion(question)}>Inspect question</button></td>
+        <td className="p-2"><button type="button" className="text-blue-700 underline" aria-haspopup="dialog" aria-label={`Inspect ${question.quiz_id} question ${question.question_position}`} onClick={() => setSelectedQuestion(question)}>Inspect question</button></td>
       </tr>)}</tbody></table></div>{!data.questions.length && <p className="mt-3 text-gray-600">This participant has no quiz attempts.</p>}</div>
-      {selectedQuestion && <QuestionDetails key={`${selectedQuestion.attempt_id}:${selectedQuestion.question_id}`} participantId={participantId} question={selectedQuestion} options={options} />}
+      {selectedQuestion && <QuestionDetails key={`${selectedQuestion.attempt_id}:${selectedQuestion.question_id}`} participantId={participantId} question={selectedQuestion} options={options} onClose={() => setSelectedQuestion(null)} />}
     </div>}
   </section>;
 }
