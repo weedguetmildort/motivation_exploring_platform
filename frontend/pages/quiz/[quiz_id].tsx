@@ -24,6 +24,7 @@ import {
 import { getNextStep } from "../../lib/study";
 import { createReport, type ReportCategory } from "../../lib/reports";
 import { ApiError } from "../../lib/fetcher";
+import { QuestionResearch } from "../../lib/research";
 
 // Access and post-completion routing are decided by the backend
 // (GET /study/next), which is also enforced server-side in api/quiz.py. The
@@ -55,6 +56,8 @@ export default function QuizPage() {
   const [reportError, setReportError] = useState<string | null>(null);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const lastResetQuestionId = useRef<string | undefined>(undefined);
+  const researchRoot = useRef<HTMLDivElement>(null);
+  const [research, setResearch] = useState<QuestionResearch | undefined>();
 
   const quizId = rawQuizId;
 
@@ -148,6 +151,12 @@ export default function QuizPage() {
   const attempt = quizState?.attempt;
   const conversationId = quizState?.conversation_id ?? null;
   const quizCompleted = attempt?.status === "completed";
+  useEffect(() => {
+    if (!user || !conversationId || !current || !researchRoot.current) { setResearch(undefined); return; }
+    const tracker = new QuestionResearch({ userId: user.id, conversationId, questionId: current.id });
+    setResearch(tracker);
+    return tracker.start(researchRoot.current);
+  }, [user?.id, conversationId, current?.id]);
   const answerIncorrectly = Boolean(
     current && attempt?.incorrect_question_ids?.includes(current.id),
   );
@@ -249,13 +258,15 @@ export default function QuizPage() {
     }
 
     setSubmitting(true);
+    research?.emit("answer_submit_clicked", { choice_id: selectedChoice });
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
+      const state = await submitQuizAnswer(quizId, current.id, selectedChoice, research?.submissionContext());
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
+      research?.emit("answer_submit_failed", { choice_id: selectedChoice });
       handleFlowError(e, "Failed to submit answer.");
     } finally {
       setSubmitting(false);
@@ -264,7 +275,7 @@ export default function QuizPage() {
 
   return (
       //Keep at page height on normal zoom levels but overflow and expand on very short viewports or when zoomed in, so the user can always access the whole quiz interface and see the quiz completion card without needing to scroll through the chat.
-    <div data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
+    <div ref={researchRoot} data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
       <PageHeader
         className="shrink-0"
         title={
@@ -316,7 +327,7 @@ export default function QuizPage() {
             ) : (
               <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
-                  <section className="rounded-xl border bg-white shadow-sm">
+                  <section data-research-region="question" className="rounded-xl border bg-white shadow-sm">
                     {!quizState && (
                       <div className="p-4 text-sm text-gray-500">Loading quiz…</div>
                     )}
@@ -352,7 +363,7 @@ export default function QuizPage() {
 
                         <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
                           <div
-                            className={`space-y-3 transition ${
+                            data-research-region="answers" className={`space-y-3 transition ${
                               !hasAskedChat
                                 ? "pointer-events-none opacity-40 blur-[1px]"
                                 : ""
@@ -361,7 +372,7 @@ export default function QuizPage() {
                             <QuestionBox
                               choices={current.choices as Choice[]}
                               value={selectedChoice}
-                              onChange={setSelectedChoice}
+                              onChange={(choice) => { research?.emit("answer_selected", { choice_id: choice }); setSelectedChoice(choice); }}
                               className="max-w-3xl 2xl:max-w-none mx-auto"
                             />
 
@@ -375,6 +386,7 @@ export default function QuizPage() {
 
                               <button
                                 onClick={onSubmit}
+                                data-research-region="submit"
                                 disabled={!selectedChoice || submitting || chatLoading}
                                 className="btn-primary disabled:opacity-60 shrink-0"
                               >
@@ -478,7 +490,7 @@ export default function QuizPage() {
                 <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none [@media(max-height:700px)]:min-h-[420px] min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
-                      <ChatBox
+                      <ChatBox research={research}
                         quizId={quizId}
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}

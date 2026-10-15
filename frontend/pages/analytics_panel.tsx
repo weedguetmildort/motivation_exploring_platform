@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
 import PageHeader from "../components/PageHeader";
+import ResearchSummary from "../components/ResearchSummary";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,7 +36,7 @@ type ChatMessage = {
   created_at: string;
 };
 
-type Tab = "copy" | "links" | "chat";
+type Tab = "copy" | "links" | "chat" | "research";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -334,6 +335,7 @@ export default function AnalyticsPanelPage() {
   if (!user) return null;
 
   const tabs: { key: Tab; label: string }[] = [
+    { key: "research", label: "Research Overview" },
     { key: "copy",  label: "Copy Events" },
     { key: "links", label: "Link Clicks" },
     { key: "chat",  label: "Chat Interactions" },
@@ -369,6 +371,7 @@ export default function AnalyticsPanelPage() {
           {activeTab === "copy"  && <CopyEventsTab />}
           {activeTab === "links" && <LinkClicksTab />}
           {activeTab === "chat"  && <ChatInteractionsTab />}
+          {activeTab === "research" && <ResearchSummary />}
         </div>
       </div>
     </div>

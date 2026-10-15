@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import PageHeader from "../components/PageHeader";
 
-type ExportType = "participants" | "quiz-answers" | "survey-responses" | "events" | "chat-messages";
+type ExportType = "participants" | "quiz-answers" | "survey-responses" | "events" | "chat-messages" | "research-questions" | "research-variants" | "research-bundle";
 
 const EXPORTS: { key: ExportType; label: string; description: string }[] = [
   {
@@ -29,8 +29,11 @@ const EXPORTS: { key: ExportType; label: string; description: string }[] = [
   {
     key: "chat-messages",
     label: "Chat Messages",
-    description: "Assistant messages with stated choice IDs and answer-incorrectly flags.",
+    description: "Student prompts and assistant replies, request IDs, model versions, stated choices, and exploratory intent labels.",
   },
+  { key: "research-bundle", label: "Research Snapshot", description: "Versioned ZIP with question metrics, variant summaries, raw events, prompts, surveys, and frozen questions. Excludes test and reset attempts." },
+  { key: "research-questions", label: "Question Analytics", description: "Accuracy, AI agreement, timing, pointer regions, verification prompts, feature use, and data quality for each question." },
+  { key: "research-variants", label: "Variant Summaries", description: "One row per participant and quiz, with opportunity-based rates and telemetry coverage." },
 ];
 
 export default function ExportPanelPage() {
@@ -86,7 +89,7 @@ export default function ExportPanelPage() {
     <div className="min-h-screen bg-gray-50">
       <PageHeader
         title="Export Data"
-        subtitle="Download study data as CSV files"
+        subtitle="Download study data and research snapshots"
         onDashboard={() => router.push("/dashboard")}
         onLogout={onLogout}
       />
@@ -109,7 +112,7 @@ export default function ExportPanelPage() {
                   disabled={busy}
                   className="btn-primary mt-4 w-full disabled:opacity-60"
                 >
-                  {busy ? "Opening…" : "Download CSV"}
+                  {busy ? "Opening…" : key === "research-bundle" ? "Download ZIP" : "Download CSV"}
                 </button>
               </div>
             );

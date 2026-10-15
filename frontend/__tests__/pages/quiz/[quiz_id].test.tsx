@@ -515,7 +515,7 @@ describe("QuizPage ([quiz_id])", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Submit answer" }));
 
-    await waitFor(() => expect(mockSubmitQuizAnswer).toHaveBeenCalledWith("base", "q1", "b"));
+    await waitFor(() => expect(mockSubmitQuizAnswer).toHaveBeenCalledWith("base", "q1", "b", expect.objectContaining({ telemetry_page_id: expect.any(String), telemetry_elapsed_ms: expect.any(Number) })));
 
     expect(await screen.findByText("Question 2 — What is 3+3?")).toBeInTheDocument();
     expect(screen.getByText("2 of 3")).toBeInTheDocument();
