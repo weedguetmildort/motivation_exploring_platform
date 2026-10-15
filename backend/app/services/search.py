@@ -5,6 +5,8 @@ import asyncio
 from urllib.parse import urlparse
 from openai import AsyncOpenAI
 
+from ..core.llm import log_served_model
+
 _TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
@@ -307,6 +309,7 @@ async def get_chat_response_with_search(
     augmented, citations = _build_search_context(messages, curated + valid_web)
 
     resp = await client.chat.completions.create(model=model, messages=augmented)
+    log_served_model("search", model, getattr(resp, "model", None))
     reply_text = (resp.choices[0].message.content or "").strip()
     reply_text = _inject_citation_links(reply_text, citations) if citations else reply_text
 

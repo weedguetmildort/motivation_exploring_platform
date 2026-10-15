@@ -78,6 +78,66 @@ function SetChips({
   );
 }
 
+// Roster filter buckets: the four sets plus the unrestricted participants, who
+// draw from every set. Keeping "No restriction" a bucket of its own — rather
+// than a match for all four — is the same rule the "Cases by question set" row
+// counts by, so the filter and the counts always tell the same story.
+type SetFilterId = SetId | "unrestricted";
+
+const SET_FILTER_OPTIONS: { id: SetFilterId; label: string }[] = [
+  ...ALL_SETS.map((s) => ({ id: s as SetFilterId, label: s.toUpperCase() })),
+  { id: "unrestricted", label: "No restriction" },
+];
+
+function toggleSetFilter(current: SetFilterId[], id: SetFilterId): SetFilterId[] {
+  return current.includes(id)
+    ? current.filter((x) => x !== id)
+    : SET_FILTER_OPTIONS.map((o) => o.id).filter((x) => x === id || current.includes(x));
+}
+
+// An empty selection filters nothing. Otherwise a participant matches when any
+// set they draw from is selected — sets overlap, so this is an OR, not an AND.
+function matchesSetFilter(p: Participant, selected: SetFilterId[]): boolean {
+  if (selected.length === 0) return true;
+  const sets = p.quiz_sets ?? [];
+  if (sets.length === 0) return selected.includes("unrestricted");
+  return sets.some((s) => selected.includes(s));
+}
+
+// Filter chips for the roster. SetChips above looks the same but *assigns* sets
+// to a participant and has no unrestricted member, so the two stay separate.
+function SetFilterChips({
+  value,
+  onChange,
+}: {
+  value: SetFilterId[];
+  onChange: (next: SetFilterId[]) => void;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {SET_FILTER_OPTIONS.map((opt) => {
+        const on = value.includes(opt.id);
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(toggleSetFilter(value, opt.id))}
+            className={`rounded px-1.5 py-0.5 text-xs font-medium border transition ${
+              on
+                ? "bg-indigo-600 text-white border-indigo-600"
+                : "bg-white text-gray-500 border-gray-300 hover:bg-gray-50"
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+      {value.length === 0 && <span className="text-xs text-gray-400">all</span>}
+    </span>
+  );
+}
+
 const VARIANT_LABELS: Record<string, { label: string; color: string }> = {
   followup:  { label: "Follow-up",  color: "bg-purple-100 text-purple-800" },
   double:    { label: "Dual-Agent", color: "bg-blue-100 text-blue-800" },
@@ -144,6 +204,14 @@ function inJoinRange(p: Participant, from: string, to: string): boolean {
   return true;
 }
 
+// Why the roster came back empty, in the filter's own terms.
+function emptyRosterMessage(dateActive: boolean, setActive: boolean): string {
+  if (dateActive && setActive) return "No participants match these filters.";
+  if (dateActive) return "No participants in this date range.";
+  if (setActive) return "No participants in the selected question sets.";
+  return "No participants in this tab.";
+}
+
 // Enrolled / complete tallies for a slice of the roster. "Enrolled" excludes
 // anyone who declined consent (not a usable case); "complete" is those who
 // finished the full study.
@@ -189,6 +257,7 @@ export default function ParticipantsPanelPage() {
   const [defaultSets, setDefaultSets] = useState<SetId[]>([]);
   const [fromDate, setFromDate]       = useState("");
   const [toDate, setToDate]           = useState("");
+  const [setFilter, setSetFilter]     = useState<SetFilterId[]>([]);
 
   // Auth gate
   useEffect(() => {
@@ -310,12 +379,21 @@ export default function ParticipantsPanelPage() {
   }
   if (!user) return null;
 
-  // The join-date range is the outermost filter: tab counts, both case-count
-  // rows and the roster all read from `scoped`. Tabs then narrow only the list.
+  // Join date and question set are the outermost filters: tab counts, both
+  // case-count rows and the roster all read from `scoped`. Tabs then narrow
+  // only the list, so every number on the page describes the same cohort.
   const dateFilterActive = Boolean(fromDate || toDate);
-  const scoped = participants.filter((p) => inJoinRange(p, fromDate, toDate));
+  const setFilterActive = setFilter.length > 0;
+  const filtersActive = dateFilterActive || setFilterActive;
+  const scoped = participants.filter(
+    (p) => inJoinRange(p, fromDate, toDate) && matchesSetFilter(p, setFilter),
+  );
+  // Counted among those the set filter would otherwise have kept, so the note
+  // never reports rows that are hidden for a different reason.
   const undatedHidden = dateFilterActive
-    ? participants.filter((p) => joinDateKey(p) === null).length
+    ? participants.filter(
+        (p) => joinDateKey(p) === null && matchesSetFilter(p, setFilter),
+      ).length
     : 0;
 
   const filtered = scoped.filter((p) => {
@@ -376,56 +454,68 @@ export default function ParticipantsPanelPage() {
       />
 
       <div className="page-container">
-        {/* Join-date range — scopes the tabs, the case counts and the roster */}
-        <div
-          role="group"
-          aria-label="Filter by join date"
-          className="mb-4 rounded-lg border bg-white px-4 py-3 shadow-sm"
-        >
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Filter by join date
-            </span>
-            <span className="text-xs text-gray-400">empty = all dates</span>
+        {/* Filters — scope the tabs, the case counts and the roster */}
+        <div className="mb-4 space-y-3 rounded-lg border bg-white px-4 py-3 shadow-sm">
+          <div role="group" aria-label="Filter by join date">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Filter by join date
+              </span>
+              <span className="text-xs text-gray-400">empty = all dates</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-1.5 text-sm text-gray-600">
+                From
+                <input
+                  type="date"
+                  value={fromDate}
+                  max={toDate || undefined}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="rounded border px-2 py-1 text-sm text-gray-700"
+                />
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-gray-600">
+                To
+                <input
+                  type="date"
+                  value={toDate}
+                  min={fromDate || undefined}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="rounded border px-2 py-1 text-sm text-gray-700"
+                />
+              </label>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-1.5 text-sm text-gray-600">
-              From
-              <input
-                type="date"
-                value={fromDate}
-                max={toDate || undefined}
-                onChange={(e) => setFromDate(e.target.value)}
-                className="rounded border px-2 py-1 text-sm text-gray-700"
-              />
-            </label>
-            <label className="flex items-center gap-1.5 text-sm text-gray-600">
-              To
-              <input
-                type="date"
-                value={toDate}
-                min={fromDate || undefined}
-                onChange={(e) => setToDate(e.target.value)}
-                className="rounded border px-2 py-1 text-sm text-gray-700"
-              />
-            </label>
-            {dateFilterActive && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => { setFromDate(""); setToDate(""); }}
-                  className="rounded-full border px-3 py-1 text-sm font-medium text-gray-500 hover:bg-gray-50"
-                >
-                  Clear
-                </button>
-                <span className="text-xs text-gray-500">
-                  Showing {scoped.length} of {participants.length}
-                </span>
-              </>
-            )}
+
+          <div role="group" aria-label="Filter by question set" className="border-t pt-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Filter by question set
+              </span>
+              <span className="text-xs text-gray-400">
+                none selected = every set
+              </span>
+            </div>
+            <SetFilterChips value={setFilter} onChange={setSetFilter} />
           </div>
+
+          {filtersActive && (
+            <div className="flex flex-wrap items-center gap-3 border-t pt-3">
+              <button
+                type="button"
+                onClick={() => { setFromDate(""); setToDate(""); setSetFilter([]); }}
+                className="rounded-full border px-3 py-1 text-sm font-medium text-gray-500 hover:bg-gray-50"
+              >
+                Clear
+              </button>
+              <span className="text-xs text-gray-500">
+                Showing {scoped.length} of {participants.length}
+              </span>
+            </div>
+          )}
+
           {undatedHidden > 0 && (
-            <div className="mt-2 text-xs text-gray-400">
+            <div className="text-xs text-gray-400">
               {undatedHidden} participant{undatedHidden !== 1 ? "s" : ""} hidden — no join date recorded.
             </div>
           )}
@@ -559,9 +649,7 @@ export default function ParticipantsPanelPage() {
 
         {!loading && !error && filtered.length === 0 && (
           <p className="text-gray-500">
-            {dateFilterActive
-              ? "No participants in this date range."
-              : "No participants in this tab."}
+            {emptyRosterMessage(dateFilterActive, setFilterActive)}
           </p>
         )}
 

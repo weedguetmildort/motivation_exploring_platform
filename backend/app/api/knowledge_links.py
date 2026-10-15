@@ -1,9 +1,7 @@
 # backend/app/api/knowledge_links.py
-import os
 import threading
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request, Depends, Query
-from openai import OpenAI
 
 from ..schemas.knowledge_link import (
     KnowledgeLinkCreate,
@@ -14,6 +12,7 @@ from ..schemas.knowledge_link import (
 )
 from ..schemas.user import UserPublic
 from ..api.auth import get_current_user
+from ..core.llm import get_sync_llm_client
 from ..services.knowledge_links import (
     get_knowledge_links_collection,
     ensure_indexes,
@@ -162,10 +161,7 @@ def explore_knowledge_link(
     excerpt, and relevance verdict) WITHOUT saving anything. The admin reviews and
     calls /explore/apply to commit."""
     links = get_knowledge_links_collection(request.app.state.db)
-    openai_client = OpenAI(
-        api_key=os.getenv("UF_OPENAI_API_KEY"),
-        base_url=os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu"),
-    )
+    openai_client = get_sync_llm_client()
     result = explore_link(
         links,
         link_id,
@@ -188,10 +184,7 @@ def apply_explore_knowledge_link(
     """Save the admin-confirmed title/description, re-run the relevance judge, and
     return the updated link state."""
     links = get_knowledge_links_collection(request.app.state.db)
-    openai_client = OpenAI(
-        api_key=os.getenv("UF_OPENAI_API_KEY"),
-        base_url=os.getenv("UF_OPENAI_BASE_URL", "https://api.ai.it.ufl.edu"),
-    )
+    openai_client = get_sync_llm_client()
     result = apply_explore(
         links,
         link_id,

@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import chat as chat_module
+from app.core.llm import DEFAULT_MODEL
 from app.api.auth import get_current_user
 from app.schemas.user import UserPublic
 from app.schemas.question import QuestionChoice
@@ -25,8 +26,11 @@ from app.schemas.question import QuestionChoice
 # ── Fake OpenAI streaming helpers ────────────────────────────────────────────
 
 class _FakeChunk:
-    def __init__(self, content):
+    def __init__(self, content, model=None):
         self.choices = [SimpleNamespace(delta=SimpleNamespace(content=content))]
+        # Real chunks echo the model that served them; None mirrors a client
+        # that does not report one, which the logger must stay quiet about.
+        self.model = model
 
 
 class _FakeStream:
@@ -36,20 +40,21 @@ class _FakeStream:
     iterated independently by concurrent consumers (e.g. /chat/double).
     """
 
-    def __init__(self, tokens):
+    def __init__(self, tokens, model=None):
         self._tokens = tokens
+        self._model = model
 
     def __aiter__(self):
         return self._gen()
 
     async def _gen(self):
         for t in self._tokens:
-            yield _FakeChunk(t)
+            yield _FakeChunk(t, self._model)
 
 
-def _mock_create(tokens):
+def _mock_create(tokens, model=None):
     """AsyncMock for _client.chat.completions.create returning a fixed stream."""
-    return AsyncMock(return_value=_FakeStream(tokens))
+    return AsyncMock(return_value=_FakeStream(tokens, model))
 
 
 def _mock_create_sequence(token_lists):
@@ -1150,3 +1155,77 @@ class TestLoadUserHistory:
         roles = [m["role"] for m in body["messages"]]
         assert roles.count("user") == 5
         assert roles.count("assistant") == 5
+
+
+# ── _stream_ai: model resolution and served-model logging ─────────────────────
+
+class TestStreamAiServedModel:
+    def _collect(self):
+        async def collect():
+            return [d async for d in chat_module._stream_ai([{"role": "user", "content": "hi"}])]
+
+        return asyncio.run(collect())
+
+    def test_requests_the_configured_model(self, monkeypatch):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        create = _mock_create(["hi"])
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", create)
+
+        self._collect()
+
+        assert create.await_args.kwargs["model"] == "gpt-4.1"
+
+    def test_falls_back_to_the_shared_default(self, monkeypatch):
+        # Previously this path passed model=None when the env var was unset.
+        monkeypatch.delenv("UF_OPENAI_API_MODEL", raising=False)
+        create = _mock_create(["hi"])
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", create)
+
+        self._collect()
+
+        assert create.await_args.kwargs["model"] == DEFAULT_MODEL
+
+    def test_logs_the_served_model_once_per_stream(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        monkeypatch.setattr(
+            chat_module._client.chat.completions,
+            "create",
+            _mock_create(["a", "b", "c"], model="gpt-4.1"),
+        )
+
+        self._collect()
+
+        out = capsys.readouterr().out
+        assert out.count("[llm] chat.stream") == 1
+        assert "gateway served 'gpt-4.1'" in out
+
+    def test_warns_when_the_gateway_substitutes(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        monkeypatch.setattr(
+            chat_module._client.chat.completions,
+            "create",
+            _mock_create(["a"], model="gpt-4o-mini"),
+        )
+
+        self._collect()
+
+        out = capsys.readouterr().out
+        assert "requested 'gpt-4.1'" in out
+        assert "served 'gpt-4o-mini'" in out
+        assert "remapped" in out
+
+    def test_silent_when_chunks_carry_no_model(self, monkeypatch, capsys):
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _mock_create(["a"]))
+
+        self._collect()
+
+        assert "[llm]" not in capsys.readouterr().out
+
+    def test_still_yields_tokens_while_logging(self, monkeypatch):
+        monkeypatch.setattr(
+            chat_module._client.chat.completions,
+            "create",
+            _mock_create(["Hello", "", None, " world"], model="gpt-4.1"),
+        )
+
+        assert self._collect() == ["Hello", " world"]

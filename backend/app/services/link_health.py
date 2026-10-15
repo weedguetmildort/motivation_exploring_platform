@@ -1,6 +1,5 @@
 # backend/app/services/link_health.py
 import asyncio
-import os
 import re
 import time
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ import httpx
 from openai import OpenAI
 
 from .allowlist import domain_is_allowed, load_allowlist_cache
+from ..core.llm import get_llm_model, log_served_model
 
 PREDEFINED_TAGS = [
     "Statistical Inference & Descriptive Statistics",
@@ -214,13 +214,14 @@ def summarize_page_content(content: str, title: str, openai_client) -> str:
             "as an educational resource summary. Focus on the specific topic covered, not "
             f"the website itself. Page title: '{title}'.\n\nPage content:\n{content[:3000]}"
         )
-        model = os.getenv("UF_OPENAI_API_MODEL", "gpt-4o-mini")
+        model = get_llm_model()
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=120,
             temperature=0.3,
         )
+        log_served_model("link_health.summarize", model, getattr(resp, "model", None))
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         print(f"[link_health] summarize_page_content error: {e}")
@@ -294,13 +295,14 @@ def llm_judges_relevant(
             f"Resource title: '{title}'. Description: '{description}'. "
             "Reply with only YES or NO."
         )
-        model = os.getenv("UF_OPENAI_API_MODEL", "gpt-4o-mini")
+        model = get_llm_model()
         resp = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=5,
             temperature=0,
         )
+        log_served_model("link_health.relevance", model, getattr(resp, "model", None))
         answer = (resp.choices[0].message.content or "").strip().upper()
         return answer.startswith("YES")
     except Exception as e:

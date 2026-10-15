@@ -6,6 +6,7 @@ from bson import ObjectId
 import httpx
 import pytest
 
+from app.core.llm import DEFAULT_MODEL
 from app.services.link_health import (
     fetch_with_retries,
     fetch_page_metadata,
@@ -661,3 +662,89 @@ class TestRunHealthCheckTransitions:
         assert result["checked"] == 3
         assert result["degraded"] == 2
         assert result["recovered"] == 1
+
+
+# ── model resolution and served-model logging ─────────────────────────────────
+
+def _llm_client(content, served_model=None):
+    """Mock OpenAI client returning `content`, optionally echoing a served model."""
+    client = MagicMock()
+    choice = MagicMock()
+    choice.message.content = content
+    resp = MagicMock(choices=[choice])
+    if served_model is not None:
+        resp.model = served_model
+    client.chat.completions.create.return_value = resp
+    return client
+
+
+class TestSummarizeServedModel:
+    def test_requests_the_configured_model(self, monkeypatch):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _llm_client("A summary.")
+
+        summarize_page_content("Some article text...", "Title", client)
+
+        assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4.1"
+
+    def test_falls_back_to_the_shared_default(self, monkeypatch):
+        # This site used to carry its own "gpt-4o-mini" literal, which the
+        # gateway no longer serves.
+        monkeypatch.delenv("UF_OPENAI_API_MODEL", raising=False)
+        client = _llm_client("A summary.")
+
+        summarize_page_content("Some article text...", "Title", client)
+
+        assert client.chat.completions.create.call_args.kwargs["model"] == DEFAULT_MODEL
+
+    def test_logs_the_served_model(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _llm_client("A summary.", served_model="gpt-4.1")
+
+        summarize_page_content("Some article text...", "Title", client)
+
+        assert "[llm] link_health.summarize: gateway served 'gpt-4.1'" in capsys.readouterr().out
+
+
+class TestRelevanceServedModel:
+    def test_requests_the_configured_model(self, monkeypatch):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _llm_client("YES")
+
+        llm_judges_relevant("Basic Probability", "Title", "Description", client)
+
+        assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4.1"
+
+    def test_falls_back_to_the_shared_default(self, monkeypatch):
+        monkeypatch.delenv("UF_OPENAI_API_MODEL", raising=False)
+        client = _llm_client("YES")
+
+        llm_judges_relevant("Basic Probability", "Title", "Description", client)
+
+        assert client.chat.completions.create.call_args.kwargs["model"] == DEFAULT_MODEL
+
+    def test_logs_the_served_model(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _llm_client("YES", served_model="gpt-4.1")
+
+        llm_judges_relevant("Basic Probability", "Title", "Description", client)
+
+        assert "[llm] link_health.relevance: gateway served 'gpt-4.1'" in capsys.readouterr().out
+
+    def test_warns_when_the_gateway_substitutes(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _llm_client("YES", served_model="gpt-4o-mini")
+
+        llm_judges_relevant("Basic Probability", "Title", "Description", client)
+
+        out = capsys.readouterr().out
+        assert "requested 'gpt-4.1'" in out
+        assert "remapped" in out
+
+    def test_failure_path_logs_nothing(self, capsys):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = Exception("API error")
+
+        # Fails open (relevant) and says nothing about a model it never got.
+        assert llm_judges_relevant("Basic Probability", "T", "D", client) is True
+        assert "[llm]" not in capsys.readouterr().out

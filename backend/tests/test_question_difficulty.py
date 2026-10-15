@@ -3,11 +3,16 @@
 from unittest.mock import MagicMock
 from bson import ObjectId
 
+from app.core.llm import DEFAULT_MODEL
 from app.services.question_difficulty import llm_judge_difficulty, run_difficulty_judging
 
 
-def _openai_returning(content):
-    """Build a mock OpenAI client whose chat completion returns `content`."""
+def _openai_returning(content, served_model=None):
+    """Build a mock OpenAI client whose chat completion returns `content`.
+
+    `served_model` sets the `model` field the fake gateway echoes back; left
+    unset it stays a MagicMock attribute, which the logger ignores.
+    """
     client = MagicMock()
     msg = MagicMock()
     msg.content = content
@@ -15,6 +20,8 @@ def _openai_returning(content):
     choice.message = msg
     resp = MagicMock()
     resp.choices = [choice]
+    if served_model is not None:
+        resp.model = served_model
     client.chat.completions.create.return_value = resp
     return client
 
@@ -83,3 +90,48 @@ class TestRunDifficultyJudging:
         assert result == {"judged": 0, "skipped": 0}
         mock_col.update_one.assert_not_called()
         client.chat.completions.create.assert_not_called()
+
+
+# ── model resolution and served-model logging ─────────────────────────────────
+
+class TestDifficultyServedModel:
+    def test_requests_the_configured_model(self, monkeypatch):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _openai_returning("EASY")
+
+        llm_judge_difficulty("Stats", "Q?", [], client)
+
+        assert client.chat.completions.create.call_args.kwargs["model"] == "gpt-4.1"
+
+    def test_falls_back_to_the_shared_default(self, monkeypatch):
+        monkeypatch.delenv("UF_OPENAI_API_MODEL", raising=False)
+        client = _openai_returning("EASY")
+
+        llm_judge_difficulty("Stats", "Q?", [], client)
+
+        assert client.chat.completions.create.call_args.kwargs["model"] == DEFAULT_MODEL
+
+    def test_logs_the_served_model(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _openai_returning("EASY", served_model="gpt-4.1")
+
+        llm_judge_difficulty("Stats", "Q?", [], client)
+
+        assert "[llm] question_difficulty: gateway served 'gpt-4.1'" in capsys.readouterr().out
+
+    def test_warns_when_the_gateway_substitutes(self, monkeypatch, capsys):
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", "gpt-4.1")
+        client = _openai_returning("EASY", served_model="gpt-4o-mini")
+
+        llm_judge_difficulty("Stats", "Q?", [], client)
+
+        out = capsys.readouterr().out
+        assert "requested 'gpt-4.1'" in out
+        assert "remapped" in out
+
+    def test_failure_path_logs_nothing(self, capsys):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError("upstream down")
+
+        assert llm_judge_difficulty("Stats", "Q?", [], client) is None
+        assert "[llm]" not in capsys.readouterr().out
