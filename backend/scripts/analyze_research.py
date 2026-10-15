@@ -75,7 +75,7 @@ def write_csv(path, records):
 def analyze(snapshot, output, seed=2026, repetitions=2000):
     with zipfile.ZipFile(snapshot) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("analysis_version") not in ("1.0", "1.1"):
+        if manifest.get("analysis_version") not in ("1.0", "1.1", "1.2"):
             raise ValueError("Unsupported analysis version; use the matching analysis script")
         questions = json.loads(archive.read("questions.json"))
         variants = json.loads(archive.read("variants.json"))

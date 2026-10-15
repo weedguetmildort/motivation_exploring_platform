@@ -11,8 +11,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from statistics import median
 from .quiz_grading import answer_correctness
+from .research_conversations import build_packet, conversation_features
 
-ANALYSIS_VERSION = "1.1"
+ANALYSIS_VERSION = "1.2"
 REGIONS = ("question", "answers", "submit", "chat", "chat_input", "suggestions", "reference", "agent_A", "agent_B", "other")
 INTENTS = {
     "explanation": r"\b(why|how|explain|reasoning|derive|derivation|steps?)\b",
@@ -64,7 +65,7 @@ def research_attempts(db, include_tests=False, include_archived=False, participa
         a.get("is_test") or users.get(a["user_id"], {}).get("is_admin") or users.get(a["user_id"], {}).get("is_test"))]
 
 
-def research_data(db, include_tests=False, include_archived=False, participant_ids=None, *, attempts=None):
+def research_data(db, include_tests=False, include_archived=False, participant_ids=None, *, attempts=None, include_packets=False):
     if participant_ids is not None and not participant_ids:
         return []
     query = {"user_id": {"$in": list(participant_ids)}} if participant_ids is not None else {}
@@ -238,6 +239,10 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                 ("multiple_pages", row["question_page_count"] > 1),
                 ("suspended_timer", bool(row["unobserved_timer_ms"])),
                 ("unknown_ai_recommendation", bool(messages) and not recommendations)) if missing]
+            packet = build_packet(row, snapshot, indexes["messages"][key], indexes["ai_requests"][key], before)
+            row.update(conversation_features(packet))
+            if include_packets:
+                row["_conversation_packet"] = packet
             rows.append(row)
     reports = list(db["reports"].find(query))
     for row in rows:

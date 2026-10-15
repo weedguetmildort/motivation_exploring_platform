@@ -64,6 +64,23 @@ METRICS.extend([
     definition("unresolved_recommendations", "Unresolved AI recommendations", "Data quality", "count", "number", field="ai_recommendations_unresolved", eligibility="tracked"),
     definition("reported_issue", "Questions with a reported issue", "Data quality"),
 ])
+for field, label in {
+    "student_turns": "Student turns", "student_words": "Student words", "repeated_prompts": "Repeated prompts",
+    "reasoning_turns_heuristic": "Reasoning statements (keywords)", "specific_challenges_heuristic": "Specific challenges (keywords)",
+    "answer_only_turns_heuristic": "Answer-only requests (keywords)", "mean_ai_response_words": "Saved AI response length",
+    "ai_certainty_markers_heuristic": "AI certainty markers (keywords)", "ai_recommendation_changes": "AI answer changes",
+    "ai_wrong_to_correct_transitions": "AI wrong-to-correct changes", "ai_correct_to_wrong_transitions": "AI correct-to-wrong changes",
+    "verification_suggestions_displayed_heuristic": "Verification suggestions shown (keywords)",
+    "verification_suggestions_clicked_heuristic": "Verification suggestions clicked (keywords)",
+}.items():
+    METRICS.append(definition(field, label, "Conversation", "count", "number"))
+for field, label in {
+    "challenge_after_wrong_ai_heuristic": "Challenge after wrong AI (keywords)",
+    "ai_repair_after_challenge_heuristic": "AI answer corrected after challenge (keywords)",
+    "correct_after_ai_repair": "Correct submission after AI repair", "disagreement_followup_heuristic": "Disagreement follow-up (keywords)",
+    "agents_converged": "Initially disagreeing agents converged",
+}.items():
+    METRICS.append(definition(field, label, "Conversation"))
 
 
 def demographic_values(user, key):

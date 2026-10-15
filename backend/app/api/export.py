@@ -269,12 +269,13 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
     """Pseudonymous, versioned snapshot with raw records for reproducible re-analysis."""
     db = request.app.state.db
     selected_attempts = research_attempts(db, include_tests, include_archived)
-    questions = research_data(db, include_tests, include_archived, attempts=selected_attempts)
+    questions = research_data(db, include_tests, include_archived, attempts=selected_attempts, include_packets=True)
+    packets = [row.pop("_conversation_packet") for row in questions]
     variants = variant_summaries(questions)
     participant_ids = {str(u["_id"]) for u in db["users"].find({}) if include_tests or not (u.get("is_admin") or u.get("is_test"))}
     conversations = {attempt.get("conversation_id") for attempt in selected_attempts}
     attempts = {str(attempt["_id"]) for attempt in selected_attempts}
-    files = {"questions": questions, "variants": variants}
+    files = {"questions": questions, "variants": variants, "conversation_packets": packets}
     for collection in ("research_events", "messages", "ai_requests", "quiz_attempts", "quiz_attempt_archive", "survey_responses", "copy_events", "link_clicks", "reports"):
         records = []
         for doc in db[collection].find({}):
@@ -287,7 +288,7 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
             records.append({key: value for key, value in doc.items() if key != "user_email"})
         files[collection] = records
     files["participants"] = [{"participant_id": str(u["_id"]), **{key: u.get(key) for key in (
-        "study_flow_version", "variant_sequence", "step_order", "completed_steps", "quiz_set_assignment",
+        "study_flow_version", "variant_sequence", "assigned_var", "step_order", "completed_steps", "quiz_set_assignment",
         "demographics", "created_at", "last_active_at", "consent", "consent_agreed_at")}}
         for u in db["users"].find({}) if str(u["_id"]) in participant_ids]
     files["survey_items_at_export"] = list(db["survey_items"].find({}))
@@ -299,6 +300,7 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
                     "pointer_ms": "Visible, focused time with pointer observed in a named region; not gaze or reading time.",
                     "active_ms": "Visible, focused time within 60 seconds of an interaction; not a measure of cognition.",
                     "intent_labels": "Exploratory keyword labels, requiring human validation.",
+                    "conversation_packets": "Timestamped turns at or before submission, frozen question, and displayed suggestions. Viewport-confirmed AI advice is distinguished from persisted replies. Free text may identify a participant.",
                     "missing_values": "Null means unobserved or ineligible; do not replace with zero.",
                     "privacy": "Direct identity fields omitted; free-text responses can still contain identifying information."}}
     output = io.BytesIO()
