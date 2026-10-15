@@ -159,3 +159,62 @@ def test_individual_detail_and_interaction_pagination(dashboard_study):
 
 def test_nan_age_does_not_pass_range_filters():
     assert filter_users([{"_id": ObjectId(), "demographics": {"age": "nan"}}], {}, age_min=18) == []
+
+
+def test_four_completed_records_can_have_eleven_answers_but_only_ten_grades(dashboard_study):
+    db, client, people, _ = dashboard_study
+    db.quiz_attempts.delete_many({})
+    now = datetime(2026, 1, 1)
+    for quiz, assigned, answered, correct, frozen in [
+        ("base", 7, 0, 0, False), ("links", 7, 1, 0, False),
+        ("followup", 5, 5, 2, True), ("double", 5, 5, 1, True),
+    ]:
+        qids = [str(ObjectId()) for _ in range(assigned)]
+        answers = [{"question_id": qid, "choice_id": "a", "shown_at": now, "answered_at": now,
+                    **({"marked_correct": index < correct} if frozen else {})}
+                   for index, qid in enumerate(qids[:answered])]
+        if not answered:
+            answers = [{"question_id": qids[0], "shown_at": now, "answered_at": None}]
+        db.quiz_attempts.insert_one({"user_id": people["Alice"], "quiz_id": quiz, "status": "completed",
+            "conversation_id": quiz, "question_order": qids, "answers": answers,
+            "question_snapshots": {qid: {"correct_choice_id": "a"} for qid in qids} if frozen else {}})
+        if frozen:
+            for qid in qids:
+                db.research_events.insert_one({"user_id": people["Alice"], "conversation_id": quiz, "question_id": qid,
+                    "event_type": "activity_interval", "page_id": qid, "sequence": 0, "elapsed_ms": 9000,
+                    "data": {"duration_ms": 9000, "active_ms": 9000}})
+    data = client.get("/research/results", params={"search": people["Alice"]}).json()
+    overall = data["overall"]
+    assert overall["participant_count"] == 1 and overall["attempt_count"] == 4
+    assert overall["completed_attempt_count"] == 4 and overall["incomplete_completed_attempt_count"] == 2
+    assert overall["questions_assigned"] == 24 and overall["questions_shown"] == 12
+    assert overall["questions_answered"] == 11 and overall["questions_graded"] == 10
+    assert overall["answers_missing_grade"] == 1
+    assert overall["metrics"]["accuracy"]["value"] == .3
+    assert overall["metrics"]["accuracy"]["denominator"] == 10
+    assert overall["metrics"]["telemetry_coverage"]["denominator"] == 12
+    assert overall["metrics"]["telemetry_coverage"]["value"] == 10 / 12
+    assert overall["metrics"]["active_ms"]["value"] == 9000
+    variants = {v["quiz_id"]: v for v in data["variants"]}
+    assert variants["base"]["attempt_count"] == 1 and variants["base"]["questions_answered"] == 0
+    assert variants["links"]["questions_graded"] == 0 and variants["links"]["metrics"]["accuracy"]["value"] is None
+    assert variants["followup"]["metrics"]["accuracy"]["value"] == .4
+    assert variants["double"]["metrics"]["accuracy"]["value"] == .2
+    detail = client.get(f'/research/participants/{people["Alice"]}').json()
+    assert detail["overall"] == overall
+    selected = client.get("/research/results", params={"search": people["Alice"], "quiz_id": "followup"}).json()["overall"]
+    assert selected["attempt_count"] == 1 and selected["questions_graded"] == 5
+
+
+def test_empty_completed_attempt_is_counted_without_fabricating_question_rows(dashboard_study):
+    db, client, people, _ = dashboard_study
+    db.quiz_attempts.delete_many({})
+    db.quiz_attempts.insert_one({"user_id": people["Alice"], "quiz_id": "base", "status": "completed", "question_order": [], "answers": []})
+    data = client.get("/research/results", params={"search": people["Alice"]}).json()
+    overall = data["overall"]
+    assert overall["attempt_count"] == 1 and overall["participant_count"] == 1
+    assert overall["incomplete_completed_attempt_count"] == 1
+    assert overall["questions_answered"] == 0 and overall["metrics"]["accuracy"]["value"] is None
+    assert data["participants"][0]["attempt_count"] == 1
+    assert data["variants"][0]["quiz_id"] == "base"
+    assert client.get(f'/research/participants/{people["Alice"]}').json()["overall"] == overall

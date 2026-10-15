@@ -3,7 +3,7 @@ from collections import defaultdict
 from statistics import mean
 from math import isfinite
 
-from .research_analytics import REGIONS, INTENTS, research_data, iso
+from .research_analytics import REGIONS, INTENTS, research_data, research_attempts, iso
 
 DEMOGRAPHICS = {
     "gender": "Gender", "academic_level": "Academic level", "year": "Year in program",
@@ -106,13 +106,13 @@ def filter_users(users, filters, search="", age_min=None, age_max=None):
 
 def filter_rows(rows, quiz_id=None, status="completed", version=None, question_set=None, variant_position=None):
     return [r for r in rows if (not quiz_id or r["quiz_id"] == quiz_id)
-            and (status == "all" or r["attempt_status"] == status)
-            and (version is None or r["study_flow_version"] == version)
-            and (not question_set or r["question_set"] == question_set)
-            and (variant_position is None or r["variant_position"] == variant_position)]
+            and (status == "all" or r.get("attempt_status", r.get("status")) == status)
+            and (version is None or r.get("study_flow_version") == version)
+            and (not question_set or r.get("question_set") == question_set)
+            and (variant_position is None or r.get("variant_position") == variant_position)]
 
 
-def aggregate(rows):
+def aggregate(rows, attempts=None):
     metrics = {}
     for spec in METRICS:
         by_person = defaultdict(list)
@@ -142,13 +142,31 @@ def aggregate(rows):
             "denominator": denominator if values and spec["kind"] != "number" else None,
             "pooled_value": numerator / denominator if denominator else None,
         }
-    return {"participant_count": len({r["participant_id"] for r in rows}), "questions_assigned": len(rows),
-            "questions_answered": sum(r["answered"] for r in rows), "metrics": metrics}
+    by_attempt = defaultdict(list)
+    for row in rows:
+        if row.get("attempt_id"):
+            by_attempt[row["attempt_id"]].append(row)
+    selected_attempts = (attempts if attempts is not None else [
+        {"_id": aid, "user_id": group[0]["participant_id"], "status": group[0]["attempt_status"]}
+        for aid, group in by_attempt.items()
+    ])
+    answered = sum(r["answered"] for r in rows)
+    graded = sum(r["answered"] and isinstance(r.get("correct"), bool) for r in rows)
+    return {"participant_count": len({a["user_id"] for a in selected_attempts} | {r["participant_id"] for r in rows}),
+            "attempt_count": len(selected_attempts),
+            "completed_attempt_count": sum(a.get("status") == "completed" for a in selected_attempts),
+            "incomplete_completed_attempt_count": sum(a.get("status") == "completed" and (
+                not by_attempt[str(a["_id"])] or any(not r["answered"] for r in by_attempt[str(a["_id"])])
+            ) for a in selected_attempts),
+            "questions_assigned": len(rows), "questions_shown": sum(r["was_shown"] for r in rows),
+            "questions_answered": answered, "questions_graded": graded,
+            "answers_missing_grade": answered - graded, "metrics": metrics}
 
 
-def comparisons(rows):
-    variants = sorted({r["quiz_id"] for r in rows}, key=lambda q: (q != "base", q))
-    return [{"quiz_id": variant, **aggregate([r for r in rows if r["quiz_id"] == variant])} for variant in variants]
+def comparisons(rows, attempts=None):
+    variants = sorted({r["quiz_id"] for r in rows} | {a["quiz_id"] for a in (attempts or [])}, key=lambda q: (q != "base", q))
+    return [{"quiz_id": variant, **aggregate([r for r in rows if r["quiz_id"] == variant],
+             [a for a in attempts if a["quiz_id"] == variant] if attempts is not None else None)} for variant in variants]
 
 
 def dashboard(db, *, filters, search="", age_min=None, age_max=None, include_tests=False, include_archived=False,
@@ -167,9 +185,13 @@ def dashboard(db, *, filters, search="", age_min=None, age_max=None, include_tes
         facets.append({"key": key, "label": label, "options": [{"value": v, "count": count} for v, count in sorted(counts.items(), key=lambda item: item[0].casefold())], "missing_count": missing})
     selected = filter_users(users, filters, search, age_min, age_max)
     ids = {str(u["_id"]) for u in selected}
-    all_rows = research_data(db, include_tests, include_archived, participant_ids=ids)
-    rows = filter_rows(all_rows, quiz_id, status, version, question_set, variant_position)
+    attempts = filter_rows(research_attempts(db, include_tests, include_archived, participant_ids=ids,
+                           users={str(u["_id"]): u for u in selected}), quiz_id, status, version, question_set, variant_position)
+    rows = research_data(db, include_tests, include_archived, participant_ids=ids, attempts=attempts)
     by_person = defaultdict(list)
+    attempts_by_person = defaultdict(list)
+    for attempt in attempts:
+        attempts_by_person[attempt["user_id"]].append(attempt)
     for row in rows:
         by_person[row["participant_id"]].append(row)
     # An account with no selected attempts remains searchable and is explicitly
@@ -178,9 +200,10 @@ def dashboard(db, *, filters, search="", age_min=None, age_max=None, include_tes
     for user in sorted(selected, key=lambda u: (profile(u)["name"].casefold(), u.get("email", ""), str(u["_id"]))):
         person = profile(user)
         person_rows = by_person[person["participant_id"]]
-        score = aggregate(person_rows)
+        score = aggregate(person_rows, attempts_by_person[person["participant_id"]])
         directory.append({**person, "questions_answered": score["questions_answered"],
-                          "attempt_count": len({r["attempt_id"] for r in person_rows}),
+                          "attempt_count": score["attempt_count"], "questions_graded": score["questions_graded"],
+                          "answers_missing_grade": score["answers_missing_grade"],
                           "accuracy": score["metrics"]["accuracy"]["value"],
                           "telemetry_questions": sum(r["telemetry_available"] for r in person_rows)})
     total_pages = (len(directory) + page_size - 1) // page_size
@@ -194,7 +217,7 @@ def dashboard(db, *, filters, search="", age_min=None, age_max=None, include_tes
     versions.update(a["study_flow_version"] for a in choices if isinstance(a.get("study_flow_version"), int))
     return {"metric_definitions": METRICS, "facets": facets,
             "study_versions": sorted(versions), "quiz_ids": sorted({a["quiz_id"] for a in choices}),
-            "matched_accounts": len(selected), "overall": aggregate(rows), "variants": comparisons(rows),
+            "matched_accounts": len(selected), "overall": aggregate(rows, attempts), "variants": comparisons(rows, attempts),
             "participants": directory[start:start + page_size], "page": page, "page_size": page_size,
             "total_pages": total_pages,
             "averaging": "Each participant contributes equally. Missing or ineligible measurements are excluded per metric."}

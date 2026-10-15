@@ -51,16 +51,26 @@ def milliseconds(start, end):
     return max(0, (b - a) * 1000) if a is not None and b is not None else None
 
 
-def research_data(db, include_tests=False, include_archived=False, participant_ids=None):
+def research_attempts(db, include_tests=False, include_archived=False, participant_ids=None, *, users=None):
+    if participant_ids is not None and not participant_ids:
+        return []
+    query = {"user_id": {"$in": list(participant_ids)}} if participant_ids is not None else {}
+    if users is None:
+        users = {str(u["_id"]): u for u in db["users"].find({})}
+    attempts = list(db["quiz_attempts"].find(query))
+    if include_archived:
+        attempts += list(db["quiz_attempt_archive"].find(query))
+    return [a for a in attempts if include_tests or not (
+        a.get("is_test") or users.get(a["user_id"], {}).get("is_admin") or users.get(a["user_id"], {}).get("is_test"))]
+
+
+def research_data(db, include_tests=False, include_archived=False, participant_ids=None, *, attempts=None):
     if participant_ids is not None and not participant_ids:
         return []
     query = {"user_id": {"$in": list(participant_ids)}} if participant_ids is not None else {}
     users = {str(u["_id"]): u for u in db["users"].find({})}
-    attempts = list(db["quiz_attempts"].find(query))
-    if include_archived:
-        attempts += list(db["quiz_attempt_archive"].find(query))
-    attempts = [a for a in attempts if include_tests or not (
-        a.get("is_test") or users.get(a["user_id"], {}).get("is_admin") or users.get(a["user_id"], {}).get("is_test"))]
+    if attempts is None:
+        attempts = research_attempts(db, include_tests, include_archived, participant_ids, users=users)
     # One read per collection, then keyed joins; no per-question database queries.
     indexes = {}
     for collection in ("research_events", "messages", "ai_requests", "copy_events", "reports"):

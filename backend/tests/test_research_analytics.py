@@ -239,6 +239,15 @@ def test_offline_snapshot_analysis_is_reproducible(study, tmp_path):
     assert (tmp_path / "first" / "questions.csv").exists()
 
 
+def test_snapshot_retains_empty_attempts_for_auditing(study):
+    db, client, user, _, _, _ = study
+    client.app.dependency_overrides[get_current_user] = lambda: user.model_copy(update={"is_admin": True})
+    db.quiz_attempts.update_one({}, {"$set": {"question_order": [], "answers": []}})
+    with zipfile.ZipFile(io.BytesIO(client.get("/export/research-bundle").content)) as archive:
+        assert json.loads(archive.read("questions.json")) == []
+        assert len(json.loads(archive.read("quiz_attempts.json"))) == 1
+
+
 def test_interrupted_stream_keeps_the_prompt_and_partial_reply(study):
     import asyncio
     from app.services.research_chat import begin_request, track_stream

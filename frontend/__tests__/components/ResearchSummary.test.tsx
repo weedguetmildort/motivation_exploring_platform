@@ -18,6 +18,25 @@ test("distinguishes unavailable rates from zero and shows contributing counts", 
   expect(screen.getByText(/does not establish that AI changed/)).toBeInTheDocument();
 });
 
+test("separates completed quiz records from submitted and graded answers", async () => {
+  const overall = { ...results.overall, participant_count: 1, attempt_count: 4, completed_attempt_count: 4,
+    questions_assigned: 24, questions_shown: 12, questions_answered: 11, questions_graded: 10,
+    answers_missing_grade: 1, incomplete_completed_attempt_count: 2,
+    metrics: { ...results.overall.metrics, accuracy: { value: .3, participant_count: 1, observation_count: 10,
+      numerator: 3, denominator: 10, pooled_value: .3 } } };
+  (apiFetch as jest.Mock).mockResolvedValue({ ...results, overall, variants: [] });
+  render(<ResearchSummary />);
+  expect((await screen.findAllByText("30.0%")).length).toBe(2);
+  expect(screen.getAllByText("1 person · 10 graded answers").length).toBe(2);
+  const row = screen.getByRole("row", { name: /All selected quizzes/ });
+  expect(within(row).getByText("1 / 4")).toBeInTheDocument();
+  expect(within(row).getByText("11 / 10")).toBeInTheDocument();
+  const note = screen.getByRole("complementary", { name: "Result completeness" });
+  expect(note).toHaveTextContent("1 submitted answer has no recoverable grade");
+  expect(note).toHaveTextContent("2 completed quiz records have missing answers");
+  expect(screen.getByText("People / quiz attempts")).toBeInTheDocument();
+});
+
 test("combines demographic and quiz filters in the server request", async () => {
   (apiFetch as jest.Mock).mockResolvedValue(results);
   render(<ResearchSummary />);

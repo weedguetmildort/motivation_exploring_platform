@@ -7,7 +7,9 @@ export const definitions: Results["metric_definitions"] = [
   { key: "telemetry_coverage", label: "Questions with telemetry", unit: "percent", group: "Data quality" },
   { key: "pointer_chat_share", label: "Pointer share: Chat", unit: "percent", group: "Pointer regions" },
 ];
-const overall = { participant_count: 2, questions_assigned: 6, questions_answered: 6,
+const overall = { participant_count: 2, attempt_count: 2, completed_attempt_count: 2,
+  incomplete_completed_attempt_count: 0, questions_assigned: 6, questions_shown: 6,
+  questions_answered: 6, questions_graded: 6, answers_missing_grade: 0,
   metrics: { accuracy: metric(.5), wrong_ai_agreement: metric(null), active_ms: metric(12000, 1, 1), telemetry_coverage: metric(0), pointer_chat_share: metric(.75) } };
 export const results: Results = {
   metric_definitions: definitions, overall, variants: [{ ...overall, quiz_id: "base" }],

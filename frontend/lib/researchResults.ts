@@ -3,11 +3,16 @@ export type Metric = {
   numerator: number | null; denominator: number | null; pooled_value: number | null;
 };
 export type MetricDefinition = { key: string; label: string; group: string; unit: "percent" | "seconds" | "count" };
-export type Comparison = { quiz_id?: string; participant_count: number; questions_assigned: number; questions_answered: number; metrics: Record<string, Metric> };
+export type Comparison = {
+  quiz_id?: string; participant_count: number; attempt_count: number; completed_attempt_count: number;
+  incomplete_completed_attempt_count: number; questions_assigned: number; questions_shown: number;
+  questions_answered: number; questions_graded: number; answers_missing_grade: number; metrics: Record<string, Metric>;
+};
 export type Participant = {
   participant_id: string; name: string; email: string; demographics: Record<string, string | string[] | null>;
   is_test: boolean; study_flow_version: number | null; completed_steps: string[]; step_order: string[];
-  questions_answered?: number; attempt_count?: number; accuracy?: number | null; telemetry_questions?: number;
+  questions_answered?: number; questions_graded?: number; answers_missing_grade?: number;
+  attempt_count?: number; accuracy?: number | null; telemetry_questions?: number;
 };
 export type Results = {
   metric_definitions: MetricDefinition[]; facets: { key: string; label: string; options: { value: string; count: number }[]; missing_count: number }[];

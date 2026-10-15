@@ -7,7 +7,7 @@ from .auth import get_current_user
 from ..schemas.user import UserPublic
 from ..schemas.research import ResearchEventBatch
 from ..services.research_dashboard import DEMOGRAPHICS, dashboard, profile, aggregate, comparisons, METRICS
-from ..services.research_analytics import research_data, iso, prompt_intents
+from ..services.research_analytics import research_data, research_attempts, iso, prompt_intents
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -90,10 +90,11 @@ def research_participant(participant_id: str, request: Request, include_tests: b
                          _: UserPublic = Depends(require_research_admin)):
     db = request.app.state.db
     user = _participant(db, participant_id, include_tests)
-    rows = research_data(db, include_tests, include_archived, participant_ids={participant_id})
+    attempts = research_attempts(db, include_tests, include_archived, participant_ids={participant_id}, users={participant_id: user})
+    rows = research_data(db, include_tests, include_archived, participant_ids={participant_id}, attempts=attempts)
     rows.sort(key=lambda r: (r["variant_position"] is None, r["variant_position"] or 0, r["quiz_id"], r["attempt_id"], r["question_position"]))
-    return {"participant": profile(user), "metric_definitions": METRICS, "overall": aggregate(rows),
-            "variants": comparisons(rows), "questions": rows}
+    return {"participant": profile(user), "metric_definitions": METRICS, "overall": aggregate(rows, attempts),
+            "variants": comparisons(rows, attempts), "questions": rows}
 
 
 @router.get("/participants/{participant_id}/questions/{attempt_id}/{question_id}")

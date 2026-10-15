@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from ..schemas.user import UserPublic
 from ..api.auth import get_current_user
-from ..services.research_analytics import ANALYSIS_VERSION, research_data, variant_summaries, prompt_intents
+from ..services.research_analytics import ANALYSIS_VERSION, research_data, research_attempts, variant_summaries, prompt_intents
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -268,11 +268,12 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
                            _: UserPublic = Depends(_require_admin)):
     """Pseudonymous, versioned snapshot with raw records for reproducible re-analysis."""
     db = request.app.state.db
-    questions = research_data(db, include_tests, include_archived)
+    selected_attempts = research_attempts(db, include_tests, include_archived)
+    questions = research_data(db, include_tests, include_archived, attempts=selected_attempts)
     variants = variant_summaries(questions)
     participant_ids = {str(u["_id"]) for u in db["users"].find({}) if include_tests or not (u.get("is_admin") or u.get("is_test"))}
-    conversations = {row["conversation_id"] for row in questions}
-    attempts = {row["attempt_id"] for row in questions}
+    conversations = {attempt.get("conversation_id") for attempt in selected_attempts}
+    attempts = {str(attempt["_id"]) for attempt in selected_attempts}
     files = {"questions": questions, "variants": variants}
     for collection in ("research_events", "messages", "ai_requests", "quiz_attempts", "quiz_attempt_archive", "survey_responses", "copy_events", "link_clicks", "reports"):
         records = []
@@ -293,7 +294,8 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
     manifest = {"analysis_version": ANALYSIS_VERSION, "schema_version": 1,
                 "exported_at": datetime.now(timezone.utc).isoformat(), "include_tests": include_tests,
                 "include_archived": include_archived, "record_counts": {key: len(value) for key, value in files.items()},
-                "definitions": {"matched_wrong_ai": "Final answer matches an incorrect, detected recommendation with a viewport impression before submission; not evidence of a causal answer change.",
+                "definitions": {"accuracy": "Correct submitted answers divided by submitted answers with a stored boolean grade or an immutable attempt answer key. Missing grades are excluded, not counted as incorrect.",
+                    "matched_wrong_ai": "Final answer matches an incorrect, detected recommendation with a viewport impression before submission; not evidence of a causal answer change.",
                     "pointer_ms": "Visible, focused time with pointer observed in a named region; not gaze or reading time.",
                     "active_ms": "Visible, focused time within 60 seconds of an interaction; not a measure of cognition.",
                     "intent_labels": "Exploratory keyword labels, requiring human validation.",
