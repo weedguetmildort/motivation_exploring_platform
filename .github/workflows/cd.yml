@@ -16,6 +16,8 @@ jobs:
   build-and-deploy:
     needs: tests
     runs-on: ubuntu-latest
+    environment: production
+    if: github.ref == 'refs/heads/main'
 
     env:
       HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
