@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 PROMPT_VERSION = "study-chat-1"
 
 
-def begin_request(db, user, req, conv_id, quiz_id, system_prompts):
+def begin_request(db, user, req, conv_id, quiz_id, system_prompts, generation_settings=None):
     if not user.is_admin and db["messages"].find_one({"conversation_id": conv_id, "user_id": {"$ne": user.id}}):
         raise HTTPException(403, "Unauthorized access to conversation")
     attempt = db["quiz_attempts"].find_one({"conversation_id": conv_id, "user_id": user.id})
@@ -25,7 +25,7 @@ def begin_request(db, user, req, conv_id, quiz_id, system_prompts):
                "conversation_id": conv_id, "question_id": req.question_id, "quiz_id": quiz_id,
                "started_at": datetime.utcnow(), "model_version": os.getenv("UF_OPENAI_API_MODEL"),
                "prompt_version": PROMPT_VERSION,
-               "temperature": 0.1 if quiz_id == "double" else 0.5,
+               "generation_settings": generation_settings or {},
                "prompt_hash": hashlib.sha256(system_prompts.encode()).hexdigest(),
                "attempt_id": str(attempt["_id"]) if attempt else None,
                "trigger": req.trigger, "agents": req.agents, "prompt": req.message,

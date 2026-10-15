@@ -21,6 +21,7 @@ class EventData(BaseModel):
     focused_ms: float | None = Field(default=None, ge=0, le=15000)
     active_ms: float | None = Field(default=None, ge=0, le=15000)
     pointer_ms: float | None = Field(default=None, ge=0, le=15000)
+    unobserved_ms: float | None = Field(default=None, ge=0)
     pointer_type: str | None = Field(default=None, max_length=20)
     request_id: str | None = Field(default=None, max_length=100)
     item_id: str | None = Field(default=None, max_length=200)

@@ -76,9 +76,14 @@ def research_data(db, include_tests=False, include_archived=False):
             cutoff = submission.get("elapsed_ms")
             page = submission.get("page_id")
             events = indexes["research_events"][key]
+            anchors = [e for e in events if e["page_id"] == page and e["event_type"] == "answer_submit_clicked" and cutoff is not None and e["elapsed_ms"] <= cutoff]
+            anchor = max(anchors, key=lambda e: e["elapsed_ms"]) if anchors else None
+            decision_client_time = (timestamp(anchor["occurred_at"]) + (cutoff - anchor["elapsed_ms"]) / 1000) if anchor else None
             # Same-page monotonic time excludes interactions after the submitted
             # decision without depending on the client's wall-clock accuracy.
-            before = [e for e in events if e.get("page_id") != page or cutoff is None or e.get("elapsed_ms", 0) <= cutoff]
+            before = [e for e in events if (
+                e.get("elapsed_ms", 0) <= cutoff if e.get("page_id") == page and cutoff is not None
+                else (timestamp(e.get("occurred_at")) or 0) <= decision_client_time if decision_client_time is not None else True)]
             by_type = defaultdict(list)
             for event in before:
                 by_type[event["event_type"]].append(event)
@@ -168,24 +173,34 @@ def research_data(db, include_tests=False, include_archived=False):
                 row[f"{prefix}_click_rate"] = len(displayed & clicked) / len(displayed) if displayed else None
                 row[f"{prefix}_clicks_without_impression"] = len(clicked - displayed)
             row.update(visible_ms=None, focused_ms=None, active_ms=None, pointer_observed_ms=None)
+            row.update(observed_interval_ms=None, unobserved_timer_ms=None, focused_inactive_ms=None)
             for region in REGIONS:
                 row[f"pointer_{region}_ms"] = None
             intervals = [e for e in events if e["event_type"] == "activity_interval"]
             if intervals:
                 row.update(visible_ms=0.0, focused_ms=0.0, active_ms=0.0, pointer_observed_ms=0.0)
+                row.update(observed_interval_ms=0.0, unobserved_timer_ms=0.0)
                 for region in REGIONS:
                     row[f"pointer_{region}_ms"] = 0.0
                 for event in intervals:
                     data = event.get("data", {})
                     duration = data.get("duration_ms", 0)
                     end = event.get("elapsed_ms", 0)
-                    allowed = max(0, min(duration, cutoff - (end - duration))) if event.get("page_id") == page and cutoff is not None else duration
+                    if event.get("page_id") == page and cutoff is not None:
+                        allowed = max(0, min(duration, cutoff - (end - duration)))
+                    elif decision_client_time is not None:
+                        allowed = max(0, min(duration, (decision_client_time - (timestamp(event.get("occurred_at")) or 0)) * 1000 + duration))
+                    else:
+                        allowed = duration
                     scale = allowed / duration if duration else 0
                     for metric in ("visible_ms", "focused_ms", "active_ms"):
                         row[metric] += min(duration, data.get(metric, 0)) * scale
                     pointer = min(duration, data.get("pointer_ms", 0)) * scale
                     row["pointer_observed_ms"] += pointer
                     row[f"pointer_{data.get('region', 'other')}_ms"] += pointer
+                    row["observed_interval_ms"] += allowed
+                    row["unobserved_timer_ms"] += data.get("unobserved_ms", 0) if allowed > 0 else 0
+                row["focused_inactive_ms"] = row["focused_ms"] - row["active_ms"]
             # Latency uses the submission page's monotonic timeline, not server/client clock subtraction.
             completions = [e for e in by_type["ai_response_completed"] if e.get("page_id") == page]
             row["last_ai_to_submit_ms"] = cutoff - max(e["elapsed_ms"] for e in completions) if completions and cutoff is not None else None
@@ -203,6 +218,7 @@ def research_data(db, include_tests=False, include_archived=False):
                 ("unresolved_exposed_recommendation", bool(unknown_exposures)),
                 ("message_persistence_failure", any(r.get("assistant_message_persisted") is False or r.get("user_message_persisted") is False for r in requests)),
                 ("multiple_pages", row["question_page_count"] > 1),
+                ("suspended_timer", bool(row["unobserved_timer_ms"])),
                 ("unknown_ai_recommendation", bool(messages) and not recommendations)) if missing]
             rows.append(row)
     reports = list(db["reports"].find({}))

@@ -333,6 +333,8 @@ async def _standard_stream(
     ).model_dump(exclude_none=True)
     if agent_tag and stated:
         metadata["stated_choice_id"] = {agent_tag: stated["default"]}
+    if agent_tag and leaked:
+        metadata["manipulation_leaked"] = {agent_tag: leaked["default"]}
     await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata, question_id=question_id, trigger=trigger, research_context=research_context)
     yield _sse({"type": "done", "conversation_id": conv_id})
 
@@ -410,7 +412,8 @@ async def double_chat(
 
     # Single agent selected via @mention — reuse _standard_stream directly.
     research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "double",
-                                      messages_a[0]["content"] + messages_b[0]["content"])
+                                      messages_a[0]["content"] + messages_b[0]["content"],
+                                      {"temperature": DOUBLE_TEMPERATURE, "max_tokens": MAX_TOKENS})
     if not (run_agent_a and run_agent_b):
         tag = "A" if run_agent_a else "B"
         msgs = messages_a if run_agent_a else messages_b
@@ -439,16 +442,20 @@ async def double_chat(
         task = asyncio.create_task(_run_both())
         task.add_done_callback(lambda _: queue.put_nowait(None))
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            is_error, delta, tag, sse = item
-            yield sse
-            if is_error:
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                is_error, delta, tag, sse = item
+                yield sse
+                if is_error:
+                    return
+                replies[tag] += delta
+        finally:
+            if not task.done():
                 task.cancel()
-                return
-            replies[tag] += delta
+            await asyncio.gather(task, return_exceptions=True)
 
         replies_to_store = [f"[AGENT A] {replies['A']}", f"[AGENT B] {replies['B']}"]
         stated = (
@@ -499,7 +506,8 @@ async def followup_quiz_chat(
         async for delta in generate_followup_questions(full_reply, _stream_ai):
             yield _sse({"type": "followup", "token": delta})
 
-    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "followup", system_instruction)
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "followup", system_instruction,
+                                      {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS})
 
     return StreamingResponse(
         track_stream(_standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request,
@@ -534,7 +542,8 @@ async def chat_with_embedded_links(
         #" Prefer sources with stable, long-lived URLs."
     )
 
-    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "links", system_instruction)
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "links", system_instruction,
+                                      {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS})
 
     async def generate() -> AsyncGenerator[str, None]:
         # External web search disabled — citations come from DB links only.
@@ -610,7 +619,8 @@ async def chat(
     )
     messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
-    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, quiz_id, system_instruction)
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, quiz_id, system_instruction,
+                                      {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS})
 
     return StreamingResponse(
         track_stream(_standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly,

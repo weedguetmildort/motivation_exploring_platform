@@ -209,3 +209,29 @@ def test_interrupted_stream_keeps_the_prompt_and_partial_reply(study):
     assert ledger["status"] == "interrupted"
     assert ledger["partial_visible_replies"] == {"default": "Possibly B"}
     assert ledger["first_token_at"]
+
+
+def test_second_tab_time_is_clipped_at_the_submitted_decision(study):
+    db, client, _, qid, _, _ = study
+    submit = event(qid, "answer_submit_clicked", event_id="submit", sequence=0, elapsed=10000)
+    submit["occurred_at"] = "2026-01-01T12:00:10Z"
+    interval = event(qid, "activity_interval", event_id="other-tab", sequence=0, elapsed=12000,
+                     duration_ms=5000, active_ms=5000, focused_ms=5000, visible_ms=5000, pointer_ms=5000, region="chat")
+    interval.update(page_id="other-page", occurred_at="2026-01-01T12:00:12Z")
+    client.post("/research/events", json={"events": [submit, interval]})
+    row = research_data(db)[0]
+    assert row["active_ms"] == 3000
+    assert "multiple_pages" in row["quality_flags"]
+
+
+def test_unknown_second_agent_does_not_become_correct_advice(study):
+    db, client, user, qid, _, now = study
+    db.messages.insert_one({"user_id": user.id, "conversation_id": "conv", "question_id": qid,
+        "request_id": "agents", "role": "assistant", "created_at": now,
+        "metadata": {"stated_choice_id": {"A": "a", "B": None}}})
+    client.post("/research/events", json={"events": [
+        event(qid, "ai_message_displayed", event_id="A", sequence=0, request_id="agents", agent="A"),
+        event(qid, "ai_message_displayed", event_id="B", sequence=1, request_id="agents", agent="B")]})
+    row = research_data(db)[0]
+    assert row["wrong_ai_exposed"] is None
+    assert row["ai_recommendations_unresolved"] == 1
