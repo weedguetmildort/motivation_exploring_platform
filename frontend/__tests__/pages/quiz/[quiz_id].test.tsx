@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import QuizPage from "../../../pages/quiz/[quiz_id]";
+import { ApiError } from "../../../lib/fetcher";
 import { getMe, invalidateMeCache, logout, type User } from "../../../lib/auth";
 import {
   getQuizState,
@@ -276,7 +277,7 @@ describe("QuizPage ([quiz_id])", () => {
   });
 
   it("redirects to login when the session check fails", async () => {
-    mockGetMe.mockRejectedValue(new Error("not authenticated"));
+    mockGetMe.mockRejectedValue(new ApiError("Not authenticated", 401, "/auth/me"));
     render(<QuizPage />);
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
@@ -594,7 +595,8 @@ describe("QuizPage ([quiz_id])", () => {
     expect(await screen.findByText("Quiz completed")).toBeInTheDocument();
     expect(screen.queryByText("Quiz completed (admin view)")).not.toBeInTheDocument();
     expect(screen.queryByText("2 of 3 correct")).not.toBeInTheDocument();
-    expect(await screen.findByText("Question 1: What is 2+2?")).toBeInTheDocument();
+    expect(screen.getByText("Continue to Next Step")).toBeInTheDocument();
+    expect(mockGetQuizResults).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Reset/ })).not.toBeInTheDocument();
   });
 
@@ -650,7 +652,7 @@ describe("QuizPage ([quiz_id])", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
-  it("falls back to the dashboard when the next-step lookup fails", async () => {
+  it("keeps the completion card available when the next-step lookup fails", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser() });
     mockGetQuizState.mockResolvedValue(quizStateCompleted);
     mockGetNextStep
@@ -661,8 +663,42 @@ describe("QuizPage ([quiz_id])", () => {
 
     fireEvent.click(await screen.findByText("Continue to Next Step"));
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to open the next step.");
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(screen.getByText("Continue to Next Step")).toBeInTheDocument();
   });
+
+  it("shows a missing study route as a 404 instead of treating it as login failure", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser() });
+    mockGetNextStep.mockRejectedValue(new ApiError("Not Found", 404, "/api/study/next"));
+    render(<QuizPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("404: Not Found");
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(mockGetQuizState).not.toHaveBeenCalled();
+  });
+
+  it.each(["next", "state", "answer", "continue"])("redirects to login on a 401 from quiz %s", async (where) => {
+    mockGetMe.mockResolvedValue({ user: baseUser() });
+    const error = new ApiError("Invalid or expired token", 401, "/api/quiz/base");
+    if (where === "next") mockGetNextStep.mockRejectedValue(error);
+    if (where === "state") mockGetQuizState.mockRejectedValue(error);
+    if (where === "answer") mockSubmitQuizAnswer.mockRejectedValue(error);
+    if (where === "continue") {
+      mockGetQuizState.mockResolvedValue(quizStateCompleted);
+      mockGetNextStep.mockResolvedValueOnce(nextIsQuiz("base")).mockRejectedValue(error);
+    }
+    render(<QuizPage />);
+    if (where === "answer") {
+      await screen.findByText("Question 1 — What is 2+2?");
+      fireEvent.click(screen.getByText("Ask the assistant about this question"));
+      fireEvent.click(screen.getAllByRole("radio")[0]);
+      fireEvent.click(screen.getByRole("button", { name: "Submit answer" }));
+    }
+    if (where === "continue") fireEvent.click(await screen.findByText("Continue to Next Step"));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+    expect(mockInvalidateMeCache).toHaveBeenCalled();
+  });
+
 
   it("navigates to the dashboard when the header Dashboard button is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });

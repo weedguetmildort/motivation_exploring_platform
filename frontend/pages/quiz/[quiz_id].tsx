@@ -23,6 +23,7 @@ import {
 } from "../../lib/studySteps";
 import { getNextStep } from "../../lib/study";
 import { createReport, type ReportCategory } from "../../lib/reports";
+import { ApiError } from "../../lib/fetcher";
 
 // Access and post-completion routing are decided by the backend
 // (GET /study/next), which is also enforced server-side in api/quiz.py. The
@@ -65,6 +66,16 @@ export default function QuizPage() {
     : -1;
   const thisStep = thisStepIndex === -1 ? null : allSteps[thisStepIndex];
 
+  function handleFlowError(cause: unknown, message: string) {
+    console.error(cause);
+    if (cause instanceof ApiError && cause.status === 401) {
+      invalidateMeCache();
+      router.replace("/login");
+      return;
+    }
+    setError(cause instanceof ApiError ? `${message} (${cause.status}: ${cause.message})` : message);
+  }
+
   useEffect(() => {
     if (!router.isReady) return;
     if (!rawQuizId) return;
@@ -91,8 +102,8 @@ export default function QuizPage() {
         }
 
         setUser(u);
-      } catch {
-        if (!cancel) router.replace("/login");
+      } catch (e) {
+        if (!cancel) handleFlowError(e, "Unable to load your study. Please reload or contact the study team.");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -124,8 +135,7 @@ export default function QuizPage() {
           setSelectedChoice(null);
         }
       } catch (e) {
-        console.error(e);
-        if (!cancel) setError("Failed to load quiz.");
+        if (!cancel) handleFlowError(e, "Failed to load quiz.");
       }
     })();
 
@@ -167,13 +177,12 @@ export default function QuizPage() {
       const next = await getNextStep();
       router.replace(next.next_route);
     } catch (e) {
-      console.error(e);
-      router.replace("/dashboard");
+      handleFlowError(e, "Unable to open the next step. Please try Continue again.");
     }
   }
 
   useEffect(() => {
-    if (!quizCompleted || !user || !quizId) return;
+    if (!quizCompleted || !user?.is_admin || !quizId) return;
     let cancel = false;
     getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
     return () => { cancel = true; };
@@ -187,7 +196,7 @@ export default function QuizPage() {
     );
   }
 
-  if (!user) return null;
+  if (!user) return error ? <div className="p-8" role="alert">{error}</div> : null;
 
   async function onLogout() {
     try {
@@ -247,8 +256,7 @@ export default function QuizPage() {
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
-      console.error(e);
-      setError("Failed to submit answer.");
+      handleFlowError(e, "Failed to submit answer.");
     } finally {
       setSubmitting(false);
     }

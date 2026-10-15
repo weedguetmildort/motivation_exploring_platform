@@ -11,6 +11,7 @@ import {
   buildStudySteps,
 } from "../lib/studySteps";
 import { getNextStep } from "../lib/study";
+import { ApiError } from "../lib/fetcher";
 import {
   getSurveyState,
   submitSurvey,
@@ -34,6 +35,17 @@ export default function SurveyPage() {
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedStage, setSavedStage] = useState<string | null>(null);
+
+  function handleFlowError(cause: unknown, message: string) {
+    console.error(cause);
+    if (cause instanceof ApiError && cause.status === 401) {
+      invalidateMeCache();
+      router.replace("/login");
+      return;
+    }
+    setError(cause instanceof ApiError ? `${message} (${cause.status}: ${cause.message})` : message);
+  }
 
   const [loadingSurvey, setLoadingSurvey] = useState(true);
   const [items, setItems] = useState<SurveyItem[]>([]);
@@ -72,8 +84,8 @@ export default function SurveyPage() {
         if (cancel) return;
 
         setUser(res.user as User);
-      } catch {
-        if (!cancel) router.replace("/login");
+      } catch (e) {
+        if (!cancel) handleFlowError(e, "Unable to load your study. Please reload or contact the study team.");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -109,8 +121,7 @@ export default function SurveyPage() {
 
         setActiveSurveyStage(next.next_step.key);
       } catch (e) {
-        console.error(e);
-        if (!cancel) router.replace("/dashboard");
+        if (!cancel) handleFlowError(e, "Unable to load your next step. Please reload or contact the study team.");
       }
     })();
 
@@ -153,8 +164,7 @@ export default function SurveyPage() {
           return;
         }
       } catch (e) {
-        console.error(e);
-        if (!cancel) setError(config.loadError);
+        if (!cancel) handleFlowError(e, config.loadError);
       } finally {
         if (!cancel) setLoadingSurvey(false);
       }
@@ -191,12 +201,13 @@ export default function SurveyPage() {
 
     setError(null);
 
-    if (requiredUnanswered.length > 0) {
+    if (savedStage !== activeSurveyStage && requiredUnanswered.length > 0) {
       setError("Please answer all required questions before continuing.");
       return;
     }
 
     setSaving(true);
+    let submitted = savedStage === activeSurveyStage;
     try {
       const answers: SurveyAnswer[] = items
         .map((i) => {
@@ -207,7 +218,11 @@ export default function SurveyPage() {
         .filter(Boolean) as SurveyAnswer[];
 
       // Saves under this stage's own response document.
-      await submitSurvey(activeSurveyStage, answers);
+      if (!submitted) {
+        await submitSurvey(activeSurveyStage, answers);
+        submitted = true;
+        setSavedStage(activeSurveyStage);
+      }
       invalidateMeCache();
 
       // Ask the backend where to go rather than optimistically re-deriving the
@@ -215,8 +230,9 @@ export default function SurveyPage() {
       const next = await getNextStep();
       router.replace(next.next_route);
     } catch (e) {
-      console.error(e);
-      setError("Failed to save your responses.");
+      handleFlowError(e, submitted
+        ? "Your responses were saved, but the next step could not open. Please try Continue again."
+        : "Failed to save your responses.");
     } finally {
       setSaving(false);
     }
@@ -281,8 +297,9 @@ export default function SurveyPage() {
     );
   }
 
-  if (!user) return null;
-  if (!activeSurveyStage || !config) return null;
+  if (!user || !activeSurveyStage || !config) {
+    return error ? <div className="p-8" role="alert">{error}</div> : null;
+  }
 
   // Position within this participant's own flow, which is no longer 5 steps.
   const allSteps = buildStudySteps(user);
@@ -359,7 +376,7 @@ export default function SurveyPage() {
                     disabled={saving}
                     className="rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700 disabled:opacity-60 transition"
                   >
-                    {saving ? "Saving…" : config.submitLabel}
+                    {saving ? "Saving…" : savedStage === activeSurveyStage ? "Continue to next step" : config.submitLabel}
                   </button>
                 </div>
               </>

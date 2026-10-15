@@ -3,6 +3,7 @@ import SurveyPage from "../../pages/survey";
 import { getMe, logout, invalidateMeCache } from "../../lib/auth";
 import { getSurveyState, submitSurvey } from "../../lib/surveys";
 import { getNextStep } from "../../lib/study";
+import { ApiError } from "../../lib/fetcher";
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -147,7 +148,7 @@ describe("SurveyPage", () => {
   });
 
   it("redirects to login when the session check fails", async () => {
-    mockGetMe.mockRejectedValue(new Error("not authenticated"));
+    mockGetMe.mockRejectedValue(new ApiError("Not authenticated", 401, "/auth/me"));
     render(<SurveyPage />);
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
@@ -387,13 +388,56 @@ describe("SurveyPage", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
-  it("falls back to the dashboard when the next-step lookup fails", async () => {
+  it("shows an error without a dashboard loop when the next-step lookup fails", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser });
     mockGetNextStep.mockRejectedValue(new Error("network"));
 
     render(<SurveyPage />);
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load your next step.");
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("shows a missing study route as a 404 instead of silently redirecting", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetNextStep.mockRejectedValue(new ApiError("Not Found", 404, "/api/study/next"));
+    render(<SurveyPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("404: Not Found");
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it.each(["next", "state", "submit"])("redirects to login on a 401 from survey %s", async (where) => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem]));
+    const error = new ApiError("Invalid or expired token", 401, "/api/surveys/pre_quiz");
+    if (where === "next") mockGetNextStep.mockRejectedValue(error);
+    if (where === "state") mockGetSurveyState.mockRejectedValue(error);
+    if (where === "submit") mockSubmitSurvey.mockRejectedValue(error);
+    render(<SurveyPage />);
+    if (where === "submit") {
+      await screen.findByText(likertItem.prompt);
+      fireEvent.click(screen.getAllByRole("radio")[2]);
+      fireEvent.click(screen.getByRole("button", { name: "Begin Quiz Part 1" }));
+    }
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+    expect(mockInvalidateMeCache).toHaveBeenCalled();
+  });
+
+  it("retries navigation without resubmitting a survey already saved", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockGetSurveyState.mockResolvedValue(surveyState([likertItem]));
+    mockSubmitSurvey.mockResolvedValue({ ok: true });
+    mockGetNextStep.mockResolvedValueOnce(nextIsSurvey("pre_quiz"))
+      .mockRejectedValueOnce(new ApiError("Not Found", 404, "/api/study/next"))
+      .mockResolvedValue(nextIsRoute("/quiz/base"));
+    render(<SurveyPage />);
+    await screen.findByText(likertItem.prompt);
+    fireEvent.click(screen.getAllByRole("radio")[2]);
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz Part 1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your responses were saved");
+    fireEvent.click(screen.getByRole("button", { name: "Continue to next step" }));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/quiz/base"));
+    expect(mockSubmitSurvey).toHaveBeenCalledTimes(1);
   });
 
   it("treats empty-array values as unanswered and other value types as answered", async () => {
