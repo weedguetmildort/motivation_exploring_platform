@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from statistics import median
 from .quiz_grading import answer_correctness
 from .research_conversations import build_packet, conversation_features
+from .research_coding import coding_features
 
 ANALYSIS_VERSION = "1.2"
 REGIONS = ("question", "answers", "submit", "chat", "chat_input", "suggestions", "reference", "agent_A", "agent_B", "other")
@@ -74,6 +75,9 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
         attempts = research_attempts(db, include_tests, include_archived, participant_ids, users=users)
     # One read per collection, then keyed joins; no per-question database queries.
     indexes = {}
+    annotations = defaultdict(list)
+    for annotation in db["research_annotations"].find(query):
+        annotations[(annotation.get("attempt_id"), annotation.get("question_id"))].append(annotation)
     for collection in ("research_events", "messages", "ai_requests", "copy_events", "reports"):
         grouped = defaultdict(list)
         for doc in db[collection].find(query):
@@ -241,6 +245,7 @@ def research_data(db, include_tests=False, include_archived=False, participant_i
                 ("unknown_ai_recommendation", bool(messages) and not recommendations)) if missing]
             packet = build_packet(row, snapshot, indexes["messages"][key], indexes["ai_requests"][key], before)
             row.update(conversation_features(packet))
+            row.update(coding_features(annotations[(row["attempt_id"], qid)], packet["packet_hash"]))
             if include_packets:
                 row["_conversation_packet"] = packet
             rows.append(row)

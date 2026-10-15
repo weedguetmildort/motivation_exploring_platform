@@ -4,6 +4,7 @@ from statistics import mean
 from math import isfinite
 
 from .research_analytics import REGIONS, INTENTS, research_data, research_attempts, iso
+from .research_coding import CODING_FEATURES
 
 DEMOGRAPHICS = {
     "gender": "Gender", "academic_level": "Academic level", "year": "Year in program",
@@ -81,6 +82,9 @@ for field, label in {
     "agents_converged": "Initially disagreeing agents converged",
 }.items():
     METRICS.append(definition(field, label, "Conversation"))
+for source, group in (("human", "Human conversation coding"), ("llm", "LLM coding (provisional)")):
+    for field in CODING_FEATURES:
+        METRICS.append(definition(f"{source}_coded_{field}", field.replace("_", " ").capitalize(), group))
 
 
 def demographic_values(user, key):

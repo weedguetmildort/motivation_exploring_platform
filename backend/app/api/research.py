@@ -9,6 +9,8 @@ from ..schemas.research import ResearchEventBatch
 from ..services.research_dashboard import DEMOGRAPHICS, dashboard, profile, aggregate, comparisons, METRICS
 from ..services.research_analytics import research_data, research_attempts, iso, prompt_intents
 from ..services.quiz_grading import answer_correctness
+from ..services import research_coding as coding
+from ..schemas.research_coding import HumanCodingRequest, ModelCodingRequest, ConversationCoding
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -18,6 +20,7 @@ def ensure_research_indexes(db):
     db["research_events"].create_index([("attempt_id", 1), ("question_id", 1)])
     db["ai_requests"].create_index([("user_id", 1), ("request_id", 1)], unique=True)
     db["quiz_attempt_archive"].create_index("conversation_id")
+    db["research_annotations"].create_index([("user_id", 1), ("attempt_id", 1), ("question_id", 1), ("packet_hash", 1)])
 
 
 @router.post("/events")
@@ -84,6 +87,56 @@ def _participant(db, participant_id, include_tests):
     if not user or (not include_tests and (user.get("is_admin") or user.get("is_test"))):
         raise HTTPException(404, "Participant not found")
     return user
+
+
+@router.get("/coding/validation")
+def coding_validation(request: Request, include_tests: bool = False, include_archived: bool = False,
+                      _: UserPublic = Depends(require_research_admin)):
+    db = request.app.state.db
+    rows = research_data(db, include_tests, include_archived)
+    current = {(r["participant_id"], r["attempt_id"], r["question_id"], r["conversation_packet_hash"]) for r in rows}
+    records = [a for a in db["research_annotations"].find({}) if
+               (a["user_id"], a["attempt_id"], a["question_id"], a["packet_hash"]) in current]
+    return coding.validation_report(records)
+
+
+def _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived):
+    _participant(request.app.state.db, participant_id, include_tests)
+    return coding.load_packet(request.app.state.db, participant_id, attempt_id, question_id, include_tests, include_archived)
+
+
+@router.get("/participants/{participant_id}/questions/{attempt_id}/{question_id}/coding")
+def question_coding(participant_id: str, attempt_id: str, question_id: str, request: Request,
+                    include_tests: bool = False, include_archived: bool = False,
+                    _: UserPublic = Depends(require_research_admin)):
+    packet = _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived)
+    return {"packet": packet, "rubric": coding.rubric_public(), "rubric_version": coding.RUBRIC_VERSION,
+            "annotations": coding.current_annotations(request.app.state.db, packet), "evaluator": coding.evaluator_status(),
+            "partition": coding.validation_partition(participant_id)}
+
+
+@router.post("/participants/{participant_id}/questions/{attempt_id}/{question_id}/coding/review")
+def review_question(participant_id: str, attempt_id: str, question_id: str, data: HumanCodingRequest, request: Request,
+                    include_tests: bool = False, include_archived: bool = False,
+                    user: UserPublic = Depends(require_research_admin)):
+    packet = _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived)
+    if packet["packet_hash"] != data.packet_hash:
+        raise HTTPException(409, "Conversation changed; reload the packet before reviewing")
+    if not packet["answer"].get("answered_at"):
+        raise HTTPException(409, "Only submitted questions can be reviewed")
+    return coding.save_annotation(request.app.state.db, packet, ConversationCoding(
+        labels=data.labels, evidence=data.evidence, notes=data.notes), source="human", reviewer_id=user.id,
+        independent_review=data.independent_review)
+
+
+@router.post("/participants/{participant_id}/questions/{attempt_id}/{question_id}/coding/evaluate")
+async def evaluate_question(participant_id: str, attempt_id: str, question_id: str, data: ModelCodingRequest, request: Request,
+                            include_tests: bool = False, include_archived: bool = False,
+                            _: UserPublic = Depends(require_research_admin)):
+    packet = _coding_packet(request, participant_id, attempt_id, question_id, include_tests, include_archived)
+    if packet["packet_hash"] != data.packet_hash:
+        raise HTTPException(409, "Conversation changed; reload the packet before evaluating")
+    return await coding.evaluate_packet(request.app.state.db, packet)
 
 
 @router.get("/participants/{participant_id}")

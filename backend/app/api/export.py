@@ -276,7 +276,7 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
     conversations = {attempt.get("conversation_id") for attempt in selected_attempts}
     attempts = {str(attempt["_id"]) for attempt in selected_attempts}
     files = {"questions": questions, "variants": variants, "conversation_packets": packets}
-    for collection in ("research_events", "messages", "ai_requests", "quiz_attempts", "quiz_attempt_archive", "survey_responses", "copy_events", "link_clicks", "reports"):
+    for collection in ("research_events", "messages", "ai_requests", "quiz_attempts", "quiz_attempt_archive", "survey_responses", "copy_events", "link_clicks", "reports", "research_annotations"):
         records = []
         for doc in db[collection].find({}):
             if doc.get("user_id") not in participant_ids:
@@ -285,7 +285,11 @@ def export_research_bundle(request: Request, include_tests: bool = False, includ
                 continue
             if doc.get("conversation_id") and doc["conversation_id"] not in conversations:
                 continue
-            records.append({key: value for key, value in doc.items() if key != "user_email"})
+            records.append({key: value for key, value in doc.items() if key not in ("user_email", "reviewer_id")})
+            if collection == "research_annotations" and doc.get("reviewer_id"):
+                # Stable pseudonym allows inter-rater analysis without account identifiers.
+                import hashlib
+                records[-1]["reviewer_id"] = hashlib.sha256(str(doc["reviewer_id"]).encode()).hexdigest()
         files[collection] = records
     files["participants"] = [{"participant_id": str(u["_id"]), **{key: u.get(key) for key in (
         "study_flow_version", "variant_sequence", "assigned_var", "step_order", "completed_steps", "quiz_set_assignment",
