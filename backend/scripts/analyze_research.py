@@ -72,7 +72,8 @@ def write_csv(path, records):
         writer.writerows([{key: json.dumps(value) if isinstance(value, (list, dict)) else value for key, value in row.items()} for row in records])
 
 
-def analyze(snapshot, output, seed=2026, repetitions=2000):
+def analyze(snapshot, output, seed=2026, repetitions=2000, *, mixed=False, participant_slopes=False):
+    from app.services.research_statistics import paired_comparisons, survey_associations, lexical_clusters, mixed_effects
     with zipfile.ZipFile(snapshot) as archive:
         manifest = json.loads(archive.read("manifest.json"))
         if manifest.get("analysis_version") not in ("1.0", "1.1", "1.2"):
@@ -80,12 +81,26 @@ def analyze(snapshot, output, seed=2026, repetitions=2000):
         questions = json.loads(archive.read("questions.json"))
         variants = json.loads(archive.read("variants.json"))
         participants = json.loads(archive.read("participants.json"))
+        packets = json.loads(archive.read("conversation_packets.json")) if "conversation_packets.json" in archive.namelist() else []
+        surveys = json.loads(archive.read("survey_responses.json")) if "survey_responses.json" in archive.namelist() else []
+        survey_items = json.loads(archive.read("survey_items_at_export.json")) if "survey_items_at_export.json" in archive.namelist() else []
+        annotations = json.loads(archive.read("research_annotations.json")) if "research_annotations.json" in archive.namelist() else []
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     write_csv(output / "questions.csv", questions)
     write_csv(output / "variants.csv", variants)
     report = describe(questions, participants, seed, repetitions)
     report["source_manifest"] = manifest
+    report["paired_comparisons"] = paired_comparisons(questions, seed, repetitions)
+    report["survey_associations"] = survey_associations(questions, participants, surveys, survey_items, seed, repetitions)
+    report["conversation_clusters"] = lexical_clusters(packets)
+    from app.services.research_coding import validation_report
+    current_packets = {p["packet_hash"] for p in packets}
+    report["coding_validation"] = validation_report([a for a in annotations if a.get("packet_hash") in current_packets])
+    if mixed:
+        report["mixed_effects"] = [mixed_effects(questions, outcome, seed, participant_slopes) for outcome in ("accuracy", "wrong_ai_agreement")]
+    write_csv(output / "paired_comparisons.csv", report["paired_comparisons"]["comparisons"])
+    write_csv(output / "survey_associations.csv", report["survey_associations"]["associations"])
     (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
@@ -96,8 +111,11 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=Path("research-analysis"))
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--bootstrap-repetitions", type=int, default=2000)
+    parser.add_argument("--mixed-effects", action="store_true", help="Fit optional Bayesian logistic models; install requirements-research.txt first")
+    parser.add_argument("--participant-slopes", action="store_true", help="Include independent participant deviations for rotated conditions in mixed models")
     args = parser.parse_args()
-    if args.bootstrap_repetitions < 100:
-        parser.error("Use at least 100 bootstrap repetitions")
-    analyze(args.snapshot, args.output, args.seed, args.bootstrap_repetitions)
+    if not 100 <= args.bootstrap_repetitions <= 20000:
+        parser.error("Use 100 to 20000 bootstrap repetitions")
+    analyze(args.snapshot, args.output, args.seed, args.bootstrap_repetitions,
+            mixed=args.mixed_effects, participant_slopes=args.participant_slopes)
     print(f"Wrote question CSV, variant CSV and report to {args.output.resolve()}")

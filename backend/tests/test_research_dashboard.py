@@ -161,6 +161,15 @@ def test_nan_age_does_not_pass_range_filters():
     assert filter_users([{"_id": ObjectId(), "demographics": {"age": "nan"}}], {}, age_min=18) == []
 
 
+def test_statistics_share_cohort_filters_and_are_admin_only(dashboard_study):
+    db, client, people, _ = dashboard_study
+    assert client.get("/research/statistics", params={"search": "not-a-user"}).json()["paired"]["comparisons"] == []
+    assert client.get("/research/statistics", params={"filters": '{"password_hash":"x"}'}).status_code == 422
+    assert client.get("/research/statistics", params={"age_min": 40, "age_max": 20}).status_code == 422
+    client.app.dependency_overrides[get_current_user] = lambda: UserPublic(id=people["Bob"], email="bob@test.edu")
+    assert client.get("/research/statistics").status_code == 403
+
+
 def test_four_completed_records_can_have_eleven_answers_but_only_ten_grades(dashboard_study):
     db, client, people, _ = dashboard_study
     db.quiz_attempts.delete_many({})

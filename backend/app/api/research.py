@@ -11,6 +11,7 @@ from ..services.research_analytics import research_data, research_attempts, iso,
 from ..services.quiz_grading import answer_correctness
 from ..services import research_coding as coding
 from ..schemas.research_coding import HumanCodingRequest, ModelCodingRequest, ConversationCoding
+from ..services.research_statistics import paired_comparisons, survey_associations
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -59,14 +60,7 @@ def require_research_admin(user: UserPublic = Depends(get_current_user)):
     return user
 
 
-@router.get("/results")
-def research_results(request: Request, _: UserPublic = Depends(require_research_admin),
-                     filters: str = Query("{}", max_length=5000), search: str = Query("", max_length=200),
-                     age_min: int | None = Query(None, ge=0, le=130), age_max: int | None = Query(None, ge=0, le=130),
-                     include_tests: bool = False, include_archived: bool = False,
-                     quiz_id: str | None = Query(None, max_length=100), status: Literal["all", "completed", "in_progress"] = "completed",
-                     version: int | None = Query(None, ge=1), question_set: Literal["a", "b", "c", "d"] | None = None,
-                     variant_position: int | None = Query(None, ge=1), page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+def _filters(filters, age_min, age_max):
     try:
         values = json.loads(filters)
         if not isinstance(values, dict) or any(k not in DEMOGRAPHICS or not isinstance(v, str) or len(v) > 500 for k, v in values.items()):
@@ -75,9 +69,40 @@ def research_results(request: Request, _: UserPublic = Depends(require_research_
         raise HTTPException(422, "Invalid demographic filters")
     if age_min is not None and age_max is not None and age_min > age_max:
         raise HTTPException(422, "Minimum age cannot exceed maximum age")
+    return values
+
+
+@router.get("/results")
+def research_results(request: Request, _: UserPublic = Depends(require_research_admin),
+                     filters: str = Query("{}", max_length=5000), search: str = Query("", max_length=200),
+                     age_min: int | None = Query(None, ge=0, le=130), age_max: int | None = Query(None, ge=0, le=130),
+                     include_tests: bool = False, include_archived: bool = False,
+                     quiz_id: str | None = Query(None, max_length=100), status: Literal["all", "completed", "in_progress"] = "completed",
+                     version: int | None = Query(None, ge=1), question_set: Literal["a", "b", "c", "d"] | None = None,
+                     variant_position: int | None = Query(None, ge=1), page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+    values = _filters(filters, age_min, age_max)
     return dashboard(request.app.state.db, filters=values, search=search, age_min=age_min, age_max=age_max,
                      include_tests=include_tests, include_archived=include_archived, quiz_id=quiz_id, status=status,
                      version=version, question_set=question_set, variant_position=variant_position, page=page, page_size=page_size)
+
+
+@router.get("/statistics")
+def research_statistics(request: Request, _: UserPublic = Depends(require_research_admin),
+                        filters: str = Query("{}", max_length=5000), search: str = Query("", max_length=200),
+                        age_min: int | None = Query(None, ge=0, le=130), age_max: int | None = Query(None, ge=0, le=130),
+                        include_tests: bool = False, include_archived: bool = False,
+                        quiz_id: str | None = Query(None, max_length=100), status: Literal["all", "completed", "in_progress"] = "completed",
+                        version: int | None = Query(None, ge=1), question_set: Literal["a", "b", "c", "d"] | None = None,
+                        variant_position: int | None = Query(None, ge=1)):
+    from ..services.research_dashboard import filter_users, filter_rows
+    db = request.app.state.db
+    users = [u for u in db["users"].find({}) if include_tests or not (u.get("is_admin") or u.get("is_test"))]
+    selected = filter_users(users, _filters(filters, age_min, age_max), search, age_min, age_max)
+    ids = {str(u["_id"]) for u in selected}
+    rows = filter_rows(research_data(db, include_tests, include_archived, participant_ids=ids), quiz_id, status, version, question_set, variant_position)
+    return {"paired": paired_comparisons(rows), "surveys": survey_associations(rows,
+        [{"participant_id": str(u["_id"]), "assigned_var": u.get("assigned_var")} for u in selected],
+        list(db["survey_responses"].find({"user_id": {"$in": list(ids)}})), list(db["survey_items"].find({})))}
 
 
 def _participant(db, participant_id, include_tests):
