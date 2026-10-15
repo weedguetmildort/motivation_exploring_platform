@@ -198,6 +198,29 @@ describe("StudyFlowPanel — question sets", () => {
     );
   });
 
+  it("shows balanced random selected when returned by the default config", async () => {
+    mockGetStudyConfig.mockResolvedValue(makeConfig({ quiz_set_mode: "balanced_random" }));
+    render(<StudyFlowPanel />);
+    expect(await screen.findByRole("radio", { name: /Balanced random/ })).toBeChecked();
+    expect(screen.queryByLabelText("Question set for Base Quiz")).not.toBeInTheDocument();
+    expect(screen.getByText(/Balance applies to assigned participants/)).toBeInTheDocument();
+  });
+
+  it("saves balanced random without submitting an unused preset map", async () => {
+    mockGetStudyConfig.mockResolvedValue(makeConfig({ quiz_set_map: { base: "a", double: "a" } }));
+    mockUpdateStudyConfig.mockResolvedValue(makeConfig({ quiz_set_mode: "balanced_random" }));
+    render(<StudyFlowPanel />);
+    await screen.findByText("Question sets");
+    fireEvent.click(screen.getByRole("radio", { name: /Balanced random/ }));
+    const save = screen.getByRole("button", { name: "Save flow" });
+    expect(save).not.toBeDisabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(mockUpdateStudyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ quiz_set_mode: "balanced_random" }),
+    ));
+    expect(mockUpdateStudyConfig.mock.calls[0][0]).not.toHaveProperty("quiz_set_map");
+  });
+
   it("Save stays disabled until something changes", async () => {
     render(<StudyFlowPanel />);
     await screen.findByText("Question sets");

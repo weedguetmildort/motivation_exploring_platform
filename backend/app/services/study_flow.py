@@ -30,7 +30,9 @@ attempts fall through every flow check as "not part of this user's flow".
 
 from __future__ import annotations
 
+import json
 import random
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Literal, Optional
@@ -210,9 +212,13 @@ ROUND_ROBIN_COUNTER_ID = "user_signup_round_robin"
 #   preset - a fixed quiz -> set map, the same for every participant
 #   random - a per-participant random assignment of sets to that participant's
 #            quizzes, snapshotted at signup
+#   balanced_random - randomized blocks of set rotations within each quiz order
 QUIZ_SET_MODE_PRESET = "preset"
 QUIZ_SET_MODE_RANDOM = "random"
-QUIZ_SET_MODES = (QUIZ_SET_MODE_PRESET, QUIZ_SET_MODE_RANDOM)
+QUIZ_SET_MODE_BALANCED_RANDOM = "balanced_random"
+QUIZ_SET_MODES = (
+    QUIZ_SET_MODE_PRESET, QUIZ_SET_MODE_RANDOM, QUIZ_SET_MODE_BALANCED_RANDOM,
+)
 
 
 @dataclass(frozen=True)
@@ -227,7 +233,7 @@ class StudyConfig:
     # Which question set each quiz draws from. Giving every quiz its own set is
     # what stops a participant seeing the same question twice across their four
     # quizzes — isolation is structural rather than filtered after the fact.
-    quiz_set_mode: str = QUIZ_SET_MODE_PRESET
+    quiz_set_mode: str = QUIZ_SET_MODE_BALANCED_RANDOM
     # ((quiz_id, set_letter), ...) — a tuple of pairs rather than a dict because
     # this dataclass is frozen and must stay hashable. Stored in Mongo as a
     # plain object. A quiz absent from the map draws from the whole pool.
@@ -311,9 +317,9 @@ def load_study_config(db) -> StudyConfig:
     if mode not in (MODE_ALL_VARIANTS, MODE_SINGLE_VARIANT):
         mode = MODE_ALL_VARIANTS
 
-    quiz_set_mode = doc.get("quiz_set_mode", QUIZ_SET_MODE_PRESET)
+    quiz_set_mode = doc.get("quiz_set_mode", QUIZ_SET_MODE_BALANCED_RANDOM)
     if quiz_set_mode not in QUIZ_SET_MODES:
-        quiz_set_mode = QUIZ_SET_MODE_PRESET
+        quiz_set_mode = QUIZ_SET_MODE_BALANCED_RANDOM
 
     return StudyConfig(
         mode=mode,
@@ -458,21 +464,63 @@ def quiz_ids_in_order(step_order: Iterable[str]) -> list[str]:
     return ids
 
 
+def _balanced_quiz_set_assignment(db, config: StudyConfig, quiz_ids: list[str]) -> dict[str, str]:
+    """Allocate one randomized block slot, independently for each quiz order.
+
+    Each block contains all rotations of a shuffled set list, in shuffled
+    order. Thus every quiz receives every set once per complete block, without
+    any participant sharing a set across quizzes. Stratifying by the actual
+    quiz order crosses set balance with the existing round-robin rotation,
+    including fixed-order, single-variant and admin-override assignments.
+
+    Mongo atomically increments the slot and initializes a persistent seed.
+    Deriving the block shuffle from that seed makes it stable across workers
+    and restarts. The config version separates cohorts after admin changes.
+    """
+    if not quiz_ids:
+        return {}
+    if len(quiz_ids) > len(ALL_SET_IDS):
+        raise ValueError("Balanced random requires at least one question set per quiz")
+
+    counter_id = "quiz_sets:balanced_random:" + json.dumps(
+        [config.version, quiz_ids, list(ALL_SET_IDS)], separators=(",", ":")
+    )
+    allocation = db["counters"].find_one_and_update(
+        {"_id": counter_id},
+        {"$inc": {"seq": 1}, "$setOnInsert": {"seed": uuid.uuid4().hex}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    block, slot = divmod(int(allocation["seq"]) - 1, len(ALL_SET_IDS))
+    rng = random.Random(f"{allocation['seed']}:{block}")
+    sets = list(ALL_SET_IDS)
+    offsets = list(range(len(sets)))
+    rng.shuffle(sets)
+    rng.shuffle(offsets)
+    offset = offsets[slot]
+    return {quiz_id: sets[(index + offset) % len(sets)]
+            for index, quiz_id in enumerate(quiz_ids)}
+
+
 def resolve_quiz_set_assignment(
-    config: StudyConfig, quiz_ids: Iterable[str]
+    config: StudyConfig, quiz_ids: Iterable[str], *, db=None
 ) -> dict[str, str]:
     """Map each of this participant's quizzes to the question set it draws from.
 
     A quiz absent from the result draws from the whole pool, which is what an
     unmapped quiz did before this existed.
 
-    Random mode shuffles the available sets across the participant's quizzes,
-    which also counterbalances any difference in difficulty between sets. It is
-    resolved once, at signup, and snapshotted onto the user like
-    variant_sequence — so a later config change cannot move a participant who is
-    already part-way through.
+    Random mode independently shuffles sets, so balance holds in expectation.
+    Balanced random uses randomized blocks within each quiz order for exact
+    set counts across complete blocks. Both are resolved once at signup and
+    snapshotted like variant_sequence, preserving in-flight assignments.
     """
     ordered_ids = list(quiz_ids)
+
+    if config.quiz_set_mode == QUIZ_SET_MODE_BALANCED_RANDOM:
+        if db is None:
+            raise ValueError("Balanced random assignment requires a database")
+        return _balanced_quiz_set_assignment(db, config, ordered_ids)
 
     if config.quiz_set_mode == QUIZ_SET_MODE_RANDOM:
         sets = list(ALL_SET_IDS)
@@ -524,7 +572,7 @@ def assign_flow(db, forced_first: Optional[str] = None) -> dict:
         # Resolved from step_order so random mode follows the counterbalanced
         # quiz order rather than the registry's declaration order.
         "quiz_set_assignment": resolve_quiz_set_assignment(
-            config, quiz_ids_in_order(step_order)
+            config, quiz_ids_in_order(step_order), db=db
         ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
@@ -587,7 +635,7 @@ def ensure_user_flow(db, doc: dict) -> dict:
             # whose assignment does not cover a quiz picks the map up at draw
             # time instead (services/quiz._load_or_create_attempt).
             patch["quiz_set_assignment"] = resolve_quiz_set_assignment(
-                load_study_config(db), quiz_ids_in_order(doc["step_order"])
+                load_study_config(db), quiz_ids_in_order(doc["step_order"]), db=db
             )
 
         if patch:
@@ -617,7 +665,7 @@ def ensure_user_flow(db, doc: dict) -> dict:
         "completed_steps": completed,
         "variant_sequence": sequence,
         "quiz_set_assignment": resolve_quiz_set_assignment(
-            config, quiz_ids_in_order(step_order)
+            config, quiz_ids_in_order(step_order), db=db
         ),
         "study_flow_version": config.version,
         "study_flow_mode": config.mode,
@@ -635,8 +683,8 @@ def preset_quiz_set(db, quiz_id: str) -> Optional[str]:
     quiz — which is everyone assigned before the map was configured, since the
     map starts empty. Read at draw time, so it costs nothing on the request path.
 
-    Random mode returns None: that mapping is a per-participant shuffle and
-    lives only on the participant, so there is nothing global to fall back to.
+    Both random modes return None: their mapping lives on the participant,
+    so there is nothing global to fall back to.
     """
     config = load_study_config(db)
     if config.quiz_set_mode != QUIZ_SET_MODE_PRESET:

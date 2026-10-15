@@ -47,6 +47,7 @@ class FakeCol:
             if not upsert:
                 return types.SimpleNamespace(matched_count=0)
             d = dict(q)
+            d.update(update.get("$setOnInsert", {}))
             self.docs.append(d)
         self._apply(d, update)
         return types.SimpleNamespace(matched_count=1)
@@ -532,6 +533,7 @@ class TestResolveQuizSetAssignment:
     def test_preset_uses_the_configured_map(self, config):
         cfg = sf.StudyConfig(
             variant_order=config.variant_order,
+            quiz_set_mode=sf.QUIZ_SET_MODE_PRESET,
             quiz_set_map=(("base", "a"), ("followup", "b")),
         )
         assert sf.resolve_quiz_set_assignment(cfg, _quiz_ids(cfg)) == {
@@ -541,7 +543,8 @@ class TestResolveQuizSetAssignment:
     def test_preset_leaves_unmapped_quizzes_out(self, config):
         """An unmapped quiz draws from the whole pool, so it must be absent."""
         cfg = sf.StudyConfig(
-            variant_order=config.variant_order, quiz_set_map=(("base", "a"),)
+            variant_order=config.variant_order, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET,
+            quiz_set_map=(("base", "a"),)
         )
         assignment = sf.resolve_quiz_set_assignment(cfg, _quiz_ids(cfg))
         assert set(assignment) == {"base"}
@@ -549,6 +552,7 @@ class TestResolveQuizSetAssignment:
     def test_preset_ignores_a_quiz_this_participant_does_not_take(self, config):
         cfg = sf.StudyConfig(
             variant_order=config.variant_order,
+            quiz_set_mode=sf.QUIZ_SET_MODE_PRESET,
             quiz_set_map=(("base", "a"), ("links", "c")),
         )
         assert sf.resolve_quiz_set_assignment(cfg, ["base"]) == {"base": "a"}
@@ -595,20 +599,20 @@ class TestResolveQuizSetAssignment:
 
 
 class TestQuizSetConfigPersistence:
-    def test_defaults_to_preset_with_no_map(self, db):
+    def test_defaults_to_balanced_random_with_no_map(self, db):
         cfg = sf.load_study_config(db)
-        assert cfg.quiz_set_mode == sf.QUIZ_SET_MODE_PRESET
+        assert cfg.quiz_set_mode == sf.QUIZ_SET_MODE_BALANCED_RANDOM
         assert cfg.quiz_set_map == ()
 
     def test_saves_and_reloads_the_map(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a", "followup": "b"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a", "followup": "b"})
         assert sf.quiz_set_map_dict(sf.load_study_config(db)) == {
             "base": "a", "followup": "b",
         }
 
     def test_changing_the_map_bumps_the_version(self, db):
         before = sf.load_study_config(db).version
-        after = sf.save_study_config(db, quiz_set_map={"base": "a"})
+        after = sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         assert after.version == before + 1
 
     def test_changing_the_set_mode_bumps_the_version(self, db):
@@ -617,19 +621,19 @@ class TestQuizSetConfigPersistence:
         assert after.version == before + 1
 
     def test_saving_the_same_map_does_not_bump(self, db):
-        first = sf.save_study_config(db, quiz_set_map={"base": "a"})
-        second = sf.save_study_config(db, quiz_set_map={"base": "a"})
+        first = sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
+        second = sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         assert second.version == first.version
 
     def test_invalid_set_mode_falls_back(self, db):
         sf.save_study_config(db, quiz_set_mode="sideways")
-        assert sf.load_study_config(db).quiz_set_mode == sf.QUIZ_SET_MODE_PRESET
+        assert sf.load_study_config(db).quiz_set_mode == sf.QUIZ_SET_MODE_BALANCED_RANDOM
 
     def test_stored_bad_set_mode_is_normalised_on_read(self, db):
         db["study_config"].docs.append(
             {"_id": sf.STUDY_CONFIG_ID, "quiz_set_mode": "bogus"}
         )
-        assert sf.load_study_config(db).quiz_set_mode == sf.QUIZ_SET_MODE_PRESET
+        assert sf.load_study_config(db).quiz_set_mode == sf.QUIZ_SET_MODE_BALANCED_RANDOM
 
     def test_stale_map_entries_are_dropped_on_read(self, db):
         db["study_config"].docs.append(
@@ -639,18 +643,137 @@ class TestQuizSetConfigPersistence:
 
     def test_other_fields_are_untouched_by_a_set_only_save(self, db):
         sf.save_study_config(db, counterbalance=False)
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         assert sf.load_study_config(db).counterbalance is False
 
     def test_as_dict_includes_the_set_fields(self):
         cfg = sf.StudyConfig(quiz_set_map=(("base", "a"),))
         assert cfg.as_dict()["quiz_set_map"] == {"base": "a"}
-        assert cfg.as_dict()["quiz_set_mode"] == sf.QUIZ_SET_MODE_PRESET
+        assert cfg.as_dict()["quiz_set_mode"] == sf.QUIZ_SET_MODE_BALANCED_RANDOM
+
+
+class TestBalancedRandomAssignment:
+    @pytest.mark.parametrize("counterbalance", [True, False])
+    @pytest.mark.parametrize("mode", [sf.MODE_ALL_VARIANTS, sf.MODE_SINGLE_VARIANT])
+    def test_sets_are_balanced_within_each_order_across_multiple_blocks(
+        self, db, counterbalance, mode
+    ):
+        from collections import Counter, defaultdict
+
+        sf.save_study_config(db, mode=mode, counterbalance=counterbalance)
+        grouped = defaultdict(list)
+        # Two complete blocks per order; fixed order needs only eight users.
+        orders = len(sf.all_variants()) if counterbalance else 1
+        for _ in range(orders * len(ALL_SET_IDS) * 2):
+            flow = sf.assign_flow(db)
+            ids = sf.quiz_ids_in_order(flow["step_order"])
+            mapping = flow["quiz_set_assignment"]
+            assert set(mapping) == set(ids)
+            assert len(set(mapping.values())) == len(mapping)
+            grouped[tuple(ids)].append(mapping)
+
+        assert len(grouped) == orders
+        for ids, mappings in grouped.items():
+            for start in (0, len(ALL_SET_IDS)):
+                for quiz_id in ids:
+                    assert Counter(m[quiz_id] for m in mappings[start:start + len(ALL_SET_IDS)]) == Counter(ALL_SET_IDS)
+
+    def test_seed_and_block_schedule_survive_a_worker_restart(self, db):
+        from copy import deepcopy
+
+        cfg = sf.load_study_config(db)
+        ids = _quiz_ids(cfg)
+        sf.resolve_quiz_set_assignment(cfg, ids, db=db)
+        other_worker = FakeDB()
+        other_worker.cols = deepcopy(db.cols)
+        expected = [sf.resolve_quiz_set_assignment(cfg, ids, db=db) for _ in range(7)]
+        actual = [sf.resolve_quiz_set_assignment(cfg, ids, db=other_worker) for _ in range(7)]
+        assert actual == expected
+
+    def test_slot_claim_is_atomic_and_seed_is_initialized_only_once(self, db, mocker):
+        cfg = sf.load_study_config(db)
+        ids = _quiz_ids(cfg)
+        counter = db["counters"]
+        spy = mocker.spy(counter, "find_one_and_update")
+        sf.resolve_quiz_set_assignment(cfg, ids, db=db)
+        first_seed = counter.docs[0]["seed"]
+        sf.resolve_quiz_set_assignment(cfg, ids, db=db)
+        assert counter.docs[0]["seed"] == first_seed
+        assert counter.docs[0]["seq"] == 2
+        assert spy.call_args.kwargs == {"upsert": True, "return_document": sf.ReturnDocument.AFTER}
+        assert spy.call_args.args[1]["$inc"] == {"seq": 1}
+        assert "seed" in spy.call_args.args[1]["$setOnInsert"]
+
+    def test_blocks_are_randomized_not_the_same_fixed_rotation(self, db):
+        cfg = sf.load_study_config(db)
+        ids = _quiz_ids(cfg)
+        # Pin the seed to make this a deterministic regression check.
+        sf.resolve_quiz_set_assignment(cfg, ids, db=db)
+        db["counters"].docs[0].update(seed="test-seed", seq=0)
+        schedules = []
+        for _ in range(3):
+            schedules.append([
+                tuple(sf.resolve_quiz_set_assignment(cfg, ids, db=db).values())
+                for _ in ALL_SET_IDS
+            ])
+        assert schedules[0] != schedules[1]
+        assert schedules[1] != schedules[2]
+
+    def test_overrides_do_not_advance_the_quiz_order_counter(self, db):
+        flows = [sf.assign_flow(db, forced_first="links") for _ in ALL_SET_IDS]
+        assert db["counters"].find_one({"_id": sf.ROUND_ROBIN_COUNTER_ID}) is None
+        for quiz_id in flows[0]["quiz_set_assignment"]:
+            assert {f["quiz_set_assignment"][quiz_id] for f in flows} == set(ALL_SET_IDS)
+
+    def test_config_version_starts_a_separate_allocation_cohort(self, db):
+        sf.assign_flow(db)
+        sf.save_study_config(db, counterbalance=False)
+        sf.assign_flow(db)
+        allocation_counters = [d for d in db["counters"].docs if d["_id"] != sf.ROUND_ROBIN_COUNTER_ID]
+        assert len(allocation_counters) == 2
+        assert [d["seq"] for d in allocation_counters] == [1, 1]
+
+    def test_reading_or_resetting_does_not_reroll_or_consume_slots(self, db):
+        user = _signup(db, ObjectId())
+        before = dict(user["quiz_set_assignment"])
+        counters = [(d["_id"], d["seq"]) for d in db["counters"].docs]
+        sf.ensure_user_flow(db, user)
+        sf.repoint_quiz_set(db, str(user["_id"]), "base")
+        assert user["quiz_set_assignment"] == before
+        assert [(d["_id"], d["seq"]) for d in db["counters"].docs] == counters
+
+    def test_missing_assignment_is_backfilled_once(self, db):
+        user = _signup(db, ObjectId())
+        del user["quiz_set_assignment"]
+        sf.ensure_user_flow(db, user)
+        before = dict(user["quiz_set_assignment"])
+        sf.ensure_user_flow(db, user)
+        assert user["quiz_set_assignment"] == before
+        assert len(before) == len(ALL_SET_IDS)
+
+    def test_empty_existing_assignment_is_preserved(self, db):
+        user = _signup(db, ObjectId())
+        user["quiz_set_assignment"] = {}
+        sf.ensure_user_flow(db, user)
+        assert user["quiz_set_assignment"] == {}
+
+    def test_explicit_existing_modes_are_preserved(self, db):
+        for mode in (sf.QUIZ_SET_MODE_PRESET, sf.QUIZ_SET_MODE_RANDOM):
+            sf.save_study_config(db, quiz_set_mode=mode)
+            assert sf.load_study_config(db).quiz_set_mode == mode
+
+    def test_unavailable_sets_fail_instead_of_reusing_a_set(self, db):
+        with pytest.raises(ValueError, match="at least one question set per quiz"):
+            sf.resolve_quiz_set_assignment(sf.load_study_config(db), ["q"] * 5, db=db)
+
+    def test_no_quizzes_uses_no_allocation_slot(self, db):
+        assert sf.resolve_quiz_set_assignment(sf.load_study_config(db), [], db=db) == {}
+        assert db["counters"].docs == []
 
 
 class TestQuizSetAssignmentAtSignup:
     def test_preset_map_is_stamped_on_the_participant(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a", "followup": "b"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a", "followup": "b"})
         user = _signup(db, "u1")
         assert user["quiz_set_assignment"]["base"] == "a"
         assert user["quiz_set_assignment"]["followup"] == "b"
@@ -663,16 +786,16 @@ class TestQuizSetAssignmentAtSignup:
         assert len(set(assignment.values())) == len(assignment)
 
     def test_a_later_config_change_does_not_move_an_existing_participant(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         before = dict(_signup(db, "u1")["quiz_set_assignment"])
 
-        sf.save_study_config(db, quiz_set_map={"base": "d"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "d"})
 
         assert db["users"].find_one({"_id": "u1"})["quiz_set_assignment"] == before
 
     def test_assignment_covers_only_the_quizzes_this_participant_takes(self, db):
         full_map = dict(zip([sf.BASE_QUIZ_ID, *sf.all_variants()], ALL_SET_IDS))
-        sf.save_study_config(db, mode=sf.MODE_SINGLE_VARIANT, quiz_set_map=full_map)
+        sf.save_study_config(db, mode=sf.MODE_SINGLE_VARIANT, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map=full_map)
 
         user = _signup(db, "u1")
 
@@ -693,7 +816,7 @@ class TestQuizSetAssignmentBackfill:
         return order
 
     def test_backfills_a_participant_assigned_before_sets_existed(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         oid = ObjectId()
         self._seed_flow_user(db, oid)
 
@@ -711,7 +834,7 @@ class TestQuizSetAssignmentBackfill:
         assert second["quiz_set_assignment"] == first["quiz_set_assignment"]
 
     def test_an_existing_assignment_is_left_alone(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "d"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "d"})
         oid = ObjectId()
         self._seed_flow_user(db, oid, quiz_set_assignment={"base": "a"})
 
@@ -720,7 +843,7 @@ class TestQuizSetAssignmentBackfill:
         assert doc["quiz_set_assignment"] == {"base": "a"}
 
     def test_legacy_user_without_a_flow_gets_one(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         oid = ObjectId()
         db["users"].docs.append({"_id": oid, "assigned_var": "links"})
 
@@ -739,6 +862,7 @@ class TestEmptyAssignmentIsNotFrozen:
 
     @staticmethod
     def _seed(db, **extra):
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET)
         oid = ObjectId()
         cfg = sf.load_study_config(db)
         order = sf.build_step_order(sf.variant_sequence_for_seq(1, cfg))
@@ -757,7 +881,7 @@ class TestEmptyAssignmentIsNotFrozen:
         first = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
         assert first["quiz_set_assignment"] == {}
 
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
 
         # The stored snapshot stays empty - no per-request write or config read.
         second = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
@@ -774,11 +898,11 @@ class TestEmptyAssignmentIsNotFrozen:
         assert sf.preset_quiz_set(db, "base") is None
 
     def test_preset_fallback_is_none_for_an_unmapped_quiz(self, db):
-        sf.save_study_config(db, quiz_set_map={"followup": "b"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"followup": "b"})
         assert sf.preset_quiz_set(db, "base") is None
 
     def test_a_non_empty_assignment_is_never_moved(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         oid = self._seed(db, quiz_set_assignment={"base": "b"})
 
         doc = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
@@ -805,14 +929,14 @@ class TestRepointQuizSet:
         return oid
 
     def test_picks_up_a_changed_map(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "d"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "d"})
         oid = self._seed(db, {"base": "a"})
 
         assert sf.repoint_quiz_set(db, str(oid), "base") == "d"
         assert db["users"].find_one({"_id": oid})["quiz_set_assignment"]["base"] == "d"
 
     def test_leaves_other_quizzes_alone(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "d", "followup": "b"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "d", "followup": "b"})
         oid = self._seed(db, {"base": "a", "followup": "b"})
 
         sf.repoint_quiz_set(db, str(oid), "base")
@@ -822,7 +946,7 @@ class TestRepointQuizSet:
         }
 
     def test_unmapping_a_quiz_drops_it(self, db):
-        sf.save_study_config(db, quiz_set_map={"followup": "b"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"followup": "b"})
         oid = self._seed(db, {"base": "a", "followup": "b"})
 
         assert sf.repoint_quiz_set(db, str(oid), "base") is None
@@ -837,5 +961,5 @@ class TestRepointQuizSet:
         assert db["users"].find_one({"_id": oid})["quiz_set_assignment"]["base"] == "a"
 
     def test_missing_user_is_handled(self, db):
-        sf.save_study_config(db, quiz_set_map={"base": "a"})
+        sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         assert sf.repoint_quiz_set(db, str(ObjectId()), "base") is None

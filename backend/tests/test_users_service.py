@@ -304,7 +304,7 @@ class TestCreateUser:
         oid = ObjectId()
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
-        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"}
 
         result = create_user(
             mock_col,
@@ -349,7 +349,7 @@ class TestCreateUser:
         oid = ObjectId()
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
-        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"}
 
         create_user(
             mock_col,
@@ -368,9 +368,10 @@ class TestCreateUser:
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
         # The override-consume claims a pending "links"; rotation must be skipped.
-        counters.find_one_and_update.return_value = {
-            "_id": "next_assignment_override", "variant": "links",
-        }
+        counters.find_one_and_update.side_effect = [
+            {"_id": "next_assignment_override", "variant": "links"},
+            {"seq": 1, "seed": "test-seed"},
+        ]
 
         result = create_user(
             mock_col, email="u@example.com", password="plainpassword",
@@ -387,11 +388,14 @@ class TestCreateUser:
             v.value for v in AssignedVar
         )
         assert set_doc["assignment_source"] == "override"
-        # Rotation counter was NOT advanced — only the override was consumed.
-        counters.find_one_and_update.assert_called_once()
-        assert counters.find_one_and_update.call_args[0][0] == {
+        # Consume the override and claim a set slot, without advancing rotation.
+        assert counters.find_one_and_update.call_count == 2
+        assert counters.find_one_and_update.call_args_list[0].args[0] == {
             "_id": "next_assignment_override", "variant": {"$ne": None},
         }
+        assert counters.find_one_and_update.call_args_list[1].args[0]["_id"].startswith(
+            "quiz_sets:balanced_random:"
+        )
 
     def test_falls_back_to_rotation_when_no_override(self, mock_col):
         oid = ObjectId()
@@ -401,6 +405,7 @@ class TestCreateUser:
         counters.find_one_and_update.side_effect = [
             None,
             {"_id": "user_signup_round_robin", "seq": 2},
+            {"seq": 1, "seed": "test-seed"},
         ]
 
         result = create_user(
@@ -409,14 +414,14 @@ class TestCreateUser:
         )
 
         assert result.assigned_var == AssignedVar.double  # seq 2 → double
-        assert counters.find_one_and_update.call_count == 2
+        assert counters.find_one_and_update.call_count == 3
 
     def test_stamps_default_quiz_sets(self, mock_col):
         oid = ObjectId()
         mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         counters = mock_col.database["counters"]
         counters.find_one.return_value = {"_id": "quiz_default_sets", "sets": ["a", "b"]}
-        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1}
+        counters.find_one_and_update.return_value = {"_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"}
 
         result = create_user(
             mock_col, email="u@example.com", password="plainpassword",

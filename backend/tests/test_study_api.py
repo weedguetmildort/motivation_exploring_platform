@@ -195,10 +195,10 @@ class TestQuizSetConfigEndpoints:
         admin = UserPublic(id="a1", email="admin@test.edu", is_admin=True)
         return TestClient(_app(admin, db=FakeDB()))
 
-    def test_defaults_to_preset_with_an_empty_map(self, admin_client):
+    def test_defaults_to_balanced_random_with_an_empty_map(self, admin_client):
         data = admin_client.get("/study/config").json()
 
-        assert data["quiz_set_mode"] == "preset"
+        assert data["quiz_set_mode"] == "balanced_random"
         assert data["quiz_set_map"] == {}
 
     def test_advertises_the_sets_and_quizzes_the_code_declares(self, admin_client):
@@ -226,6 +226,14 @@ class TestQuizSetConfigEndpoints:
     def test_switches_to_random_mode(self, admin_client):
         data = admin_client.put("/study/config", json={"quiz_set_mode": "random"}).json()
         assert data["quiz_set_mode"] == "random"
+
+    def test_switches_to_balanced_random_and_preserves_it(self, admin_client):
+        admin_client.put("/study/config", json={"quiz_set_mode": "preset"})
+        before = admin_client.get("/study/config").json()["version"]
+        response = admin_client.put("/study/config", json={"quiz_set_mode": "balanced_random"})
+        assert response.status_code == 200
+        assert response.json()["version"] == before + 1
+        assert admin_client.get("/study/config").json()["quiz_set_mode"] == "balanced_random"
 
     def test_rejects_an_unknown_set_letter(self, admin_client):
         resp = admin_client.put("/study/config", json={"quiz_set_map": {"base": "z"}})

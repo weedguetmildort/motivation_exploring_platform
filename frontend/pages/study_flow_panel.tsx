@@ -27,7 +27,7 @@ export default function StudyFlowPanel() {
     "all_variants",
   );
   const [counterbalance, setCounterbalance] = useState(true);
-  const [quizSetMode, setQuizSetMode] = useState<QuizSetMode>("preset");
+  const [quizSetMode, setQuizSetMode] = useState<QuizSetMode>("balanced_random");
   // quiz_id -> set letter. "" means unmapped (draws from the whole pool).
   const [quizSetMap, setQuizSetMap] = useState<Record<string, string>>({});
 
@@ -99,7 +99,7 @@ export default function StudyFlowPanel() {
         variant_order: order,
         counterbalance,
         quiz_set_mode: quizSetMode,
-        quiz_set_map: quizSetMap,
+        ...(quizSetMode === "preset" ? { quiz_set_map: quizSetMap } : {}),
       });
       applyConfig(c);
       setSavedAt(new Date().toLocaleTimeString());
@@ -360,8 +360,31 @@ export default function StudyFlowPanel() {
               </span>
               <span className="block text-sm text-gray-600">
                 Each participant gets their own random set-to-quiz mapping,
-                fixed at sign-up. Also counterbalances any difference in
-                difficulty between sets.
+                fixed at sign-up. Set usage balances on average, but can be
+                uneven in a small sample.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-gray-50">
+            <input
+              type="radio"
+              name="quizSetMode"
+              className="mt-1"
+              checked={quizSetMode === "balanced_random"}
+              onChange={() => setQuizSetMode("balanced_random")}
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                Balanced random (default)
+              </span>
+              <span className="block text-sm text-gray-600">
+                Randomize assignments in blocks of {config.known_sets?.length ?? 4}
+                {" "}participants within each quiz order. Each quiz receives every
+                question set once per complete block, and each participant uses
+                distinct sets. Assignments stay fixed at sign-up. Populate all
+                question sets before enrolling participants. Balance applies to
+                assigned participants; dropouts can make completed results uneven.
               </span>
             </span>
           </label>
@@ -464,7 +487,7 @@ export default function StudyFlowPanel() {
           </button>
           <button
             onClick={onSave}
-            disabled={!dirty || saving || duplicateSets.length > 0}
+            disabled={!dirty || saving || (quizSetMode === "preset" && duplicateSets.length > 0)}
             className="btn-primary disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save flow"}

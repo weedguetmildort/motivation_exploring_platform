@@ -38,7 +38,7 @@ export type StudyFlowResponse = {
 };
 
 /** How each quiz's question set is chosen. */
-export type QuizSetMode = "preset" | "random";
+export type QuizSetMode = "preset" | "random" | "balanced_random";
 
 export type StudyConfig = {
   mode: "all_variants" | "single_variant";

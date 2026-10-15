@@ -105,7 +105,7 @@ class TestSignup:
         oid = ObjectId()
         auth_mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         auth_mock_col.database.__getitem__.return_value.find_one_and_update.return_value = {
-            "_id": "user_signup_round_robin", "seq": 1
+            "_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"
         }
 
         resp = auth_client.post("/auth/signup", json=VALID_SIGNUP_PAYLOAD)
@@ -125,7 +125,7 @@ class TestSignup:
         oid = ObjectId()
         auth_mock_col.insert_one.return_value = MagicMock(inserted_id=oid)
         auth_mock_col.database.__getitem__.return_value.find_one_and_update.return_value = {
-            "_id": "user_signup_round_robin", "seq": 1
+            "_id": "user_signup_round_robin", "seq": 1, "seed": "test-seed"
         }
 
         auth_client.post("/auth/signup", json=VALID_SIGNUP_PAYLOAD)
