@@ -29,6 +29,19 @@ def regular_user():
     return UserPublic(id="userid1", email="student@test.edu", is_admin=False)
 
 
+# ── LLM served-model log ─────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _reset_served_model_log():
+    """app.core.llm dedupes its served-model logging process-wide, so without
+    this one test's log line suppresses the next test's. Clear it either side."""
+    from app.core.llm import reset_served_model_log
+
+    reset_served_model_log()
+    yield
+    reset_served_model_log()
+
+
 # ── MongoDB mock helpers ─────────────────────────────────────────────────────
 
 @pytest.fixture

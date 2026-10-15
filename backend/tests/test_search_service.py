@@ -569,13 +569,15 @@ class TestInjectCitationLinks:
 
 # ── get_chat_response_with_search ──────────────────────────────────────────────
 
-def _make_chat_client(reply_content):
+def _make_chat_client(reply_content, served_model=None):
     fake_message = MagicMock()
     fake_message.content = reply_content
     fake_choice = MagicMock()
     fake_choice.message = fake_message
     fake_response = MagicMock()
     fake_response.choices = [fake_choice]
+    if served_model is not None:
+        fake_response.model = served_model
 
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=fake_response)
@@ -660,3 +662,36 @@ class TestGetChatResponseWithSearch:
             asyncio.run(get_chat_response_with_search(client, "gpt-4", messages))
 
         mock_run_search.assert_awaited_once_with("")
+
+
+# ── served-model logging ──────────────────────────────────────────────────────
+
+class TestSearchServedModel:
+    def _run(self, client, model="gpt-4.1"):
+        messages = [{"role": "user", "content": "What is gravity?"}]
+        with patch("app.services.search._run_search", new_callable=AsyncMock, return_value=[]), \
+                patch("app.services.search._filter_valid_urls", new_callable=AsyncMock, return_value=[]):
+            return asyncio.run(get_chat_response_with_search(client, model, messages))
+
+    def test_logs_the_served_model(self, capsys):
+        client = _make_chat_client("An answer.", served_model="gpt-4.1")
+
+        self._run(client)
+
+        assert "[llm] search: gateway served 'gpt-4.1'" in capsys.readouterr().out
+
+    def test_warns_when_the_gateway_substitutes(self, capsys):
+        client = _make_chat_client("An answer.", served_model="gpt-4o-mini")
+
+        self._run(client)
+
+        out = capsys.readouterr().out
+        assert "requested 'gpt-4.1'" in out
+        assert "remapped" in out
+
+    def test_silent_when_the_response_carries_no_model(self, capsys):
+        client = _make_chat_client("An answer.")
+
+        self._run(client)
+
+        assert "[llm]" not in capsys.readouterr().out

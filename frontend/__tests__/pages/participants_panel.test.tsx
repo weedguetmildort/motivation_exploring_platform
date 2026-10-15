@@ -912,4 +912,273 @@ describe("ParticipantsPanelPage", () => {
       ).toBeInTheDocument();
     });
   });
+
+  describe("question set filter", () => {
+    function joinedOn(y: number, m: number, d: number): string {
+      return new Date(y, m - 1, d, 12, 0, 0).toISOString();
+    }
+
+    // A: setAOnly + setAB · B: setAB · C: setC · D: nobody
+    // No restriction: setNull (null) + setEmptyArr ([])
+    const setAOnly    = { ...activeParticipant,   id: "q1", first_name: "Ann", last_name: "Alpha", quiz_sets: ["a"],      created_at: joinedOn(2025, 1, 1) };
+    const setAB       = { ...completeParticipant, id: "q2", first_name: "Bo",  last_name: "Beta",  quiz_sets: ["a", "b"], created_at: joinedOn(2025, 1, 20) };
+    const setC        = { ...activeParticipant,   id: "q3", first_name: "Cy",  last_name: "Gamma", quiz_sets: ["c"],      created_at: joinedOn(2025, 1, 10) };
+    const setNull     = { ...activeParticipant,   id: "q4", first_name: "Dee", last_name: "Delta", quiz_sets: null,       created_at: joinedOn(2025, 1, 10) };
+    const setEmptyArr = { ...activeParticipant,   id: "q5", first_name: "Eli", last_name: "Epsln", quiz_sets: [],         created_at: joinedOn(2025, 1, 10) };
+
+    const roster = [setAOnly, setAB, setC, setNull, setEmptyArr];
+
+    function filterGroup() {
+      return within(screen.getByRole("group", { name: "Filter by question set" }));
+    }
+
+    function pick(...labels: string[]) {
+      for (const label of labels) {
+        fireEvent.click(filterGroup().getByRole("button", { name: label }));
+      }
+    }
+
+    function countRow(groupName: string, label: string) {
+      const group = within(screen.getByRole("group", { name: groupName }));
+      return within(group.getByText(label).closest("div") as HTMLElement);
+    }
+
+    beforeEach(() => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockResolvedValue(roster);
+    });
+
+    it("shows every participant when nothing is selected", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      for (const name of ["Bo Beta", "Cy Gamma", "Dee Delta", "Eli Epsln"]) {
+        expect(screen.getByText(name)).toBeInTheDocument();
+      }
+      expect(filterGroup().getByText("all")).toBeInTheDocument();
+    });
+
+    it("filters the roster to one selected set", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+
+      await waitFor(() => expect(screen.queryByText("Cy Gamma")).not.toBeInTheDocument());
+      expect(screen.getByText("Ann Alpha")).toBeInTheDocument();
+      expect(screen.getByText("Bo Beta")).toBeInTheDocument();
+    });
+
+    it("matches a participant on any set they draw from", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      // Bo draws from A and B, so filtering on B alone still finds them.
+      pick("B");
+
+      await waitFor(() => expect(screen.queryByText("Ann Alpha")).not.toBeInTheDocument());
+      expect(screen.getByText("Bo Beta")).toBeInTheDocument();
+    });
+
+    it("treats two selected sets as a union, not an intersection", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A", "C");
+
+      await waitFor(() => expect(screen.queryByText("Dee Delta")).not.toBeInTheDocument());
+      expect(screen.getByText("Ann Alpha")).toBeInTheDocument();
+      expect(screen.getByText("Bo Beta")).toBeInTheDocument();
+      expect(screen.getByText("Cy Gamma")).toBeInTheDocument();
+    });
+
+    it("does not match unrestricted participants against a lettered set", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+
+      // Dee and Eli draw from everything, but they belong to their own bucket —
+      // the same rule the counts row uses.
+      await waitFor(() => expect(screen.queryByText("Dee Delta")).not.toBeInTheDocument());
+      expect(screen.queryByText("Eli Epsln")).not.toBeInTheDocument();
+    });
+
+    it("matches both null and empty quiz_sets under No restriction", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("No restriction");
+
+      await waitFor(() => expect(screen.queryByText("Ann Alpha")).not.toBeInTheDocument());
+      expect(screen.getByText("Dee Delta")).toBeInTheDocument();
+      expect(screen.getByText("Eli Epsln")).toBeInTheDocument();
+    });
+
+    it("combines a lettered set with the unrestricted bucket", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("C", "No restriction");
+
+      await waitFor(() => expect(screen.queryByText("Ann Alpha")).not.toBeInTheDocument());
+      expect(screen.getByText("Cy Gamma")).toBeInTheDocument();
+      expect(screen.getByText("Dee Delta")).toBeInTheDocument();
+      expect(screen.getByText("Eli Epsln")).toBeInTheDocument();
+    });
+
+    it("shows an unselected set as empty", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("D");
+
+      expect(
+        await screen.findByText("No participants in the selected question sets."),
+      ).toBeInTheDocument();
+    });
+
+    it("reflects selection state on the chips and restores on toggle off", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+      await waitFor(() =>
+        expect(filterGroup().getByRole("button", { name: "A" })).toHaveAttribute("aria-pressed", "true"),
+      );
+      expect(filterGroup().getByRole("button", { name: "B" })).toHaveAttribute("aria-pressed", "false");
+
+      pick("A");
+
+      await waitFor(() => expect(screen.getByText("Cy Gamma")).toBeInTheDocument());
+      expect(filterGroup().getByRole("button", { name: "A" })).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("reports how many of the roster the selection is showing", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+
+      expect(await screen.findByText("Showing 2 of 5")).toBeInTheDocument();
+    });
+
+    it("rescopes the tab counts to the selection", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+      expect(screen.getByRole("button", { name: "All (5)" })).toBeInTheDocument();
+
+      pick("A");
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "All (2)" })).toBeInTheDocument(),
+      );
+      expect(screen.getByRole("button", { name: "Complete (1)" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Active (1)" })).toBeInTheDocument();
+    });
+
+    it("rescopes the condition and question-set counts to the selection", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+      expect(
+        countRow("Cases by question set", "No restriction").getByText("2 enrolled"),
+      ).toBeInTheDocument();
+
+      pick("A");
+
+      // Ann is "links", Bo is "followup" and complete; B still shows Bo, and the
+      // unrestricted bucket empties out.
+      await waitFor(() =>
+        expect(countRow("Cases by condition", "Links").getByText("1 enrolled")).toBeInTheDocument(),
+      );
+      expect(countRow("Cases by condition", "Follow-up").getByText("1 complete")).toBeInTheDocument();
+      expect(countRow("Cases by question set", "A").getByText("2 enrolled")).toBeInTheDocument();
+      expect(countRow("Cases by question set", "B").getByText("1 enrolled")).toBeInTheDocument();
+      expect(countRow("Cases by question set", "No restriction").getByText("0 enrolled")).toBeInTheDocument();
+    });
+
+    it("clears the selection with Clear", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+      await waitFor(() => expect(screen.queryByText("Cy Gamma")).not.toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+      await waitFor(() => expect(screen.getByText("Cy Gamma")).toBeInTheDocument());
+      expect(filterGroup().getByRole("button", { name: "A" })).toHaveAttribute("aria-pressed", "false");
+      expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+    });
+
+    it("composes with the join-date filter", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+      fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-01-15" } });
+
+      // Set A holds Ann (Jan 1) and Bo (Jan 20); the date range keeps only Bo.
+      await waitFor(() => expect(screen.queryByText("Ann Alpha")).not.toBeInTheDocument());
+      expect(screen.getByText("Bo Beta")).toBeInTheDocument();
+      expect(screen.getByText("Showing 1 of 5")).toBeInTheDocument();
+    });
+
+    it("clears both filters at once", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+      fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-01-15" } });
+      await waitFor(() => expect(screen.queryByText("Ann Alpha")).not.toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+      await waitFor(() => expect(screen.getByText("Ann Alpha")).toBeInTheDocument());
+      expect(screen.getByText("Cy Gamma")).toBeInTheDocument();
+      expect(screen.getByLabelText("From")).toHaveValue("");
+    });
+
+    it("names both filters when they jointly empty the roster", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("D");
+      fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-01-15" } });
+
+      expect(
+        await screen.findByText("No participants match these filters."),
+      ).toBeInTheDocument();
+    });
+
+    it("composes with the tab filter", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+      fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
+
+      // Set A narrowed to complete participants is Bo alone.
+      await waitFor(() => expect(screen.queryByText("Ann Alpha")).not.toBeInTheDocument());
+      expect(screen.getByText("Bo Beta")).toBeInTheDocument();
+    });
+
+    it("leaves the per-participant set chips alone", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Ann Alpha");
+
+      pick("A");
+
+      // The filter chips and a participant's own assignment chips are separate
+      // controls — filtering must not touch anyone's assigned sets.
+      await waitFor(() => expect(screen.queryByText("Cy Gamma")).not.toBeInTheDocument());
+      const own = within(screen.getByRole("group", { name: `Question sets for ${setAOnly.email}` }));
+      expect(own.getByRole("button", { name: "A" })).toHaveAttribute("aria-pressed", "true");
+      expect(own.getByRole("button", { name: "B" })).toHaveAttribute("aria-pressed", "false");
+      expect(mockApiFetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/quiz-sets"),
+        expect.anything(),
+      );
+    });
+  });
 });

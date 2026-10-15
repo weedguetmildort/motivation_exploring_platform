@@ -301,6 +301,64 @@ class TestExploreLink:
         mock_fetch.assert_called_once_with(doc["url"], timeout=42)
 
 
+class TestExploreGatewayClient:
+    """Both explore endpoints must source their LLM client from the shared
+    factory — they used to build an OpenAI client inline with their own copy of
+    the key and base-url default."""
+
+    def test_explore_uses_the_shared_factory(self, client, mock_col):
+        doc = make_link_doc(status="READY")
+        mock_col.find_one.return_value = doc
+
+        with patch("app.api.knowledge_links.get_sync_llm_client") as factory, patch(
+            "app.services.link_health.fetch_page_metadata",
+            return_value=("Fetched Title", "Fetched desc", "Excerpt", 200),
+        ), patch("app.services.link_health.is_relevant", return_value=(True, None)):
+            resp = client.post(f"/knowledge-links/{doc['_id']}/explore")
+
+        assert resp.status_code == 200
+        factory.assert_called_once()
+
+    def test_explore_passes_the_factory_client_to_the_service(self, client, mock_col):
+        doc = make_link_doc(status="READY")
+        mock_col.find_one.return_value = doc
+        sentinel = MagicMock()
+
+        with patch("app.api.knowledge_links.get_sync_llm_client", return_value=sentinel), patch(
+            "app.api.knowledge_links.explore_link"
+        ) as explore:
+            explore.return_value = {
+                "proposed_title": "T",
+                "proposed_description": "D",
+                "article_excerpt": "E",
+                "http_code": 200,
+                "relevant": True,
+                "relevance_reason": None,
+            }
+            resp = client.post(f"/knowledge-links/{doc['_id']}/explore")
+
+        assert resp.status_code == 200
+        # explore_link(links, link_id, openai_client, allowlist_cache, timeout=...)
+        assert explore.call_args.args[2] is sentinel
+
+    def test_apply_uses_the_shared_factory(self, client, mock_col):
+        oid = ObjectId()
+        original = make_link_doc(status="READY", _id=oid)
+        updated = make_link_doc(status="READY", _id=oid, title="New Title", description="New description")
+        mock_col.find_one.side_effect = [original, updated]
+
+        with patch("app.api.knowledge_links.get_sync_llm_client") as factory, patch(
+            "app.services.link_health.is_relevant", return_value=(True, None)
+        ):
+            resp = client.post(
+                f"/knowledge-links/{oid}/explore/apply",
+                json={"title": "New Title", "description": "New description"},
+            )
+
+        assert resp.status_code == 200
+        factory.assert_called_once()
+
+
 class TestApplyExplore:
     """POST /knowledge-links/{id}/explore/apply — saves the admin-confirmed content."""
 
