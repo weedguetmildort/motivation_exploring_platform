@@ -3,6 +3,7 @@ import { apiFetch } from "../lib/fetcher";
 import { demographicLabel, formatMetric, type ParticipantResults, type QuestionResult, type QuestionTrace } from "../lib/researchResults";
 import ResearchComparison from "./ResearchComparison";
 import MarkdownMessage from "./MarkdownMessage";
+import ResearchCoding from "./ResearchCoding";
 
 const yesNo = (value: boolean | null) => value == null ? "—" : value ? "Yes" : "No";
 
@@ -12,6 +13,7 @@ function QuestionDetails({ participantId, question, options, onClose }: { partic
   const [eventPage, setEventPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showIntervals, setShowIntervals] = useState(false);
+  const [showCoding, setShowCoding] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const element = dialog.current;
@@ -53,6 +55,9 @@ function QuestionDetails({ participantId, question, options, onClose }: { partic
           <MarkdownMessage content={choice.label} />
         </li>)}</ul>
       </section> : <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The exact question and choices were not saved with this older attempt. They cannot be reconstructed reliably from the current question bank. Any saved conversation is shown below.</p>}
+      <details onToggle={event => setShowCoding(event.currentTarget.open)}><summary className="cursor-pointer font-medium text-sm">Conversation coding and evidence</summary>
+        {showCoding && <div className="mt-3"><ResearchCoding path={`/api/research/participants/${encodeURIComponent(participantId)}/questions/${encodeURIComponent(question.attempt_id)}/${encodeURIComponent(question.question_id)}?${options}`} /></div>}
+      </details>
       <div><h5 className="font-medium mb-2">Conversation</h5>{!trace.messages.length && <p className="text-sm text-gray-600">No completed messages were saved for this question.</p>}
         <div className="space-y-3">{trace.messages.map(message => <div key={message.id} className="rounded border bg-white p-3">
           <p className="text-sm text-gray-600 mb-2">{message.role === "user" ? "Student" : "Assistant"} · {message.created_at}{message.trigger ? ` · ${message.trigger.replaceAll("_", " ")}` : ""}</p>

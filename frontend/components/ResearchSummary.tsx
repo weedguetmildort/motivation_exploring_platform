@@ -3,6 +3,7 @@ import { apiFetch } from "../lib/fetcher";
 import { demographicLabel, formatMetric, type Results } from "../lib/researchResults";
 import ResearchComparison, { MetricValue } from "./ResearchComparison";
 import ResearchParticipant from "./ResearchParticipant";
+import ResearchStatistics from "./ResearchStatistics";
 
 export default function ResearchSummary() {
   const [data, setData] = useState<Results | null>(null);
@@ -93,6 +94,7 @@ export default function ResearchSummary() {
       <section className="rounded-xl border p-4"><h2 className="text-lg font-semibold mb-4">Averages for filtered participants</h2>
         {data.overall.participant_count ? <ResearchComparison overall={data.overall} variants={data.variants} definitions={data.metric_definitions} /> : <p>No attempts match the selected study filters. Matching accounts are listed below.</p>}
       </section>
+      <ResearchStatistics query={query} includeTests={includeTests} includeArchived={includeArchived} />
       <section className="rounded-xl border p-4"><h2 className="text-lg font-semibold mb-2">Individual participants</h2><p className="text-sm text-gray-600 mb-3">Accounts with no selected attempts remain searchable. Open a participant to inspect all their quiz results independently of the cohort filters.</p>
         <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead><tr>{["Participant", "Gender", "Academic level / year", "Selected attempts", "Answered", "Accuracy", "Details"].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{data.participants.map(person => <tr key={person.participant_id} className="border-b last:border-0">
           <td className="p-2"><div className="font-medium">{person.name || person.participant_id}{person.is_test ? " (test)" : ""}</div><div className="text-gray-600">{person.email}</div></td>
