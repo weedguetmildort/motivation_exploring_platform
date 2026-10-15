@@ -578,4 +578,338 @@ describe("ParticipantsPanelPage", () => {
       );
     });
   });
+
+  describe("cases by question set", () => {
+    // Sets overlap, so these fixtures deliberately double-count:
+    //   A: setA + setAB enrolled (setAB complete)      -> 2 enrolled, 1 complete
+    //   B: setAB only                                  -> 1 enrolled, 1 complete
+    //   C: setCDeclined only, and it declined consent  -> 0 enrolled, 0 complete
+    //   D: nobody                                      -> 0 enrolled, 0 complete
+    //   No restriction: setNull + setEmpty             -> 2 enrolled, 0 complete
+    const setA         = { ...activeParticipant,   id: "s1", quiz_sets: ["a"] };
+    const setAB        = { ...completeParticipant, id: "s2", quiz_sets: ["a", "b"] };
+    const setCDeclined = { ...declinedParticipant, id: "s3", quiz_sets: ["c"] };
+    const setNull      = { ...activeParticipant,   id: "s4", quiz_sets: null };
+    const setEmpty     = { ...activeParticipant,   id: "s5", quiz_sets: [] };
+
+    function setRow(label: string) {
+      const card = screen.getByRole("group", { name: "Cases by question set" });
+      const row = within(card).getByText(label).closest("div") as HTMLElement;
+      return within(row);
+    }
+
+    // Route apiFetch by URL so per-participant PATCHes echo the new sets back.
+    function mockRoster(participants: any[]) {
+      mockApiFetch.mockImplementation((url: string, init?: any) => {
+        if (url.includes("quiz-default-sets")) return Promise.resolve({ sets: null });
+        if (url.includes("next-assignment")) return Promise.resolve({ next: "followup", source: "rotation" });
+        if (url.includes("/quiz-sets")) {
+          const id = url.split("/")[3];
+          const p = participants.find((x) => x.id === id);
+          return Promise.resolve({ ...p, quiz_sets: JSON.parse(init.body).quiz_sets });
+        }
+        return Promise.resolve(participants);
+      });
+    }
+
+    beforeEach(() => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockRoster([setA, setAB, setCDeclined, setNull, setEmpty]);
+    });
+
+    it("shows enrolled and complete counts per question set", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Bob Jones");
+
+      expect(setRow("A").getByText("2 enrolled")).toBeInTheDocument();
+      expect(setRow("A").getByText("1 complete")).toBeInTheDocument();
+
+      expect(setRow("B").getByText("1 enrolled")).toBeInTheDocument();
+      expect(setRow("B").getByText("1 complete")).toBeInTheDocument();
+    });
+
+    it("counts a participant restricted to two sets under each of them", async () => {
+      mockRoster([setAB]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Bob Jones");
+
+      // The single participant appears under both A and B — the rows overlap
+      // rather than partitioning the roster.
+      expect(setRow("A").getByText("1 enrolled")).toBeInTheDocument();
+      expect(setRow("B").getByText("1 enrolled")).toBeInTheDocument();
+      expect(setRow("C").getByText("0 enrolled")).toBeInTheDocument();
+      expect(setRow("No restriction").getByText("0 enrolled")).toBeInTheDocument();
+    });
+
+    it("puts unrestricted participants in their own bucket, not in every set", async () => {
+      mockRoster([setNull, setEmpty]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+      await waitFor(() =>
+        expect(setRow("No restriction").getByText("2 enrolled")).toBeInTheDocument(),
+      );
+
+      // Both a null and an empty quiz_sets mean "draws from everything", and
+      // neither inflates the individual set rows.
+      for (const s of ["A", "B", "C", "D"]) {
+        expect(setRow(s).getByText("0 enrolled")).toBeInTheDocument();
+      }
+    });
+
+    it("excludes a participant who declined consent from the set's enrolled count", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Bob Jones");
+
+      // Set C's only participant declined -> not a usable case.
+      expect(setRow("C").getByText("0 enrolled")).toBeInTheDocument();
+      expect(setRow("C").getByText("0 complete")).toBeInTheDocument();
+    });
+
+    it("shows a set with no participants as zero", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Bob Jones");
+
+      expect(setRow("D").getByText("0 enrolled")).toBeInTheDocument();
+      expect(setRow("D").getByText("0 complete")).toBeInTheDocument();
+    });
+
+    it("renders every set at zero for an empty roster", async () => {
+      mockRoster([]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Participants Panel");
+
+      for (const s of ["A", "B", "C", "D", "No restriction"]) {
+        expect(setRow(s).getByText("0 enrolled")).toBeInTheDocument();
+      }
+    });
+
+    it("recounts after a participant's sets are edited inline", async () => {
+      mockRoster([setA]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Alice Smith");
+      expect(setRow("A").getByText("1 enrolled")).toBeInTheDocument();
+      expect(setRow("B").getByText("0 enrolled")).toBeInTheDocument();
+
+      const chips = within(
+        screen.getByRole("group", { name: `Question sets for ${setA.email}` }),
+      );
+      fireEvent.click(chips.getByRole("button", { name: "B" }));
+
+      // The PATCH response (a + b) feeds straight back into the counts.
+      await waitFor(() => expect(setRow("B").getByText("1 enrolled")).toBeInTheDocument());
+      expect(setRow("A").getByText("1 enrolled")).toBeInTheDocument();
+    });
+
+    it("still counts every set when the tab filter hides participant cards", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Bob Jones");
+
+      fireEvent.click(screen.getByRole("button", { name: /Declined/ }));
+
+      expect(setRow("A").getByText("2 enrolled")).toBeInTheDocument();
+      expect(setRow("No restriction").getByText("2 enrolled")).toBeInTheDocument();
+    });
+  });
+
+  describe("join date filter", () => {
+    // Build a join date that lands on the given local calendar day whatever
+    // timezone the suite runs in — local noon is far from either boundary.
+    function joinedOn(y: number, m: number, d: number): string {
+      return new Date(y, m - 1, d, 12, 0, 0).toISOString();
+    }
+
+    const janFirst  = { ...activeParticipant,   id: "j1", first_name: "Early",  last_name: "Bird",  created_at: joinedOn(2025, 1, 1) };
+    const janTenth  = { ...activeParticipant,   id: "j2", first_name: "Middle", last_name: "Child", created_at: joinedOn(2025, 1, 10) };
+    const janTwenty = { ...completeParticipant, id: "j3", first_name: "Late",   last_name: "Comer", created_at: joinedOn(2025, 1, 20) };
+    const undated   = { ...activeParticipant,   id: "j4", first_name: "No",     last_name: "Date",  created_at: null };
+
+    const roster = [janFirst, janTenth, janTwenty];
+
+    function setRange(from: string, to: string) {
+      if (from) fireEvent.change(screen.getByLabelText("From"), { target: { value: from } });
+      if (to)   fireEvent.change(screen.getByLabelText("To"),   { target: { value: to } });
+    }
+
+    beforeEach(() => {
+      mockGetMe.mockResolvedValue({ user: adminUser });
+      mockApiFetch.mockResolvedValue(roster);
+    });
+
+    it("keeps every participant when no range is set", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      expect(screen.getByText("Middle Child")).toBeInTheDocument();
+      expect(screen.getByText("Late Comer")).toBeInTheDocument();
+      expect(screen.queryByText(/Showing \d+ of \d+/)).not.toBeInTheDocument();
+    });
+
+    it("filters out participants who joined before the From date", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("2025-01-10", "");
+
+      await waitFor(() => expect(screen.queryByText("Early Bird")).not.toBeInTheDocument());
+      expect(screen.getByText("Middle Child")).toBeInTheDocument();
+      expect(screen.getByText("Late Comer")).toBeInTheDocument();
+    });
+
+    it("filters out participants who joined after the To date", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("", "2025-01-10");
+
+      await waitFor(() => expect(screen.queryByText("Late Comer")).not.toBeInTheDocument());
+      expect(screen.getByText("Early Bird")).toBeInTheDocument();
+      expect(screen.getByText("Middle Child")).toBeInTheDocument();
+    });
+
+    it("keeps only participants inside a closed range", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("2025-01-05", "2025-01-15");
+
+      await waitFor(() => expect(screen.queryByText("Early Bird")).not.toBeInTheDocument());
+      expect(screen.queryByText("Late Comer")).not.toBeInTheDocument();
+      expect(screen.getByText("Middle Child")).toBeInTheDocument();
+    });
+
+    it("includes participants who joined exactly on either boundary day", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      // Both bounds are inclusive: the participants defining the edges stay.
+      setRange("2025-01-01", "2025-01-20");
+
+      await waitFor(() => expect(screen.getByText("Early Bird")).toBeInTheDocument());
+      expect(screen.getByText("Middle Child")).toBeInTheDocument();
+      expect(screen.getByText("Late Comer")).toBeInTheDocument();
+    });
+
+    it("reports how many of the roster the range is showing", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("2025-01-05", "");
+
+      expect(await screen.findByText("Showing 2 of 3")).toBeInTheDocument();
+    });
+
+    it("rescopes the tab counts to the range", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+      expect(screen.getByRole("button", { name: "All (3)" })).toBeInTheDocument();
+
+      setRange("2025-01-15", "");
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "All (1)" })).toBeInTheDocument(),
+      );
+      // Only the complete participant (Jan 20) survives the range.
+      expect(screen.getByRole("button", { name: "Complete (1)" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Active (0)" })).toBeInTheDocument();
+    });
+
+    it("rescopes the condition and question-set counts to the range", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      const conditionGroup = () => within(screen.getByRole("group", { name: "Cases by condition" }));
+      const setGroup = () => within(screen.getByRole("group", { name: "Cases by question set" }));
+      const rowFor = (group: ReturnType<typeof within>, label: string) =>
+        within(group.getByText(label).closest("div") as HTMLElement);
+
+      // Jan 1 and Jan 10 are both "links"; Jan 20 is "followup". All three are
+      // unrestricted, so they sit in the No restriction bucket.
+      expect(rowFor(conditionGroup(), "Links").getByText("2 enrolled")).toBeInTheDocument();
+      expect(rowFor(setGroup(), "No restriction").getByText("3 enrolled")).toBeInTheDocument();
+
+      setRange("2025-01-15", "");
+
+      await waitFor(() =>
+        expect(rowFor(conditionGroup(), "Links").getByText("0 enrolled")).toBeInTheDocument(),
+      );
+      expect(rowFor(conditionGroup(), "Follow-up").getByText("1 enrolled")).toBeInTheDocument();
+      expect(rowFor(setGroup(), "No restriction").getByText("1 enrolled")).toBeInTheDocument();
+    });
+
+    it("restores the full roster when the range is cleared", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("2025-01-15", "");
+      await waitFor(() => expect(screen.queryByText("Early Bird")).not.toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+      await waitFor(() => expect(screen.getByText("Early Bird")).toBeInTheDocument());
+      expect(screen.getByText("Middle Child")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+    });
+
+    it("hides participants with no join date and says how many", async () => {
+      mockApiFetch.mockResolvedValue([...roster, undated]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("No Date");
+
+      setRange("2025-01-01", "2025-01-20");
+
+      await waitFor(() => expect(screen.queryByText("No Date")).not.toBeInTheDocument());
+      expect(
+        screen.getByText("1 participant hidden — no join date recorded."),
+      ).toBeInTheDocument();
+    });
+
+    it("treats an unparseable join date the same as a missing one", async () => {
+      const malformed = {
+        ...activeParticipant, id: "j5", first_name: "Bad", last_name: "Date", created_at: "not-a-date",
+      };
+      mockApiFetch.mockResolvedValue([...roster, malformed]);
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Bad Date");
+
+      setRange("2025-01-01", "2025-01-20");
+
+      await waitFor(() => expect(screen.queryByText("Bad Date")).not.toBeInTheDocument());
+      expect(
+        screen.getByText("1 participant hidden — no join date recorded."),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps undated participants visible while no range is set", async () => {
+      mockApiFetch.mockResolvedValue([...roster, undated]);
+      render(<ParticipantsPanelPage />);
+
+      expect(await screen.findByText("No Date")).toBeInTheDocument();
+      expect(screen.queryByText(/no join date recorded/)).not.toBeInTheDocument();
+    });
+
+    it("composes with the tab filter", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("2025-01-05", "");
+      await waitFor(() => expect(screen.queryByText("Early Bird")).not.toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: /Complete/ }));
+
+      // In-range (Jan 10, Jan 20) narrowed to complete (Jan 20) = Late Comer.
+      await waitFor(() => expect(screen.queryByText("Middle Child")).not.toBeInTheDocument());
+      expect(screen.getByText("Late Comer")).toBeInTheDocument();
+    });
+
+    it("explains an empty roster as a date-range miss, not an empty tab", async () => {
+      render(<ParticipantsPanelPage />);
+      await screen.findByText("Early Bird");
+
+      setRange("2025-06-01", "2025-06-30");
+
+      expect(
+        await screen.findByText("No participants in this date range."),
+      ).toBeInTheDocument();
+    });
+  });
 });
