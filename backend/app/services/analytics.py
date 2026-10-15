@@ -54,11 +54,14 @@ def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
         quiz_filter = {"$in": _VARIANT_QUIZ_IDS}
 
     col = get_quiz_attempts_collection(db)
-    attempt = col.find_one(
-        {"user_id": user_id, "quiz_id": quiz_filter, "status": "completed"},
-        {"answers": 1, "quiz_id": 1},
-    )
-    if not attempt:
+    query = {"user_id": user_id, "quiz_id": quiz_filter, "status": "completed"}
+    projection = {"answers": 1, "quiz_id": 1}
+    if quiz_type == "base":
+        attempt = col.find_one(query, projection)
+        attempts = [attempt] if attempt else []
+    else:
+        attempts = list(col.find(query, projection))
+    if not attempts:
         return {
             "user_id": user_id,
             "quiz_type": quiz_type,
@@ -69,17 +72,18 @@ def get_user_quiz_accuracy(db, user_id: str, quiz_type: str) -> dict:
         }
 
     total, correct = 0, 0
-    for ans in attempt.get("answers", []):
-        if ans.get("answered_at"):
-            total += 1
-            if ans.get("marked_correct"):
-                correct += 1
+    for attempt in attempts:
+        for ans in attempt.get("answers", []):
+            if ans.get("answered_at"):
+                total += 1
+                if ans.get("marked_correct"):
+                    correct += 1
 
     accuracy = correct / total if total > 0 else None
     return {
         "user_id": user_id,
         "quiz_type": quiz_type,
-        "quiz_id": attempt["quiz_id"],
+        "quiz_id": attempts[0]["quiz_id"] if len(attempts) == 1 else None,
         "total": total,
         "correct": correct,
         "accuracy": accuracy,

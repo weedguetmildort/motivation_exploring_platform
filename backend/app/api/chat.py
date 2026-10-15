@@ -27,6 +27,7 @@ from ..services.chat import (
 from ..services.search import _build_search_context, _inject_citation_links
 # from ..services.search import _run_search, _filter_valid_urls  # external search disabled
 from ..services.followup import generate_followup_questions
+from ..services.research_chat import begin_request, track_stream, update_request
 
 router = APIRouter()
 
@@ -124,6 +125,7 @@ async def _save_exchange(
     assistant_metadata: dict | None = None,
     question_id: Optional[str] = None,
     trigger: Optional[str] = None,
+    research_context: dict | None = None,
 ) -> None:
     """Persist the user message then the assistant reply, awaited before the
     caller reports success to the client.
@@ -141,19 +143,31 @@ async def _save_exchange(
     """
     def _save() -> None:
         user_extra = {}
+        if research_context:
+            user_extra.update(request_id=research_context["request_id"], created_at=research_context["started_at"])
         if question_id is not None:
             user_extra["question_id"] = question_id
         if trigger is not None:
             user_extra["trigger"] = trigger
         try:
             _save_message(col, "user", user, conv_id, user_message, extra_fields=user_extra or None)
+            if research_context is not None:
+                research_context["user_message_persisted"] = True
         except Exception as e:
+            if research_context is not None:
+                research_context["user_message_persisted"] = False
             print(f"[chat] FAILED to save USER message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
 
-        assistant_extra = {"question_id": question_id} if question_id is not None else None
+        assistant_extra = {"question_id": question_id} if question_id is not None else {}
+        if research_context:
+            assistant_extra.update({key: research_context.get(key) for key in ("request_id", "model_version", "prompt_version", "prompt_hash", "attempt_id")})
         try:
             _save_message(col, "assistant", user, conv_id, assistant_reply, assistant_metadata, extra_fields=assistant_extra)
+            if research_context is not None:
+                research_context["assistant_message_persisted"] = True
         except Exception as e:
+            if research_context is not None:
+                research_context["assistant_message_persisted"] = False
             print(f"[chat] FAILED to save ASSISTANT message conv={conv_id} user={user.id}: {type(e).__name__}: {e}")
 
     await asyncio.to_thread(_save)
@@ -290,6 +304,7 @@ async def _standard_stream(
     question_id: Optional[str] = None,
     trigger: Optional[str] = None,
     answer_choices: Optional[list[QuestionChoice]] = None,
+    research_context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens, await the save, emit done, then optionally yield from after_done.
 
@@ -316,7 +331,9 @@ async def _standard_stream(
     metadata = AIMessageMetadata(
         answer_incorrectly=answer_incorrectly, stated_choice_id=stated, manipulation_leaked=leaked,
     ).model_dump(exclude_none=True)
-    await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata, question_id=question_id, trigger=trigger)
+    if agent_tag and stated:
+        metadata["stated_choice_id"] = {agent_tag: stated["default"]}
+    await _save_exchange(col, user, conv_id, user_message, [stored_reply], metadata, question_id=question_id, trigger=trigger, research_context=research_context)
     yield _sse({"type": "done", "conversation_id": conv_id})
 
     if after_done and not (request and await request.is_disconnected()):
@@ -392,16 +409,18 @@ async def double_chat(
     ]
 
     # Single agent selected via @mention — reuse _standard_stream directly.
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "double",
+                                      messages_a[0]["content"] + messages_b[0]["content"])
     if not (run_agent_a and run_agent_b):
         tag = "A" if run_agent_a else "B"
         msgs = messages_a if run_agent_a else messages_b
         return StreamingResponse(
-            _standard_stream(msgs, col, user, conv_id, req.message,
+            track_stream(_standard_stream(msgs, col, user, conv_id, req.message,
                              agent_tag=tag, reply_prefix=f"[AGENT {tag}] ",
                              answer_incorrectly=req.answer_incorrectly,
                              temperature=DOUBLE_TEMPERATURE,
                              question_id=req.question_id, trigger=req.trigger,
-                             answer_choices=req.answer_choices),
+                             answer_choices=req.answer_choices, research_context=research), request.app.state.db, research),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -452,10 +471,10 @@ async def double_chat(
             answer_incorrectly=req.answer_incorrectly, stated_choice_id=stated, manipulation_leaked=leaked,
         ).model_dump(exclude_none=True)
         await _save_exchange(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata,
-                              question_id=req.question_id, trigger=req.trigger)
+                              question_id=req.question_id, trigger=req.trigger, research_context=research)
         yield _sse({"type": "done", "conversation_id": conv_id})
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+    return StreamingResponse(track_stream(generate(), request.app.state.db, research), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @router.post("/chat/followup")
@@ -480,10 +499,12 @@ async def followup_quiz_chat(
         async for delta in generate_followup_questions(full_reply, _stream_ai):
             yield _sse({"type": "followup", "token": delta})
 
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "followup", system_instruction)
+
     return StreamingResponse(
-        _standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request,
+        track_stream(_standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request,
                          answer_incorrectly=req.answer_incorrectly,
-                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices),
+                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices, research_context=research), request.app.state.db, research),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -512,6 +533,8 @@ async def chat_with_embedded_links(
         #" Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
         #" Prefer sources with stable, long-lived URLs."
     )
+
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, "links", system_instruction)
 
     async def generate() -> AsyncGenerator[str, None]:
         # External web search disabled — citations come from DB links only.
@@ -560,11 +583,11 @@ async def chat_with_embedded_links(
             answer_incorrectly=req.answer_incorrectly, stated_choice_id=stated, manipulation_leaked=leaked,
         ).model_dump(exclude_none=True)
         await _save_exchange(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata,
-                              question_id=req.question_id, trigger=req.trigger)
+                              question_id=req.question_id, trigger=req.trigger, research_context=research)
 
         yield _sse({"type": "done", "conversation_id": conv_id, "reply": stored_reply})
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+    return StreamingResponse(track_stream(generate(), request.app.state.db, research), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 # Default behavior
@@ -587,9 +610,11 @@ async def chat(
     )
     messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
+    research = await asyncio.to_thread(begin_request, request.app.state.db, user, req, conv_id, quiz_id, system_instruction)
+
     return StreamingResponse(
-        _standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly,
-                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices),
+        track_stream(_standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly,
+                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices, research_context=research), request.app.state.db, research),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -663,5 +688,5 @@ async def load_user_history(
     assistant_docs = [d for d in all_docs if d["role"] == "assistant"][-5:]
     combined = sorted(user_docs + assistant_docs, key=lambda d: d["created_at"])
 
-    messages = [UserMessageData(role=d["role"], content=d["content"]) for d in combined]
+    messages = [UserMessageData(role=d["role"], content=d["content"], request_id=d.get("request_id"), question_id=d.get("question_id")) for d in combined]
     return UserConversationHistoryResponse(conversation_id=conversation_id, messages=messages)

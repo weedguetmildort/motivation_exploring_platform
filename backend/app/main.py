@@ -13,6 +13,7 @@ from .api.copy_events import router as copy_events_router
 from .api.users import router as users_router
 from .api.messages import router as messages_router
 from .api.export import router as export_router
+from .api.research import router as research_router, ensure_research_indexes
 from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
@@ -97,6 +98,7 @@ def _startup():
         app.state.db = db
         app.state.messages = messages
         app.state.settings = settings
+        ensure_research_indexes(db)
 
         # Chat cache: only READY links are surfaced to the chatbot
         app.state.knowledge_links = reload_knowledge_links_cache(links_col)
@@ -155,3 +157,4 @@ app.include_router(copy_events_router)
 app.include_router(users_router)
 app.include_router(messages_router)
 app.include_router(export_router)
+app.include_router(research_router)

@@ -131,7 +131,7 @@ class TestLoadOrCreateAttempt:
         _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a", "b"])
 
         # The question pool query must filter to the allowed sets.
-        mock_col.find.assert_called_once_with({"set": {"$in": ["a", "b"]}}, {"_id": 1})
+        mock_col.find.assert_called_once_with({"set": {"$in": ["a", "b"]}})
 
     def test_no_restriction_when_quiz_sets_none(self, mock_db, mock_col):
         mock_col.find_one.return_value = None
@@ -141,7 +141,7 @@ class TestLoadOrCreateAttempt:
         _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_sets=None)
 
         # Unrestricted → empty query, historical behavior.
-        mock_col.find.assert_called_once_with({}, {"_id": 1})
+        mock_col.find.assert_called_once_with({})
 
 
 # ── _find_next_unanswered ─────────────────────────────────────────────────────
@@ -464,7 +464,7 @@ class TestBuildQuizStateResponse:
         # ensure attempt status update was issued
         mock_col.update_one.assert_any_call(
             {"_id": doc_id},
-            {"$set": {"status": "completed", "updated_at": mock_col.update_one.call_args_list[0][0][1]["$set"]["updated_at"]}},
+            {"$set": {"status": "completed", "updated_at": mock_col.update_one.call_args_list[0][0][1]["$set"]["updated_at"], "completed_at": mock_col.update_one.call_args_list[0][0][1]["$set"]["updated_at"]}},
         )
 
     def test_next_question_deleted_race_condition_marks_completed(self, mock_db, mock_col):
@@ -964,7 +964,7 @@ class TestLoadOrCreateAttemptQuizSet:
             mock_db, "u1", "u1@test.edu", "followup", quiz_set="b"
         )
 
-        mock_col.find.assert_called_once_with({"set": "b"}, {"_id": 1})
+        mock_col.find.assert_called_once_with({"set": "b"})
 
     def test_quiz_set_overrides_the_participant_restriction(self, mock_db, mock_col):
         self._prime(mock_col)
@@ -973,14 +973,14 @@ class TestLoadOrCreateAttemptQuizSet:
             mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a"], quiz_set="d"
         )
 
-        mock_col.find.assert_called_once_with({"set": "d"}, {"_id": 1})
+        mock_col.find.assert_called_once_with({"set": "d"})
 
     def test_unmapped_quiz_falls_back_to_the_whole_pool(self, mock_db, mock_col):
         self._prime(mock_col)
 
         _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
 
-        mock_col.find.assert_called_once_with({}, {"_id": 1})
+        mock_col.find.assert_called_once_with({})
 
     def test_unassigned_quiz_falls_back_to_the_configured_map(self, mock_db, mock_col):
         """A participant assigned before the map was configured still picks it up.
@@ -995,7 +995,7 @@ class TestLoadOrCreateAttemptQuizSet:
             _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
 
         m.assert_called_once_with(mock_db, "double")
-        mock_col.find.assert_called_once_with({"set": "c"}, {"_id": 1})
+        mock_col.find.assert_called_once_with({"set": "c"})
         assert mock_col.insert_one.call_args[0][0]["question_set"] == "c"
 
     def test_an_explicit_set_skips_the_fallback_lookup(self, mock_db, mock_col):

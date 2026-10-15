@@ -262,7 +262,8 @@ class TestSubmitQuizAnswer:
         #                update_one (positional $set) -> matched_count=1
         #                find_one(updated attempt) -> updated_doc
         # build_quiz_state_response: qcol.find(...) -> existing ids; qcol.find_one(next q) -> next_question_doc
-        mock_col.find_one.side_effect = [attempt_doc, question_doc, updated_doc, next_question_doc]
+        next_shown_doc = {**updated_doc, "answers": [*updated_doc["answers"], {"question_id": str(qid2), "shown_at": datetime.utcnow(), "answered_at": None}]}
+        mock_col.find_one.side_effect = [attempt_doc, question_doc, updated_doc, next_question_doc, next_shown_doc, next_question_doc]
         mock_col.update_one.return_value = MagicMock(matched_count=1)
         mock_col.find.return_value = [{"_id": qid1}, {"_id": qid2}]
 

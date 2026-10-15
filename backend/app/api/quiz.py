@@ -96,9 +96,15 @@ def submit_quiz_answer(
         quiz_id=quiz_id,
         question_id=data.question_id,
         choice_id=data.choice_id,
+        telemetry_page_id=data.telemetry_page_id,
+        telemetry_elapsed_ms=data.telemetry_elapsed_ms,
     )
 
-    return build_quiz_state_response(db, updated_doc)
+    state = build_quiz_state_response(db, updated_doc)
+    if state.current_question:
+        updated_doc = record_question_shown(db, updated_doc, state.current_question.id)
+        state = build_quiz_state_response(db, updated_doc)
+    return state
 
 # Admin endpoint to get quiz results for a given quiz attempt
 @router.get("/results", response_model=QuizResultsResponse)

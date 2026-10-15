@@ -1,5 +1,5 @@
 # backend/app/schemas/quiz.py
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -12,7 +12,6 @@ class QuizAnswerRecord(BaseModel):
     answered_at: Optional[datetime] = None  # None until the user submits an answer
     choice_id: Optional[str] = None         # the answer the user selected
     marked_correct: Optional[bool] = None   # set at submission time by comparing to correct_choice_id
-    #TODO: should this also include the correct answer choice?
 
 
 # Placeholder for quiz attempt status strings ("in_progress", "completed").
@@ -23,6 +22,7 @@ class QuizAttemptStatus(str):
 
 # Summary of a quiz attempt returned to the client, used to render progress indicators.
 class QuizAttemptPublic(BaseModel):
+    attempt_id: Optional[str] = None
     quiz_id: str
     status: str  # "in_progress" or "completed"
     total_questions: int
@@ -51,6 +51,8 @@ class QuizStateResponse(BaseModel):
 class SubmitAnswerRequest(BaseModel):
     question_id: str
     choice_id: str
+    telemetry_page_id: Optional[str] = Field(default=None, max_length=100)
+    telemetry_elapsed_ms: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 # One answered question in the admin results view, including both the user's choice

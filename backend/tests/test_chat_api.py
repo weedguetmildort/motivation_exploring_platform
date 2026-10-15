@@ -98,6 +98,8 @@ def chat_app(regular_user, chat_col):
     app = FastAPI()
     app.include_router(chat_module.router)
     app.state.messages = chat_col
+    import mongomock
+    app.state.db = mongomock.MongoClient().db
     app.state.knowledge_links = []
     app.dependency_overrides[get_current_user] = lambda: regular_user
     return app
