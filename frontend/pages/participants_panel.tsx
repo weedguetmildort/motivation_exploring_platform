@@ -1,3 +1,4 @@
+import StudyInterviewAccess from "../components/StudyInterviewAccess";
 // frontend/pages/participants_panel.tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
@@ -315,6 +316,8 @@ export default function ParticipantsPanelPage() {
         onDashboard={() => router.push("/dashboard")}
         onLogout={onLogout}
       />
+      <div className="page-container"><StudyInterviewAccess /></div>
+
 
       <div className="page-container">
         {/* Tabs */}
@@ -467,7 +470,7 @@ export default function ParticipantsPanelPage() {
                     />
                   </div>
                   <div className="mt-1.5 flex items-center gap-2">
-                    <span className="text-xs text-gray-500">Follow-up study:</span>
+                    <span className="text-xs text-gray-500">Legacy follow-up track:</span>
                     <button
                       type="button"
                       onClick={() => updateFollowupStudy(p.id, !p.followup_study_granted)}

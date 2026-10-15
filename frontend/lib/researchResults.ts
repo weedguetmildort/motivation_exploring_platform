@@ -9,12 +9,15 @@ export type Comparison = {
   questions_answered: number; questions_graded: number; answers_missing_grade: number; metrics: Record<string, Metric>;
 };
 export type Participant = {
+  study_id?: string; account_id?: string;
   participant_id: string; name: string; email: string; demographics: Record<string, string | string[] | null>;
   is_test: boolean; study_flow_version: number | null; completed_steps: string[]; step_order: string[];
   questions_answered?: number; questions_graded?: number; answers_missing_grade?: number;
   attempt_count?: number; accuracy?: number | null; telemetry_questions?: number;
 };
 export type Results = {
+  matched_enrollments?: number; unique_participants_with_attempts?: number;
+  by_study?: { study_id: string; overall: Comparison; variants: Comparison[] }[];
   metric_definitions: MetricDefinition[]; facets: { key: string; label: string; options: { value: string; count: number }[]; missing_count: number }[];
   study_versions: number[]; quiz_ids: string[]; matched_accounts: number; overall: Comparison; variants: Comparison[];
   participants: Participant[]; page: number; page_size: number; total_pages: number; averaging: string;

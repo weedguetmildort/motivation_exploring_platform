@@ -1,3 +1,4 @@
+import { studyApiPath } from "./studySelection";
 // Tiny fetch wrapper that always sends/receives JSON and includes cookies
 // Make sure the backend sets an HTTP-only session in dev cookie on login/signup
 
@@ -12,7 +13,7 @@ export async function apiFetch<T = any>(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(input, {
+  const res = await fetch(studyApiPath(input), {
     ...init,
     credentials: "include", // send cookies
     headers: {

@@ -1,3 +1,4 @@
+import { studyApiPath } from "../lib/studySelection";
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/fetcher";
 import { demographicLabel, formatMetric, type Results } from "../lib/researchResults";
@@ -6,6 +7,7 @@ import ResearchParticipant from "./ResearchParticipant";
 import ResearchStatistics from "./ResearchStatistics";
 
 export default function ResearchSummary() {
+  const [study, setStudy] = useState("all");
   const [data, setData] = useState<Results | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [searchInput, setSearchInput] = useState("");
@@ -29,7 +31,7 @@ export default function ResearchSummary() {
     const timer = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
-  const parameters = new URLSearchParams({ filters: JSON.stringify(filters), search, status, page: String(page), include_tests: String(includeTests), include_archived: String(includeArchived) });
+  const parameters = new URLSearchParams({ study, filters: JSON.stringify(filters), search, status, page: String(page), include_tests: String(includeTests), include_archived: String(includeArchived) });
   for (const [key, value] of Object.entries({ age_min: ageMin, age_max: ageMax, quiz_id: quiz, version, question_set: questionSet, variant_position: position })) if (value) parameters.set(key, value);
   const query = parameters.toString();
   useEffect(() => {
@@ -42,7 +44,7 @@ export default function ResearchSummary() {
     return () => controller.abort();
   }, [query, refresh]);
   function reset() {
-    setFilters({}); setSearchInput(""); setSearch(""); setAgeMin(""); setAgeMax(""); setQuiz("");
+    setStudy("all"); setFilters({}); setSearchInput(""); setSearch(""); setAgeMin(""); setAgeMax(""); setQuiz("");
     setStatus("completed"); setVersion(""); setQuestionSet(""); setPosition(""); setIncludeTests(false); setIncludeArchived(false); setPage(1); setSelected(null);
   }
   function setFilter(key: string, value: string) {
@@ -62,6 +64,7 @@ export default function ResearchSummary() {
     <p className="text-sm text-gray-600">AI agreement means a submitted answer matched an AI recommendation that appeared on screen. It does not establish that AI changed the student’s mind. A dash means unavailable or ineligible.</p>
     <section aria-label="Participant and study filters" className="rounded-xl border bg-gray-50 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4"><h2 className="font-semibold text-lg">Filter participants and results</h2><div className="flex gap-2"><button type="button" onClick={reset} className="rounded border bg-white px-3 py-2 text-sm">Reset filters</button><button type="button" onClick={() => setRefresh(v => v + 1)} className="rounded border bg-white px-3 py-2 text-sm">Refresh results</button></div></div>
+      <label className="block text-sm font-medium mb-3">Study<select value={study} onChange={e => { setStudy(e.target.value); setPage(1); setSelected(null); }} className={inputClass}><option value="all">All studies</option><option value="study-1">Study 1</option><option value="study-2">Study 2</option></select></label>
       <label className="block text-sm font-medium">Search name, email, or participant ID
         <input type="search" value={searchInput} onChange={e => { setSearchInput(e.target.value); setSelected(null); }} placeholder="Find a participant…" className={inputClass} />
       </label>
@@ -86,18 +89,23 @@ export default function ResearchSummary() {
     {loading && <p role="status">Loading research results…</p>}
     {error && <p role="alert" className="text-red-700">{error}</p>}
     {data && !loading && !error && <>
-      <div className="flex flex-wrap gap-3 text-sm"><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.matched_accounts}</strong> matching accounts</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.participant_count}</strong> people with selected attempts</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.attempt_count}</strong> selected quiz attempts</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.questions_answered}</strong> answered questions</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.questions_graded}</strong> graded answers</span></div>
+      <p className="text-sm text-gray-600">{data.averaging}</p>
+      {data.matched_enrollments != null && <p className="text-sm">{data.matched_enrollments} study enrollments across {data.matched_accounts} unique accounts. A person in both studies contributes one enrollment to each; combined averages are descriptive.</p>}
+      <a className="inline-block rounded border px-3 py-2 text-sm" href={studyApiPath(`/api/export/research-bundle?study=${study}&include_tests=${includeTests}&include_archived=${includeArchived}`) as string}>Download study snapshots</a>
+      {data.by_study && <div className="grid md:grid-cols-2 gap-3">{data.by_study.map(item => <section key={item.study_id} className="rounded border p-3"><h3 className="font-semibold">{item.study_id === "study-1" ? "Study 1" : "Study 2"}</h3><p>{item.overall.participant_count} participants · {item.overall.attempt_count} quiz attempts · {item.overall.questions_answered} answers</p><p>Accuracy: {formatMetric(item.overall.metrics.accuracy?.value, "percent")}</p></section>)}</div>}
+
+      <div className="flex flex-wrap gap-3 text-sm"><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.matched_accounts}</strong> matching accounts</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.participant_count}</strong> {data.matched_enrollments != null ? "enrollments" : "people"} with selected attempts</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.attempt_count}</strong> selected quiz attempts</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.questions_answered}</strong> answered questions</span><span className="rounded-lg bg-blue-50 px-4 py-3"><strong>{data.overall.questions_graded}</strong> graded answers</span></div>
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">{["accuracy", "wrong_ai_agreement", "active_ms", "telemetry_coverage"].map(key => {
         const definition = data.metric_definitions.find(d => d.key === key);
-        return definition && <div key={key} className="rounded-xl border p-4"><h3 className="text-sm text-gray-600 mb-2">{definition.label}</h3><MetricValue metric={data.overall.metrics[key]} definition={definition} /></div>;
+        return definition && <div key={key} className="rounded-xl border p-4"><h3 className="text-sm text-gray-600 mb-2">{definition.label}</h3><MetricValue metric={data.overall.metrics[key]} definition={definition} enrollments={data.matched_enrollments != null} /></div>;
       })}</div>
       <section className="rounded-xl border p-4"><h2 className="text-lg font-semibold mb-4">Averages for filtered participants</h2>
-        {data.overall.participant_count ? <ResearchComparison overall={data.overall} variants={data.variants} definitions={data.metric_definitions} /> : <p>No attempts match the selected study filters. Matching accounts are listed below.</p>}
+        {data.overall.participant_count ? <ResearchComparison overall={data.overall} variants={data.variants} definitions={data.metric_definitions} enrollments={data.matched_enrollments != null} /> : <p>No attempts match the selected study filters. Matching accounts are listed below.</p>}
       </section>
       <ResearchStatistics query={query} includeTests={includeTests} includeArchived={includeArchived} />
       <section className="rounded-xl border p-4"><h2 className="text-lg font-semibold mb-2">Individual participants</h2><p className="text-sm text-gray-600 mb-3">Accounts with no selected attempts remain searchable. Open a participant to inspect all their quiz results independently of the cohort filters.</p>
         <div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead><tr>{["Participant", "Gender", "Academic level / year", "Selected attempts", "Answered", "Accuracy", "Details"].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{data.participants.map(person => <tr key={person.participant_id} className="border-b last:border-0">
-          <td className="p-2"><div className="font-medium">{person.name || person.participant_id}{person.is_test ? " (test)" : ""}</div><div className="text-gray-600">{person.email}</div></td>
+          <td className="p-2"><div className="font-medium">{person.name || person.participant_id}{person.is_test ? " (test)" : ""}</div><div className="text-gray-600">{person.email}</div><div className="text-gray-500">{person.study_id === "study-2" ? "Study 2" : "Study 1"}</div></td>
           <td className="p-2">{demographicLabel("gender", person.demographics.gender)}</td><td className="p-2">{demographicLabel("academic_level", person.demographics.academic_level)} / {demographicLabel("year", person.demographics.year)}</td>
           <td className="p-2">{person.attempt_count}</td><td className="p-2">{person.questions_answered}</td><td className="p-2">{formatMetric(person.accuracy, "percent")}</td>
           <td className="p-2"><button type="button" aria-label={`View results for ${person.name || person.email || person.participant_id}`} className="text-blue-700 underline" onClick={() => { setSelected(person.participant_id); setTimeout(() => detail.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 0); }}>View results</button></td>

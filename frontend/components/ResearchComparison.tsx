@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { formatMetric, type Comparison, type Metric, type MetricDefinition } from "../lib/researchResults";
 
-export function MetricValue({ metric, definition }: { metric?: Metric; definition: MetricDefinition }) {
+export function MetricValue({ metric, definition, enrollments = false }: { metric?: Metric; definition: MetricDefinition; enrollments?: boolean }) {
   const people = metric?.participant_count ?? 0;
   const questions = metric?.observation_count ?? 0;
   const questionLabel = definition.key === "accuracy" ? (questions === 1 ? "graded answer" : "graded answers")
@@ -9,14 +9,14 @@ export function MetricValue({ metric, definition }: { metric?: Metric; definitio
     : questions === 1 ? "question" : "questions";
   return <div>
     <span className="font-semibold tabular-nums">{formatMetric(metric?.value, definition.unit)}</span>
-    <div className="text-xs text-gray-500 whitespace-nowrap">{people} {people === 1 ? "person" : "people"} · {questions} {questionLabel}</div>
+    <div className="text-xs text-gray-500 whitespace-nowrap">{people} {enrollments ? people === 1 ? "enrollment" : "enrollments" : people === 1 ? "person" : "people"} · {questions} {questionLabel}</div>
     {metric?.denominator != null && metric.denominator > 0 && <div className="text-xs text-gray-500" title="Combined counts across participants; the displayed average weights each participant equally.">
       Combined: {Number.isInteger(metric.numerator) ? metric.numerator : metric.numerator?.toFixed(1)} / {Number.isInteger(metric.denominator) ? metric.denominator : metric.denominator.toFixed(1)}
       {definition.key.endsWith("_click_rate") ? " opportunities" : definition.key.endsWith("_share") ? " ms" : ""}
     </div>}
   </div>;
 }
-export default function ResearchComparison({ overall, variants, definitions }: { overall: Comparison; variants: Comparison[]; definitions: MetricDefinition[] }) {
+export default function ResearchComparison({ overall, variants, definitions, enrollments = false }: { overall: Comparison; variants: Comparison[]; definitions: MetricDefinition[]; enrollments?: boolean }) {
   const [group, setGroup] = useState("Performance");
   const [pointerUnit, setPointerUnit] = useState("percent");
   const groups = [...new Set(definitions.map(d => d.group))];
@@ -36,12 +36,12 @@ export default function ResearchComparison({ overall, variants, definitions }: {
     {group === "LLM coding (provisional)" && <p className="mb-3 text-sm text-amber-900">These are provisional model labels, separate from human reviews and keyword features. Inspect evidence and validation results before using them in research claims. Different evaluator models may be represented; inspect each question’s model provenance.</p>}
     {group === "Pointer regions" && <p className="mb-3 text-sm text-gray-600">Pointer time measures cursor location while the page is visible and focused. It does not measure gaze or reading. People with no observed pointer time do not contribute to pointer shares.</p>}
     <div className="overflow-x-auto"><table className="w-full text-sm text-left">
-      <caption className="text-left text-xs text-gray-500 pb-3">Each person contributes equally. Accuracy uses graded answers; telemetry coverage uses shown questions. Other measurements use their eligible questions. All selected quizzes combines the quiz attempts matching the filters.</caption>
-      <thead><tr><th className="p-3 border-b">Quiz type</th><th className="p-3 border-b">People / quiz attempts</th><th className="p-3 border-b">Answered / graded</th>{columns.map(d => <th key={d.key} className="p-3 border-b min-w-[155px]">{d.label}</th>)}</tr></thead>
+      <caption className="text-left text-xs text-gray-500 pb-3">Each {enrollments ? "study enrollment" : "person"} contributes equally. Accuracy uses graded answers; telemetry coverage uses shown questions. Other measurements use their eligible questions. All selected quizzes combines the quiz attempts matching the filters.</caption>
+      <thead><tr><th className="p-3 border-b">Quiz type</th><th className="p-3 border-b">{enrollments ? "Enrollments" : "People"} / quiz attempts</th><th className="p-3 border-b">Answered / graded</th>{columns.map(d => <th key={d.key} className="p-3 border-b min-w-[155px]">{d.label}</th>)}</tr></thead>
       <tbody>{[{ ...overall, quiz_id: "All selected quizzes" }, ...variants].map(row => <tr key={row.quiz_id} className="border-b last:border-0">
         <th className="p-3 font-medium whitespace-nowrap">{row.quiz_id}</th><td className="p-3 tabular-nums whitespace-nowrap">{row.participant_count} / {row.attempt_count}<div className="text-xs text-gray-500">{row.completed_attempt_count} completed</div></td>
         <td className="p-3 tabular-nums whitespace-nowrap">{row.questions_answered} / {row.questions_graded}<div className="text-xs text-gray-500">{row.questions_assigned} assigned · {row.questions_shown} shown</div></td>
-        {columns.map(d => <td key={d.key} className="p-3"><MetricValue metric={row.metrics[d.key]} definition={d} /></td>)}
+        {columns.map(d => <td key={d.key} className="p-3"><MetricValue metric={row.metrics[d.key]} definition={d} enrollments={enrollments} /></td>)}
       </tr>)}</tbody>
     </table></div>
   </div>;

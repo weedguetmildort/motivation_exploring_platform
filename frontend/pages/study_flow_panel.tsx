@@ -1,3 +1,4 @@
+import { selectedStudy } from "../lib/studySelection";
 // frontend/pages/study_flow_panel.tsx
 //
 // Admin control over the participant flow ordering. What a step *is* stays in
@@ -31,12 +32,20 @@ export default function StudyFlowPanel() {
   // quiz_id -> set letter. "" means unmapped (draws from the whole pool).
   const [quizSetMap, setQuizSetMap] = useState<Record<string, string>>({});
 
+  const [questionCount, setQuestionCount] = useState(5);
+  const [wrongCount, setWrongCount] = useState(3);
+  const [wrongRate, setWrongRate] = useState("");
+  const [requiresFirst, setRequiresFirst] = useState(true);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   function applyConfig(c: StudyConfig) {
     setConfig(c);
+    setQuestionCount(c.questions_per_quiz ?? 5); setWrongCount(c.wrong_ai_count ?? 3);
+    setWrongRate(c.wrong_ai_rate == null ? "" : String(c.wrong_ai_rate));
+    setRequiresFirst(c.requires_study1_completion ?? true);
     setOrder(c.variant_order);
     setMode(c.mode);
     setCounterbalance(c.counterbalance);
@@ -95,6 +104,9 @@ export default function StudyFlowPanel() {
     setError(null);
     try {
       const c = await updateStudyConfig({
+        questions_per_quiz: questionCount, wrong_ai_count: wrongCount,
+        wrong_ai_rate: wrongRate === "" ? null : Number(wrongRate),
+        requires_study1_completion: requiresFirst,
         mode,
         variant_order: order,
         counterbalance,
@@ -127,7 +139,11 @@ export default function StudyFlowPanel() {
 
   const dirty =
     !!config &&
-    (mode !== config.mode ||
+    (questionCount !== (config.questions_per_quiz ?? 5) ||
+      wrongCount !== (config.wrong_ai_count ?? 3) ||
+      wrongRate !== (config.wrong_ai_rate == null ? "" : String(config.wrong_ai_rate)) ||
+      requiresFirst !== (config.requires_study1_completion ?? true) ||
+      mode !== config.mode ||
       counterbalance !== config.counterbalance ||
       order.join(",") !== config.variant_order.join(",") ||
       quizSetMode !== config.quiz_set_mode ||
@@ -321,6 +337,14 @@ export default function StudyFlowPanel() {
           </label>
         </section>
 
+        <section className="rounded-xl border bg-white p-4 space-y-3">
+          <h2 className="text-lg font-semibold">Quiz size and interview prerequisites</h2>
+          <p className="text-sm text-gray-600">These settings apply to future enrollments. Existing participants keep their saved protocol. A rate overrides the wrong-advice count; question pools smaller than the requested count produce fewer questions, recorded in the export.</p>
+          <label className="block">Questions per quiz<input type="number" min={1} max={100} value={questionCount} onChange={e => setQuestionCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
+          <label className="block">Questions assigned wrong AI advice<input type="number" min={0} max={100} value={wrongCount} onChange={e => setWrongCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
+          <label className="block">Wrong AI advice rate (optional, 0–1)<input type="number" min={0} max={1} step={.05} value={wrongRate} onChange={e => setWrongRate(e.target.value)} className="ml-3 rounded border p-2" /></label>
+          {selectedStudy() === "study-2" && <label className="block"><input type="checkbox" checked={requiresFirst} onChange={e => setRequiresFirst(e.target.checked)} /> Require Study 1 completion before Study 2 starts</label>}
+        </section>
         {/* Question sets */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Question sets</h2>
@@ -487,7 +511,7 @@ export default function StudyFlowPanel() {
           </button>
           <button
             onClick={onSave}
-            disabled={!dirty || saving || (quizSetMode === "preset" && duplicateSets.length > 0)}
+            disabled={!dirty || saving || questionCount < 1 || questionCount > 100 || wrongCount < 0 || wrongCount > 100 || (wrongRate !== "" && (Number(wrongRate) < 0 || Number(wrongRate) > 1)) || (quizSetMode === "preset" && duplicateSets.length > 0)}
             className="btn-primary disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save flow"}

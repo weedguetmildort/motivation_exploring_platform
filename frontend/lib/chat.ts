@@ -1,3 +1,4 @@
+import { studyApiPath } from "./studySelection";
 import { apiFetch } from "./fetcher";
 import type { QuestionResearch } from "./research";
 
@@ -106,7 +107,7 @@ async function sendChatStream(
   options: SendChatOptions = {},
 ): Promise<ChatResponse> {
   const { signal, onToken, onDone, onFollowupToken, answerIncorrectly, answerChoices, questionId, trigger } = options;
-  const resp = await fetch(`/api/chat/${quizId}`, {
+  const resp = await fetch(studyApiPath(`/api/chat/${quizId}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",

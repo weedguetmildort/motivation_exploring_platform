@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../lib/fetcher";
 
-type Pair = { metric: string; left: string; right: string; paired_participants: number; difference: number | null;
+type Pair = { study_id?: string; metric: string; left: string; right: string; paired_participants: number; difference: number | null;
   participant_bootstrap_95_interval: [number, number] | null; p_exploratory: number | null; p_holm: number | null };
-type Association = { quiz_id: string; item_prompt: string; metric: string; participants: number; spearman_rho: number | null;
+type Association = { study_id?: string; quiz_id: string; item_prompt: string; metric: string; participants: number; spearman_rho: number | null;
   participant_bootstrap_95_interval: [number, number] | null };
 type Statistics = { paired: { comparisons: Pair[]; limitations: string[] }; surveys: { associations: Association[]; limitations: string } };
 type Validation = { human_agreement: { dimension: string; n: number; agreement: number | null; kappa: number | null; reviewer_a: string; reviewer_b: string }[];
@@ -24,7 +24,7 @@ export default function ResearchStatistics({ query, includeTests, includeArchive
     if (requestedQuery !== query) return () => controller.abort();
     setLoading(true);
     Promise.all([apiFetch<Statistics>(`/api/research/statistics?${query}`, { signal: controller.signal }),
-      apiFetch<Validation>(`/api/research/coding/validation?include_tests=${includeTests}&include_archived=${includeArchived}`, { signal: controller.signal })])
+      apiFetch<Validation>(`/api/research/coding/validation?include_tests=${includeTests}&include_archived=${includeArchived}&study=${new URLSearchParams(query).get("study") ?? "study-1"}`, { signal: controller.signal })])
       .then(([statistics, report]) => { if (!controller.signal.aborted) { setData(statistics); setValidation(report); } })
       .catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Unable to compute analysis."); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -37,14 +37,14 @@ export default function ResearchStatistics({ query, includeTests, includeArchive
     {error && <p role="alert" className="text-red-700">{error}</p>}
     {data && <>
       <h3 className="font-medium">Exploratory paired effects</h3>
-      <p className="text-xs text-gray-600">Differences and intervals are percentage points, left minus right. Each student contributes equally. Holm-adjusted p-values cover the displayed accuracy and wrong-AI comparison family; they do not turn an exploratory analysis into a preregistered result.</p>
-      <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{["Outcome", "Comparison", "Paired students", "Difference", "95% bootstrap interval", "Exploratory p", "Holm p"].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{data.paired.comparisons.map(row => <tr key={`${row.metric}:${row.left}:${row.right}`} className="border-b">
+      <p className="text-xs text-gray-600">Differences and intervals are percentage points, left minus right. Effects stay within each study; protocols are not pooled. Each student contributes equally. Holm-adjusted p-values cover the displayed accuracy and wrong-AI comparison family; they do not turn an exploratory analysis into a preregistered result.</p>
+      <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{["Outcome", "Comparison", "Paired students", "Difference", "95% bootstrap interval", "Exploratory p", "Holm p"].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{data.paired.comparisons.map(row => <tr key={`${row.study_id}:${row.metric}:${row.left}:${row.right}`} className="border-b">
         <td className="p-2">{row.metric.replaceAll("_", " ")}</td><td className="p-2">{row.left} − {row.right}</td><td className="p-2">{row.paired_participants}</td><td className="p-2">{difference(row.difference)}</td><td className="p-2">{row.participant_bootstrap_95_interval?.map(difference).join(" to ") ?? "—"}</td><td className="p-2">{number(row.p_exploratory)}</td><td className="p-2">{number(row.p_holm)}</td>
       </tr>)}</tbody></table></div>
       {!data.paired.comparisons.length && <p className="text-sm">No rotated-variant comparisons are available for these filters.</p>}
       <details><summary className="cursor-pointer text-sm">Analysis assumptions and exclusions</summary><ul className="list-disc pl-5 text-sm mt-2">{data.paired.limitations.map(text => <li key={text}>{text}</li>)}</ul></details>
       <h3 className="font-medium">Survey–behavior associations</h3><p className="text-xs text-gray-600">{data.surveys.limitations}</p>
-      <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{["Quiz", "Survey item", "Behavior", "Students", "Spearman correlation", "95% bootstrap interval"].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{data.surveys.associations.map((row, index) => <tr key={index} className="border-b"><td className="p-2">{row.quiz_id}</td><td className="p-2">{row.item_prompt}</td><td className="p-2">{row.metric.replaceAll("_", " ")}</td><td className="p-2">{row.participants}</td><td className="p-2">{number(row.spearman_rho)}</td><td className="p-2">{row.participant_bootstrap_95_interval?.map(v => number(v)).join(" to ") ?? "—"}</td></tr>)}</tbody></table></div>
+      <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{["Quiz", "Survey item", "Behavior", "Students", "Spearman correlation", "95% bootstrap interval"].map(label => <th key={label} className="p-2 border-b">{label}</th>)}</tr></thead><tbody>{data.surveys.associations.map((row, index) => <tr key={index} className="border-b"><td className="p-2">{row.study_id ? `${row.study_id} · ` : ""}{row.quiz_id}</td><td className="p-2">{row.item_prompt}</td><td className="p-2">{row.metric.replaceAll("_", " ")}</td><td className="p-2">{row.participants}</td><td className="p-2">{number(row.spearman_rho)}</td><td className="p-2">{row.participant_bootstrap_95_interval?.map(v => number(v)).join(" to ") ?? "—"}</td></tr>)}</tbody></table></div>
       {!data.surveys.associations.length && <p className="text-sm">No matching completed Likert responses and quiz measurements are available.</p>}
     </>}
     {validation && <>

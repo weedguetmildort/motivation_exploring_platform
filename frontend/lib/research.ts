@@ -1,3 +1,4 @@
+import { selectedStudy, studyApiPath, type StudyId } from "./studySelection";
 // Semantic telemetry only: no keystroke contents or continuous cursor coordinates.
 export type Region = "question" | "answers" | "submit" | "chat" | "chat_input" | "suggestions" | "reference" | "agent_A" | "agent_B" | "other";
 export type EventData = {
@@ -18,8 +19,8 @@ class EventQueue {
   private sending = false;
   private key: string;
   private recoveredKeys: string[] = [];
-  constructor(userId: string) {
-    const prefix = `mep.research.v1.${userId}`;
+  constructor(userId: string, private study: StudyId) {
+    const prefix = study === "study-1" ? `mep.research.v1.${userId}` : `mep.research.v2.${study}.${userId}`;
     // Each tab writes its own queue. Recovery may resend another tab's events,
     // which the server deduplicates; concurrent tabs cannot overwrite new events.
     this.key = `${prefix}.${crypto.randomUUID()}`;
@@ -55,7 +56,7 @@ class EventQueue {
           if (batch.length && new Blob([JSON.stringify({ events: [...batch, event] })]).size > 48000) break;
           batch.push(event);
         }
-        const response = await fetch("/api/research/events", {
+        const response = await fetch(studyApiPath("/api/research/events", this.study), {
           method: "POST", credentials: "include", keepalive: true,
           headers: { "Content-Type": "application/json" }, body: JSON.stringify({ events: batch }),
         });
@@ -78,8 +79,10 @@ class EventQueue {
 
 const queues = new Map<string, EventQueue>();
 function queueFor(userId: string) {
-  if (!queues.has(userId)) queues.set(userId, new EventQueue(userId));
-  return queues.get(userId)!;
+  const study = selectedStudy();
+  const key = `${study}:${userId}`;
+  if (!queues.has(key)) queues.set(key, new EventQueue(userId, study));
+  return queues.get(key)!;
 }
 
 export function regionFor(target: EventTarget | null): Region {

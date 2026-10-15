@@ -1,3 +1,4 @@
+import { selectedStudy, studyApiPath } from "./studySelection";
 // frontend/lib/auth.ts
 
 import { apiFetch } from "./fetcher";
@@ -11,6 +12,8 @@ type SignupPayload = {
 };
 
 export type User = {
+  study_id?: string;
+  study_protocol?: Record<string, unknown>;
   id: string;
   email: string;
   first_name?: string;
@@ -80,6 +83,7 @@ const ME_TTL_MS = 30_000;
 let _meCache: { value: { user: User }; ts: number } | null = null;
 let _mePending: Promise<{ user: User }> | null = null;
 let _meGeneration = 0;
+let _meStudy = selectedStudy();
 
 export function invalidateMeCache() {
   _meGeneration += 1;
@@ -88,6 +92,8 @@ export function invalidateMeCache() {
 }
 
 export async function getMe() {
+  const study = selectedStudy();
+  if (study !== _meStudy) { invalidateMeCache(); _meStudy = study; }
   const now = Date.now();
   if (_meCache && now - _meCache.ts < ME_TTL_MS) {
     return _meCache.value;
@@ -143,7 +149,7 @@ export async function recordConsentViewed() {
 // automatically for this same-origin request. Falls back to a keepalive fetch
 // where sendBeacon is unavailable. Fire-and-forget — never throws.
 export function sendConsentAbandonedBeacon() {
-  const url = "/auth/consent-abandoned";
+  const url = studyApiPath("/auth/consent-abandoned") as string;
   try {
     if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
       navigator.sendBeacon(url);

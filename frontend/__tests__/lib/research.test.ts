@@ -91,3 +91,14 @@ test("recommendations from a previous question are not current-question impressi
   expect(sentEvents().some(event => event.event_type === "ai_message_displayed")).toBe(false);
   stop(); await tracker.flush();
 });
+
+
+test("queued events keep their originating study when selection changes", async () => {
+  window.history.replaceState({}, "", "/dashboard?study=study-2");
+  const { tracker, stop } = setup();
+  window.history.replaceState({}, "", "/dashboard?study=study-1");
+  await tracker.flush();
+  expect((global.fetch as jest.Mock).mock.calls[0][0]).toBe("/api/studies/study-2/research/events");
+  stop(); await tracker.flush();
+  sessionStorage.clear();
+});

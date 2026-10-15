@@ -1,3 +1,4 @@
+jest.mock("../../components/StudyInterviewAccess", () => ({ __esModule: true, default: () => null }));
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import ParticipantsPanelPage from "../../pages/participants_panel";
 import { getMe, logout } from "../../lib/auth";
