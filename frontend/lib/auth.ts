@@ -43,7 +43,8 @@ export type User = {
 };
 
 export async function signup(data: SignupPayload) {
-  return apiFetch<{ user: User }>("/auth/signup", {
+  invalidateMeCache();
+  const result = await apiFetch<{ user: User }>("/auth/signup", {
     method: "POST",
     body: JSON.stringify({
       first_name: data.firstName,
@@ -53,14 +54,18 @@ export async function signup(data: SignupPayload) {
       consent: data.consent,
     }),
   });
+  invalidateMeCache();
+  return result;
 }
 
 export async function login(email: string, password: string) {
   invalidateMeCache();
-  return apiFetch<{ user: User }>("/auth/login", {
+  const result = await apiFetch<{ user: User }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
+  invalidateMeCache();
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,8 +79,10 @@ const ME_TTL_MS = 30_000;
 
 let _meCache: { value: { user: User }; ts: number } | null = null;
 let _mePending: Promise<{ user: User }> | null = null;
+let _meGeneration = 0;
 
 export function invalidateMeCache() {
+  _meGeneration += 1;
   _meCache = null;
   _mePending = null;
 }
@@ -86,14 +93,19 @@ export async function getMe() {
     return _meCache.value;
   }
   if (_mePending) return _mePending;
+  const generation = _meGeneration;
   _mePending = apiFetch<{ user: User }>("/auth/me")
     .then((res) => {
-      _meCache = { value: res, ts: Date.now() };
-      _mePending = null;
+      // A request started before login/logout or a completed study step must
+      // not repopulate the cache with the old identity or old progress.
+      if (generation === _meGeneration) {
+        _meCache = { value: res, ts: Date.now() };
+        _mePending = null;
+      }
       return res;
     })
     .catch((e) => {
-      _mePending = null;
+      if (generation === _meGeneration) _mePending = null;
       throw e;
     });
   return _mePending;
@@ -101,7 +113,9 @@ export async function getMe() {
 
 export async function logout() {
   invalidateMeCache();
-  return apiFetch<void>("/auth/logout", { method: "POST" });
+  const result = await apiFetch<void>("/auth/logout", { method: "POST" });
+  invalidateMeCache();
+  return result;
 }
 
 export async function recordConsentAgreement(consentText: string) {
