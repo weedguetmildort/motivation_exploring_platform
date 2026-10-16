@@ -26,7 +26,10 @@ export default function StudyShell({ children }: { children: ReactNode }) {
       } catch (cause) {
         if (cancelled) return;
         if (cause instanceof ApiError && cause.status === 401) { router.replace("/login"); return; }
-        setContext({ path: router.asPath, study, error: "Unable to check interview access. Refresh to try again." });
+        // A temporary polling failure must not discard an active question or
+        // unsent chat. Every backend operation still enforces current approval.
+        setContext(previous => previous?.path === router.asPath && previous.enrollment?.available
+          ? previous : { path: router.asPath, study, error: "Unable to check interview access. Refresh to try again." });
       }
     }
     void load();

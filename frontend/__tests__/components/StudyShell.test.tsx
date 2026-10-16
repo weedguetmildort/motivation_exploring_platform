@@ -82,3 +82,24 @@ test("explicit study switches survive object navigation", async () => {
   await router.push({ pathname: "/dashboard", query: { study: "study-2" } } as never);
   expect(mockPush).toHaveBeenCalledWith({ pathname: "/dashboard", query: { study: "study-2" } }, undefined, undefined);
 });
+
+test("a transient access refresh preserves an active page, but revocation unmounts it", async () => {
+  jest.useFakeTimers();
+  try {
+    window.history.replaceState({}, "", "/dashboard?study=study-2");
+    (apiFetch as jest.Mock).mockResolvedValueOnce({ studies: [{ ...second, available: true }] })
+      .mockRejectedValueOnce(new Error("Network unavailable"))
+      .mockResolvedValueOnce({ studies: [second] });
+    const mounted = jest.fn(), unmounted = jest.fn();
+    function Page() { useEffect(() => { mounted(); return unmounted; }, []); return <p>Active question</p>; }
+    render(<StudyShell><Page /></StudyShell>);
+    await act(async () => {});
+    expect(screen.getByText("Active question")).toBeInTheDocument();
+    await act(async () => { jest.advanceTimersByTime(15000); });
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(unmounted).not.toHaveBeenCalled();
+    await act(async () => { jest.advanceTimersByTime(15000); });
+    expect(screen.getByRole("heading", { name: "Interview access unavailable" })).toBeInTheDocument();
+    expect(unmounted).toHaveBeenCalledTimes(1);
+  } finally { jest.useRealTimers(); }
+});

@@ -78,3 +78,11 @@ test("approval received during an interview appears on window focus", async () =
   fireEvent(window, new Event("focus"));
   expect(await screen.findByText("Your interview is available")).toBeInTheDocument();
 });
+
+test("a cancelled navigation does not replace the saved tab selection", async () => {
+  push.mockResolvedValueOnce(false);
+  render(<DashboardStudyAccess user={user} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Continue to interview" }));
+  await waitFor(() => expect(push).toHaveBeenCalled());
+  expect(sessionStorage.getItem("mep.selectedStudy")).toBeNull();
+});

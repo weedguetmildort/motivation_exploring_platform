@@ -32,8 +32,8 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
     try {
       if (study.study_id === "study-2") await apiFetch(studyApiPath("/api/studies/start", "study-2"), { method: "POST" });
       invalidateMeCache();
-      await router.push(studyPageUrl(study.consent_required ? "/consent" : "/dashboard", study.study_id));
-      rememberStudy(study.study_id);
+      const navigated = await router.push(studyPageUrl(study.consent_required ? "/consent" : "/dashboard", study.study_id));
+      if (navigated) rememberStudy(study.study_id);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to continue. Please try again."); }
     finally { setBusy(false); }
   }
