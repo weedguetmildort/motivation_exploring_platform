@@ -5,6 +5,8 @@ import { buildStudySteps } from "../lib/studySteps";
 import { isFollowupEligible } from "../lib/quiz2";
 import ProgressBar from "../components/ProgressBar";
 import PageHeader from "../components/PageHeader";
+import DashboardStudyAccess from "../components/DashboardStudyAccess";
+import { studyPageUrl } from "../lib/studySelection";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -61,6 +63,7 @@ export default function DashboardPage() {
       />
 
       <div className="page-container flex flex-col gap-4">
+        <DashboardStudyAccess user={user} />
         <ProgressBar user={user} horizontal />
 
         {/* ── Next Step Hero Card ── */}
@@ -112,7 +115,7 @@ export default function DashboardPage() {
         {/* ── My Reports link ── */}
         <div className="flex justify-end">
           <a
-            href="/my_reports"
+            href={studyPageUrl("/my_reports")}
             className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
           >
             My issue reports →
@@ -153,7 +156,7 @@ export default function DashboardPage() {
                   icon: <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />,
                 },
               ] as const).map((tool) => (
-                <a key={tool.href} href={tool.href}
+                <a key={tool.href} href={studyPageUrl(tool.href)}
                   className="group flex items-center gap-5 rounded-2xl border bg-white p-5 shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors">
@@ -185,7 +188,7 @@ export default function DashboardPage() {
                 { href: "/quiz/double",   label: "Dual Agent",          theme: "double" },
                 { href: "/quiz/links",    label: "Embedded Links",      theme: "links" },
               ] as const).map((q) => (
-                <a key={q.href} href={q.href} data-quiz-theme={q.theme}
+                <a key={q.href} href={studyPageUrl(q.href)} data-quiz-theme={q.theme}
                   className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-accent-400 hover:shadow-md transition-all"
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent-50 text-accent-600 group-hover:bg-accent-100 transition-colors">
@@ -208,7 +211,7 @@ export default function DashboardPage() {
                 { href: "/survey?stage=post_base",    label: "Mid Survey",      desc: "After the base quiz · 5 min" },
                 { href: "/survey?stage=post_variant", label: "Final Survey",    desc: "After the variant quiz · 5 min" },
               ] as const).map((s) => (
-                <a key={s.href} href={s.href}
+                <a key={s.href} href={studyPageUrl(s.href)}
                   className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-500 group-hover:bg-blue-100 transition-colors">
