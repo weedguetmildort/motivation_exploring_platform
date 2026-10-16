@@ -59,6 +59,13 @@ def participants(request: Request, search: str = Query("", max_length=200),
     if search.strip():
         pattern = {"$regex": re.escape(search.strip()), "$options": "i"}
         query["$or"] = [{field: pattern} for field in ("email", "first_name", "last_name")]
+        # A pasted full name spans two stored fields. Match each name token
+        # independently while retaining literal email / account ID searches.
+        tokens = search.strip().split()
+        if len(tokens) > 1:
+            query["$or"].append({"$and": [{"$or": [
+                {field: {"$regex": re.escape(token), "$options": "i"}} for field in ("first_name", "last_name")
+            ]} for token in tokens]})
         if ObjectId.is_valid(search.strip()):
             query["$or"].append({"_id": ObjectId(search.strip())})
     users = list(raw["users"].find(query).sort([("created_at", -1), ("_id", 1)]).skip((page - 1) * 25).limit(25))

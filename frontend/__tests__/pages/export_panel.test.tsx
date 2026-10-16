@@ -23,6 +23,8 @@ Object.defineProperty(window, "open", { value: mockWindowOpen, writable: true })
 
 describe("ExportPanelPage", () => {
   beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState({}, "", "/export_panel");
     mockReplace.mockClear();
     mockPush.mockClear();
     mockGetMe.mockReset();
@@ -75,6 +77,17 @@ describe("ExportPanelPage", () => {
     fireEvent.click(buttons[0]); // Participants
 
     expect(mockWindowOpen).toHaveBeenCalledWith("/api/export/participants", "_blank");
+  });
+
+  it("keeps Study 2 selection in downloads opened in a new tab", async () => {
+    window.history.replaceState({}, "", "/export_panel?study=study-2");
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    render(<ExportPanelPage />);
+    await screen.findByText("Export Data");
+    fireEvent.click(screen.getAllByRole("button", { name: "Download CSV" })[0]);
+    expect(mockWindowOpen).toHaveBeenCalledWith("/api/studies/study-2/export/participants", "_blank");
+    fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
+    expect(mockWindowOpen).toHaveBeenCalledWith("/api/studies/study-2/export/research-bundle", "_blank");
   });
 
   it("downloads the versioned research snapshot as a ZIP", async () => {

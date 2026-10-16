@@ -306,6 +306,7 @@ def variant_summaries(rows):
         graded = [r for r in answered if isinstance(r["correct"], bool)]
         wrong = [r for r in answered if r["wrong_ai_exposed"] is True and r["matched_wrong_ai"] is not None]
         summary = {key: first[key] for key in ("analysis_version", "participant_id", "attempt_id", "quiz_id", "study_flow_version", "variant_position", "question_set", "attempt_status", "archived", "is_test")}
+        summary.update(study_id=first.get("study_id", "study-1"), study_protocol=first.get("study_protocol"))
         summary.update(questions_assigned=len(group), questions_shown=sum(r["was_shown"] for r in group),
                        questions_answered=len(answered), questions_graded=len(graded),
                        answers_missing_grade=len(answered) - len(graded), correct_answers=sum(r["correct"] is True for r in graded),

@@ -65,6 +65,7 @@ def export_participants(
     rows = []
     for doc in docs:
         rows.append({
+            "study_id": doc.get("study_id", "study-1"),
             "id": str(doc["_id"]),
             "email": doc.get("email", ""),
             "first_name": _fmt(doc.get("first_name")),
@@ -114,6 +115,7 @@ def export_quiz_answers(
         attempt_created = _fmt(doc.get("created_at"))
         for answer in doc.get("answers", []):
             rows.append({
+                "study_id": doc.get("study_id", "study-1"),
                 "user_email": user_email,
                 "participant_id": doc.get("user_id"),
                 "attempt_id": str(doc["_id"]),
@@ -151,6 +153,7 @@ def export_survey_responses(
         submitted_at = _fmt(doc.get("completed_at") or doc.get("submitted_at"))
         for answer in doc.get("answers", []):
             rows.append({
+                "study_id": doc.get("study_id", "study-1"),
                 "user_id": user_id,
                 "user_email": user_email,
                 "stage": stage,
@@ -175,6 +178,7 @@ def export_events(
     rows: list[dict] = []
     for doc in copy_docs:
         rows.append({
+            "study_id": doc.get("study_id", "study-1"),
             "event_type": "copy",
             "event_id": _fmt(doc.get("_id")), "participant_id": doc.get("user_id"), "conversation_id": doc.get("conversation_id"),
             "user_email": _fmt(doc.get("user_email")),
@@ -185,6 +189,7 @@ def export_events(
         })
     for doc in link_docs:
         rows.append({
+            "study_id": doc.get("study_id", "study-1"),
             "event_type": "link_click",
             "event_id": _fmt(doc.get("_id")), "participant_id": doc.get("user_id"), "conversation_id": doc.get("conversation_id"),
             "user_email": _fmt(doc.get("user_email")),
@@ -213,6 +218,7 @@ def export_chat_messages(
         stated = meta.get("stated_choice_id") or {}
         leaked = meta.get("manipulation_leaked") or {}
         rows.append({
+            "study_id": doc.get("study_id", "study-1"),
             "user_email": _fmt(doc.get("user_email")),
             "participant_id": doc.get("user_id"), "message_id": _fmt(doc.get("_id")),
             "request_id": doc.get("request_id"), "role": doc.get("role"), "content": doc.get("content"),

@@ -220,6 +220,13 @@ def test_combined_admin_counts_unique_people_and_separate_enrollments(setup):
         assert detail.json()["participant"]["study_id"] == person["study_id"]
     assert client.get("/research/results?study=study-2", headers=headers("admin@example.com")).json()["overall"]["attempt_count"] == 1
     assert client.get("/research/results?study=all", headers=headers()).status_code == 403
+    import csv
+    exported_csv = client.get("/studies/study-2/export/quiz-answers", headers=headers("admin@example.com"))
+    csv_rows = list(csv.DictReader(io.StringIO(exported_csv.text)))
+    assert len(csv_rows) == 1 and csv_rows[0]["study_id"] == "study-2"
+    assert csv_rows[0]["attempt_id"] == str(raw["study2__quiz_attempts"].find_one({})["_id"])
+    variant_csv = client.get("/studies/study-2/export/research-variants", headers=headers("admin@example.com"))
+    assert list(csv.DictReader(io.StringIO(variant_csv.text)))[0]["study_id"] == "study-2"
     exported = client.get("/export/research-bundle?study=all", headers=headers("admin@example.com"))
     assert exported.status_code == 200
     with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
@@ -228,3 +235,11 @@ def test_combined_admin_counts_unique_people_and_separate_enrollments(setup):
             manifest = json.loads(snapshot.read("manifest.json"))
             assert manifest["study_id"] == "study-2"
             assert json.loads(snapshot.read("questions.json"))[0]["study_id"] == "study-2"
+
+
+def test_interview_search_accepts_a_full_name_and_is_admin_only(setup):
+    raw, db, student, admin, client = setup
+    assert client.get("/studies/participants?search=Test%20Student", headers=headers()).status_code == 403
+    response = client.get("/studies/participants?search=Test%20Student", headers=headers("admin@example.com"))
+    assert response.status_code == 200
+    assert [p["id"] for p in response.json()["participants"]] == [student.id]

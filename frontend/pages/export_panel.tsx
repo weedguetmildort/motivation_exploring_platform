@@ -1,3 +1,4 @@
+import { selectedStudy, studyApiPath } from "../lib/studySelection";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
@@ -66,7 +67,7 @@ export default function ExportPanelPage() {
 
   function handleDownload(key: ExportType) {
     setDownloading((prev) => new Set(prev).add(key));
-    window.open(`/api/export/${key}`, "_blank");
+    window.open(studyApiPath(`/api/export/${key}`) as string, "_blank");
     setTimeout(() => {
       setDownloading((prev) => {
         const next = new Set(prev);
@@ -89,12 +90,13 @@ export default function ExportPanelPage() {
     <div className="min-h-screen bg-gray-50">
       <PageHeader
         title="Export Data"
-        subtitle="Download study data and research snapshots"
+        subtitle={`Download ${selectedStudy() === "study-2" ? "Study 2" : "Study 1"} data and research snapshots`}
         onDashboard={() => router.push("/dashboard")}
         onLogout={onLogout}
       />
 
       <div className="page-container">
+        <p className="mb-4 text-sm text-gray-600">These downloads contain the selected study. To download snapshots of both studies, use All studies in <a href="/research_panel" className="underline">Research Results</a>.</p>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {EXPORTS.map(({ key, label, description }) => {
             const busy = downloading.has(key);
