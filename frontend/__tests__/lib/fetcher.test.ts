@@ -2,7 +2,17 @@ import { apiFetch, ApiError } from "../../lib/fetcher";
 
 describe("apiFetch", () => {
   beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState({}, "", "/dashboard");
     global.fetch = jest.fn();
+  });
+
+  it("records the actual study-scoped URL on a 400 response", async () => {
+    window.history.replaceState({}, "", "/survey?study=study-2");
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 400, text: async () => JSON.stringify({ detail: "Invalid survey item_id" }) });
+    await expect(apiFetch("/api/surveys/pre_quiz/submit")).rejects.toMatchObject({
+      status: 400, url: "/api/studies/study-2/surveys/pre_quiz/submit", message: "Invalid survey item_id",
+    });
   });
 
   it("sends credentials and JSON content-type by default", async () => {

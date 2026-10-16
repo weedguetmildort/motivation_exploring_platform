@@ -13,7 +13,8 @@ export async function apiFetch<T = any>(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(studyApiPath(input), {
+  const scopedInput = studyApiPath(input);
+  const res = await fetch(scopedInput, {
     ...init,
     credentials: "include", // send cookies
     headers: {
@@ -35,7 +36,7 @@ export async function apiFetch<T = any>(
     const message =
       (data && (data.detail || data.message)) ||
       `${res.status} ${res.statusText}`;
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url = typeof scopedInput === "string" ? scopedInput : scopedInput instanceof URL ? scopedInput.href : scopedInput.url;
     throw new ApiError(message, res.status, url);
   }
 
