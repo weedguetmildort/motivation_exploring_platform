@@ -421,117 +421,57 @@ class TestDeleteSurveyItem:
         assert exc_info.value.status_code == 404
 
 
+
+# Stateful survey behavior uses an in-memory database so snapshots and conditional
+# writes are exercised instead of asserting an implementation's call sequence.
+@pytest.fixture
+def survey_store():
+    import mongomock
+    from tests.conftest import standard_step_order
+    db = mongomock.MongoClient().db
+    uid = db.users.insert_one({"email": "student@example.com", "step_order": standard_step_order(), "completed_steps": [], "quiz_set_assignment": {}}).inserted_id
+    return db, str(uid), "student@example.com"
+
+
+def _add_state_item(db, stage="pre_quiz", **kwargs):
+    return create_survey_item(db, SurveyItemCreate(stage=stage, prompt="Question", **kwargs))
+
 # ── build_survey_state ───────────────────────────────────────────────────────
 
 class TestBuildSurveyState:
-    def test_invalid_stage_raises_400(self, mock_db, mock_col):
-        with pytest.raises(HTTPException) as exc_info:
-            build_survey_state(mock_db, "user1", "user@test.edu", "not_a_real_stage")
+    def test_invalid_stage_raises_400(self, survey_store):
+        db, uid, email = survey_store
+        with pytest.raises(HTTPException) as error:
+            build_survey_state(db, uid, email, "not_real")
+        assert error.value.status_code == 400
 
-        assert exc_info.value.status_code == 400
+    def test_creates_new_response_doc_when_none_exists(self, survey_store):
+        db, uid, email = survey_store
+        state = build_survey_state(db, uid, email, "pre_quiz")
+        assert state.attempt.status == "in_progress" and state.attempt.total_items == 0
+        assert db.survey_responses.count_documents({"user_id": uid, "stage": "pre_quiz"}) == 1
+        assert db.survey_responses.find_one({})["item_snapshot"] == []
 
-    def test_creates_new_response_doc_when_none_exists(self, mock_db, mock_col):
-        # No existing items, no existing response doc
-        mock_col.find.return_value.sort.return_value = []  # list_survey_items
-        mock_col.find_one.return_value = None  # no existing response doc
-        new_oid = ObjectId()
-        mock_col.insert_one.return_value = MagicMock(inserted_id=new_oid)
+    def test_returns_existing_response_doc_with_items_and_answers(self, survey_store):
+        db, uid, email = survey_store
+        item = _add_state_item(db)
+        build_survey_state(db, uid, email, "pre_quiz")
+        db.survey_responses.update_one({"user_id": uid}, {"$set": {"answers": [{"item_id": item.id, "value": 4, "answered_at": datetime.now(timezone.utc)}]}})
+        state = build_survey_state(db, uid, email, "pre_quiz")
+        assert state.attempt.answered_count == 1 and state.attempt.total_items == 1
+        assert state.answers[0].value == 4 and state.items[0].id == item.id
 
-        state = build_survey_state(mock_db, "user1", "user@test.edu", "pre_quiz")
+    def test_post_variant_uses_post_base_items(self, survey_store):
+        db, uid, email = survey_store
+        item = _add_state_item(db, "post_base")
+        assert build_survey_state(db, uid, email, "post_variant").items[0].id == item.id
 
-        assert state.attempt.stage == "pre_quiz"
-        assert state.attempt.status == "in_progress"
-        assert state.attempt.answered_count == 0
-        assert state.attempt.total_items == 0
-        assert state.items == []
-        assert state.answers == []
+    def test_unanswered_items_not_counted_in_answered_count(self, survey_store):
+        db, uid, email = survey_store
+        item = _add_state_item(db)
+        db.survey_responses.insert_one({"user_id": uid, "stage": "pre_quiz", "status": "in_progress", "answers": [{"item_id": item.id, "answered_at": None}]})
+        assert build_survey_state(db, uid, email, "pre_quiz").attempt.answered_count == 0
 
-        # Should have inserted a new response doc
-        mock_col.insert_one.assert_called_once()
-        inserted_doc = mock_col.insert_one.call_args[0][0]
-        assert inserted_doc["user_id"] == "user1"
-        assert inserted_doc["user_email"] == "user@test.edu"
-        assert inserted_doc["stage"] == "pre_quiz"
-        assert inserted_doc["status"] == "in_progress"
-        assert inserted_doc["answers"] == []
-
-    def test_returns_existing_response_doc_with_items_and_answers(self, mock_db, mock_col):
-        item_oid = ObjectId()
-        now = datetime.now(timezone.utc)
-
-        item_doc = {
-            "_id": item_oid, "stage": "pre_quiz", "prompt": "Q1", "type": "likert",
-            "required": True, "order": 0, "active": True, "category": None,
-            "reverse_scored": False,
-            "scale": {"min": 1, "max": 5, "anchors": None}, "options": None,
-        }
-        mock_col.find.return_value.sort.return_value = [item_doc]
-
-        existing_response = {
-            "_id": ObjectId(),
-            "user_id": "user1",
-            "user_email": "user@test.edu",
-            "stage": "pre_quiz",
-            "status": "in_progress",
-            "answers": [
-                {"item_id": str(item_oid), "value": 4, "shown_at": now, "answered_at": now},
-            ],
-            "started_at": now,
-            "completed_at": None,
-            "updated_at": now,
-        }
-        mock_col.find_one.return_value = existing_response
-
-        state = build_survey_state(mock_db, "user1", "user@test.edu", "pre_quiz")
-
-        assert state.attempt.total_items == 1
-        assert state.attempt.answered_count == 1
-        assert state.attempt.status == "in_progress"
-        assert len(state.items) == 1
-        assert state.items[0].id == str(item_oid)
-        assert len(state.answers) == 1
-        assert state.answers[0].item_id == str(item_oid)
-        assert state.answers[0].value == 4
-        assert state.answers[0].shown_at == now.isoformat()
-        assert state.answers[0].answered_at == now.isoformat()
-
-        # Should not have inserted a new doc since one already exists
-        mock_col.insert_one.assert_not_called()
-
-    def test_post_variant_uses_post_base_items(self, mock_db, mock_col):
-        """post_variant question_stage maps to post_base items."""
-        mock_col.find.return_value.sort.return_value = []
-        mock_col.find_one.return_value = {
-            "_id": ObjectId(), "user_id": "user1", "user_email": "user@test.edu",
-            "stage": "post_variant", "status": "in_progress", "answers": [],
-            "started_at": datetime.now(timezone.utc), "completed_at": None,
-            "updated_at": datetime.now(timezone.utc),
-        }
-
-        build_survey_state(mock_db, "user1", "user@test.edu", "post_variant")
-
-        # list_survey_items should query for stage="post_base"
-        mock_col.find.assert_any_call({"stage": "post_base", "active": True})
-
-    def test_unanswered_items_not_counted_in_answered_count(self, mock_db, mock_col):
-        item_oid = ObjectId()
-        now = datetime.now(timezone.utc)
-
-        mock_col.find.return_value.sort.return_value = []
-        mock_col.find_one.return_value = {
-            "_id": ObjectId(), "user_id": "user1", "user_email": "user@test.edu",
-            "stage": "pre_quiz", "status": "in_progress",
-            "answers": [
-                {"item_id": str(item_oid), "value": None, "shown_at": now, "answered_at": None},
-            ],
-            "started_at": now, "completed_at": None, "updated_at": now,
-        }
-
-        state = build_survey_state(mock_db, "user1", "user@test.edu", "pre_quiz")
-
-        assert state.attempt.answered_count == 0
-        assert state.answers[0].answered_at is None
-        assert state.answers[0].shown_at == now.isoformat()
 
 
 # ── build_survey_state: per-participant randomization ─────────────────────────
@@ -546,52 +486,23 @@ def _likert_item_doc(oid: ObjectId, order: int) -> dict:
 
 
 class TestBuildSurveyStateRandomization:
-    def _run(self, mock_db, mock_col, item_docs, user_id="user1", stage="pre_quiz"):
-        mock_col.find.return_value.sort.return_value = item_docs
-        mock_col.find_one.return_value = {
-            "_id": ObjectId(), "user_id": user_id, "user_email": "u@test.edu",
-            "stage": stage, "status": "in_progress", "answers": [],
-            "started_at": datetime.now(timezone.utc), "completed_at": None,
-            "updated_at": datetime.now(timezone.utc),
-        }
-        state = build_survey_state(mock_db, user_id, "u@test.edu", stage)
-        return [i.id for i in state.items]
+    def test_preserves_the_full_item_set(self, survey_store):
+        db, uid, email = survey_store
+        ids = {_add_state_item(db).id for _ in range(10)}
+        assert {i.id for i in build_survey_state(db, uid, email, "pre_quiz").items} == ids
 
-    def test_preserves_the_full_item_set(self, mock_db, mock_col):
-        oids = [ObjectId() for _ in range(6)]
-        docs = [_likert_item_doc(oid, i) for i, oid in enumerate(oids)]
+    def test_order_is_deterministic_for_same_user_and_stage(self, survey_store):
+        db, uid, email = survey_store
+        for _ in range(10): _add_state_item(db)
+        first = build_survey_state(db, uid, email, "pre_quiz")
+        assert [i.id for i in first.items] == [i.id for i in build_survey_state(db, uid, email, "pre_quiz").items]
 
-        order = self._run(mock_db, mock_col, docs)
-
-        # Every item is still present exactly once — nothing dropped or duplicated.
-        assert sorted(order) == sorted(str(o) for o in oids)
-        assert len(order) == 6
-
-    def test_order_is_deterministic_for_same_user_and_stage(self, mock_db, mock_col):
-        oids = [ObjectId() for _ in range(6)]
-        docs = [_likert_item_doc(oid, i) for i, oid in enumerate(oids)]
-
-        first = self._run(mock_db, mock_col, docs, user_id="userX", stage="pre_quiz")
-        second = self._run(mock_db, mock_col, docs, user_id="userX", stage="pre_quiz")
-
-        # A refresh must not reshuffle: same seed → identical order.
-        assert first == second
-
-    def test_order_varies_across_users_and_stages(self, mock_db, mock_col):
-        oids = [ObjectId() for _ in range(6)]
-        docs = [_likert_item_doc(oid, i) for i, oid in enumerate(oids)]
-
-        orders = {
-            tuple(self._run(mock_db, mock_col, docs, user_id="userA", stage="pre_quiz")),
-            tuple(self._run(mock_db, mock_col, docs, user_id="userB", stage="pre_quiz")),
-            # Same user, different stage — post_base/post_variant reuse the same
-            # question set and must get different orders (seed includes stage).
-            tuple(self._run(mock_db, mock_col, docs, user_id="userA", stage="post_base")),
-            tuple(self._run(mock_db, mock_col, docs, user_id="userA", stage="post_variant")),
-        }
-
-        # Distinct seeds should not all collapse to one order.
+    def test_order_varies_across_users_and_stages(self, survey_store):
+        db, uid, email = survey_store
+        for _ in range(10): _add_state_item(db, scope="all_surveys")
+        orders = {tuple(i.id for i in build_survey_state(db, user, email, stage).items) for user in (uid, str(ObjectId())) for stage in ("pre_quiz", "post_base")}
         assert len(orders) > 1
+
 
 
 # ── record_item_shown ────────────────────────────────────────────────────────
@@ -625,319 +536,62 @@ class TestRecordItemShown:
 # ── submit_survey ─────────────────────────────────────────────────────────────
 
 class TestSubmitSurvey:
-    @staticmethod
-    def _flow_doc(user_id, upto_step):
-        """User doc positioned so that ``upto_step`` is the current step."""
-        order = study_flow.build_step_order(
-            study_flow.variant_sequence_for_seq(
-                1, study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
-            )
-        )
-        return {
-            "_id": ObjectId(user_id),
-            "step_order": order,
-            "completed_steps": order[: order.index(upto_step)],
-            "quiz_set_assignment": {},
-        }
+    def test_already_completed_returns_original_state_without_rewriting_answers(self, survey_store):
+        db, uid, email = survey_store
+        item = _add_state_item(db)
+        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=item.id, value=4)])
+        submit_survey(db, uid, email, "pre_quiz", req)
+        original = db.survey_responses.find_one({})
+        result = submit_survey(db, uid, email, "pre_quiz", SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=item.id, value=1)]))
+        assert result.attempt.status == "completed"
+        assert db.survey_responses.find_one({})["answers"] == original["answers"]
 
-    def _response_doc(self, user_id="user1", user_email="user@test.edu", stage="pre_quiz", answers=None, status="in_progress"):
-        return {
-            "_id": ObjectId(),
-            "user_id": user_id,
-            "user_email": user_email,
-            "stage": stage,
-            "status": status,
-            "answers": answers or [],
-            "started_at": datetime.now(timezone.utc),
-            "completed_at": None,
-            "updated_at": datetime.now(timezone.utc),
-        }
+    def test_invalid_stage_raises_400(self, survey_store):
+        db, uid, email = survey_store
+        with pytest.raises(HTTPException) as error: submit_survey(db, uid, email, "bogus", SurveySubmitRequest(answers=[]))
+        assert error.value.status_code == 400
+        assert db.survey_responses.count_documents({}) == 0
 
-    def test_already_completed_returns_original_state_without_rewriting_answers(self, mock_db, mock_col):
-        doc = self._response_doc(status="completed")
-        mock_col.find_one.return_value = doc
-        mock_col.find.return_value.sort.return_value = []
+    def test_invalid_item_id_raises_400(self, survey_store):
+        db, uid, email = survey_store
+        with pytest.raises(HTTPException) as error: submit_survey(db, uid, email, "pre_quiz", SurveySubmitRequest(answers=[SurveyAnswerIn(item_id="invalid", value=4)]))
+        assert error.value.status_code == 400
 
-        req = SurveySubmitRequest(answers=[])
-        state = submit_survey(mock_db, "user1", "user@test.edu", "pre_quiz", req)
+    def test_partial_completion_does_not_set_completed(self, survey_store):
+        db, uid, email = survey_store
+        one, two = _add_state_item(db), _add_state_item(db)
+        state = submit_survey(db, uid, email, "pre_quiz", SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=one.id, value=4)]))
+        assert state.attempt.status == "in_progress"
+        assert "survey:pre_quiz" not in db.users.find_one({})["completed_steps"]
+
+    @pytest.mark.parametrize("stage", ["pre_quiz", "post_base", "post_followup"])
+    def test_full_completion_sets_flags_and_payload(self, survey_store, stage):
+        db, uid, email = survey_store
+        question_stage = "pre_quiz" if stage == "pre_quiz" else "post_base"
+        item = _add_state_item(db, question_stage)
+        state = submit_survey(db, uid, email, stage, SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=item.id, value=5)]))
         assert state.attempt.status == "completed"
-        mock_col.update_one.assert_not_called()
+        assert db.users.find_one({})[f"{stage}_survey"] == {item.id: 5}
+        assert f"survey:{stage}" in db.users.find_one({})["completed_steps"]
 
-    def test_invalid_stage_raises_400(self, mock_db, mock_col):
-        doc = self._response_doc()
-        mock_col.find_one.return_value = doc
+    def test_full_completion_of_last_step_sets_complete_stage(self, survey_store):
+        db, uid, email = survey_store
+        order = db.users.find_one({})["step_order"]
+        stage = order[-1].split(":")[1]
+        db.users.update_one({}, {"$set": {"completed_steps": order[:-1]}})
+        item = _add_state_item(db, "post_base")
+        submit_survey(db, uid, email, stage, SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=item.id, value=4)]))
+        assert db.users.find_one({})["survey_stage"] == "complete"
 
-        req = SurveySubmitRequest(answers=[])
-        with pytest.raises(HTTPException) as exc_info:
-            submit_survey(mock_db, "user1", "user@test.edu", "bogus_stage", req)
+    def test_user_not_found_raises_404(self, survey_store):
+        db, uid, email = survey_store
+        db.users.delete_many({})
+        with pytest.raises(HTTPException) as error: submit_survey(db, uid, email, "pre_quiz", SurveySubmitRequest(answers=[]))
+        assert error.value.status_code == 404
 
-        assert exc_info.value.status_code == 400
-
-    def test_invalid_item_id_raises_400(self, mock_db, mock_col):
-        doc = self._response_doc()
-
-        # find_one is called multiple times: load_or_create, then later find_one(updated)
-        mock_col.find_one.return_value = doc
-        # items_col.find returns no valid ids
-        mock_col.find.return_value = []
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id="not-a-valid-id", value=4)])
-
-        with pytest.raises(HTTPException) as exc_info:
-            submit_survey(mock_db, "user1", "user@test.edu", "pre_quiz", req)
-
-        assert exc_info.value.status_code == 400
-        assert "Invalid survey item_id" in exc_info.value.detail
-
-    def test_partial_completion_does_not_set_completed(self, mock_db, mock_col):
-        item1 = ObjectId()
-        item2 = ObjectId()
-        doc = self._response_doc(answers=[])
-
-        # find_one call sequence:
-        # 1) _load_or_create_response_doc -> doc (exists already)
-        # 2) col.find_one(updated) after updates
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 4, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-        # find_one sequence: load_or_create, post-update read, then build_survey_state's
-        # own load_or_create read at the end
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
-
-        # update_one for answer push: matched_count == 0 means not found -> push new
-        mock_col.update_one.return_value = MagicMock(matched_count=0)
-
-        # items_col.find: first call -> valid_ids (only item1, item2 are valid),
-        # second call -> required_ids (item1 AND item2 required, but only item1 answered),
-        # third call -> build_survey_state's list_survey_items (returns empty items)
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}, {"_id": item2}],  # valid_ids
-            [{"_id": item1}, {"_id": item2}],  # required_ids -> both required
-            final_find_result,  # build_survey_state -> list_survey_items
-        ]
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value=4)])
-
-        state = submit_survey(mock_db, "user1", "user@test.edu", "pre_quiz", req)
-
-        # Status should remain in_progress since required_ids not fully answered
-        assert state.attempt.status == "in_progress"
-
-        # users collection should NOT be updated since survey not completed
-        # (update_one calls so far: 1 for the answer push)
-        # Confirm no $set on completion flags happened by checking call args
-        for call in mock_col.update_one.call_args_list:
-            set_doc = call[0][1].get("$set", {})
-            assert "survey_pre_base_completed" not in set_doc
-            assert set_doc.get("status") != "completed"
-
-    def test_full_completion_pre_base_sets_flags_and_payload(self, mock_db, mock_col):
-        item1 = ObjectId()
-        user_id = str(ObjectId())
-        doc = self._response_doc(user_id=user_id, answers=[])
-
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 5, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-
-        # find_one sequence:
-        # 1) _load_or_create_response_doc
-        # 2) col.find_one(updated) post-update
-        # 3) build_survey_state's own load_or_create read at the end
-        # The user doc is read once more now: completing a survey advances the
-        # study flow (study_flow.mark_step_completed).
-        mock_col.find_one.side_effect = [
-            doc, updated_doc, self._flow_doc(user_id, "survey:pre_quiz"), updated_doc,
-        ]
-
-        mock_col.update_one.side_effect = [
-            MagicMock(matched_count=1),  # answer update
-            MagicMock(),  # completion status update
-            MagicMock(matched_count=1),  # user answers payload
-            MagicMock(matched_count=1),  # flow advance
-        ]
-
-        # items_col.find: valid_ids then required_ids (both = {item1}), then
-        # build_survey_state's list_survey_items call -> empty items
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}],  # valid_ids
-            [{"_id": item1}],  # required_ids
-            final_find_result,  # build_survey_state -> list_survey_items
-        ]
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value=5)])
-
-        state = submit_survey(mock_db, user_id, "user@test.edu", "pre_quiz", req)
-
-        assert state.attempt.status == "completed" or state.attempt.status == "in_progress"
-        # The final attempt status reflects build_survey_state's re-read, which uses
-        # find_one mocked via side_effect already exhausted -> falls back to MagicMock.
-        # What we really care about: the user update set the right flags.
-        # The denormalised answers payload and the flow advance are two writes.
-        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
-        assert payload_doc["pre_quiz_survey"] == {str(item1): 5}
-        assert "pre_quiz_survey_completed_at" in payload_doc
-
-        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
-        assert "survey:pre_quiz" in flow_doc["completed_steps"]
-        assert flow_doc["survey_pre_base_completed"] is True
-
-    def test_full_completion_post_base_sets_flags_and_payload(self, mock_db, mock_col):
-        item1 = ObjectId()
-        user_id = str(ObjectId())
-        doc = self._response_doc(user_id=user_id, stage="post_base", answers=[])
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 3, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-
-        mock_col.find_one.side_effect = [
-            doc, updated_doc, self._flow_doc(user_id, "survey:post_base"), updated_doc,
-        ]
-        mock_col.update_one.side_effect = [
-            MagicMock(matched_count=1),
-            MagicMock(),
-            MagicMock(matched_count=1),
-            MagicMock(matched_count=1),
-        ]
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}],
-            [{"_id": item1}],
-            final_find_result,
-        ]
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value=3)])
-        submit_survey(mock_db, user_id, "user@test.edu", "post_base", req)
-
-        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
-        assert payload_doc["post_base_survey"] == {str(item1): 3}
-        assert "post_base_survey_completed_at" in payload_doc
-
-        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
-        assert flow_doc["survey_post_base_completed"] is True
-        # Variant quizzes still to come, so the study is not complete.
-        assert flow_doc["survey_stage"] != "complete"
-
-    def test_full_completion_of_the_last_step_sets_complete_stage(self, mock_db, mock_col):
-        item1 = ObjectId()
-        user_id = str(ObjectId())
-        order = study_flow.build_step_order(
-            study_flow.variant_sequence_for_seq(
-                1, study_flow.StudyConfig(variant_order=tuple(study_flow.all_variants()))
-            )
-        )
-        last_stage = study_flow.get_step(order[-1]).key
-        doc = self._response_doc(user_id=user_id, stage=last_stage, answers=[])
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": "yes", "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-
-        mock_col.find_one.side_effect = [
-            doc,
-            updated_doc,
-            {
-                "_id": ObjectId(user_id), "step_order": order,
-                "completed_steps": order[:-1], "quiz_set_assignment": {},
-            },
-            updated_doc,
-        ]
-        mock_col.update_one.side_effect = [
-            MagicMock(matched_count=1),
-            MagicMock(),
-            MagicMock(matched_count=1),
-            MagicMock(matched_count=1),
-        ]
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}],  # valid_ids (sourced from the post_base item bank)
-            [{"_id": item1}],  # required_ids
-            final_find_result,  # build_survey_state -> list_survey_items
-        ]
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value="yes")])
-        submit_survey(mock_db, user_id, "user@test.edu", last_stage, req)
-
-        payload_doc = mock_col.update_one.call_args_list[-2][0][1]["$set"]
-        assert payload_doc[f"{last_stage}_survey"] == {str(item1): "yes"}
-
-        flow_doc = mock_col.update_one.call_args_list[-1][0][1]["$set"]
-        assert flow_doc["survey_post_variant_completed"] is True
-        assert flow_doc["survey_stage"] == "complete"
-
-    def test_user_not_found_raises_404(self, mock_db, mock_col):
-        item1 = ObjectId()
-        user_id = str(ObjectId())
-        doc = self._response_doc(user_id=user_id, answers=[])
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 5, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-
-        mock_col.find_one.side_effect = [doc, updated_doc]
-        mock_col.update_one.side_effect = [
-            MagicMock(matched_count=1),  # answer update
-            MagicMock(),  # completion status update
-            MagicMock(matched_count=0),  # user update -> not found
-        ]
-        mock_col.find.side_effect = [
-            [{"_id": item1}],
-            [{"_id": item1}],
-        ]
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value=5)])
-
-        with pytest.raises(HTTPException) as exc_info:
-            submit_survey(mock_db, user_id, "user@test.edu", "pre_quiz", req)
-
-        assert exc_info.value.status_code == 404
-
-    def test_new_answer_pushed_when_no_existing_entry(self, mock_db, mock_col):
-        """When the answers.item_id match fails (matched_count==0), a new
-        answer entry is pushed instead of updating in place."""
-        item1 = ObjectId()
-        item2 = ObjectId()
-        doc = self._response_doc(answers=[])
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 2, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
-        # First update_one (in-place update attempt) returns matched_count=0 -> push branch
-        mock_col.update_one.side_effect = [
-            MagicMock(matched_count=0),  # in-place update fails
-            MagicMock(),  # push new answer
-        ]
-        # valid_ids includes item1 and item2, required_ids only item2 (not yet answered),
-        # then build_survey_state's list_survey_items call -> empty items
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}, {"_id": item2}],  # valid_ids
-            [{"_id": item2}],  # required_ids -> item2 required but not answered
-            final_find_result,  # build_survey_state -> list_survey_items
-        ]
-
-        req = SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=str(item1), value=2)])
-
-        state = submit_survey(mock_db, "user1", "user@test.edu", "pre_quiz", req)
-
-        # Two update_one calls for the answer (in-place attempt + push)
-        assert mock_col.update_one.call_count == 2
-        push_call = mock_col.update_one.call_args_list[1]
-        pushed = push_call[0][1]["$push"]["answers"]
-        assert pushed["item_id"] == str(item1)
-        assert pushed["value"] == 2
-
-        # Not completed since item2 (required) wasn't answered
-        assert state.attempt.status == "in_progress"
+    def test_new_answer_is_pushed_and_existing_answer_can_change_before_completion(self, survey_store):
+        db, uid, email = survey_store
+        one, two = _add_state_item(db), _add_state_item(db)
+        for value in (2, 4): submit_survey(db, uid, email, "pre_quiz", SurveySubmitRequest(answers=[SurveyAnswerIn(item_id=one.id, value=value)]))
+        answers = db.survey_responses.find_one({})["answers"]
+        assert len(answers) == 1 and answers[0]["value"] == 4

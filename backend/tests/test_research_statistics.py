@@ -51,6 +51,16 @@ def test_survey_linkage_reverse_scores_numeric_likert_and_uses_people_once():
     assert spearman([(1, 0), (1, 1), (1, .5)]) is None
 
 
+def test_survey_associations_use_saved_definitions_after_item_edit_or_deletion():
+    saved = {"id": "item", "prompt": "Original", "type": "likert", "reverse_scored": True, "scale": {"min": 1, "max": 5}}
+    rows = [row("a", "followup", False), row("b", "followup", True), row("b", "followup", False), row("c", "followup", True)]
+    surveys = [{"user_id": pid, "stage": "post_followup", "status": "completed", "item_snapshot": [saved], "answers": [{"item_id": "item", "value": value}]} for pid, value in [("a", 1), ("b", 3), ("c", 5)]]
+    result = survey_associations(rows, [], surveys, [], repetitions=10)["associations"][0]
+    assert result["item_prompt"] == "Original"
+    assert result["spearman_rho"] == -1
+    assert result["item_version"]
+
+
 def test_clusters_are_deterministic_exploratory_and_exclude_auto_prompts():
     packets = [{"participant_id": str(i), "attempt_id": str(i), "question_id": "q", "packet_hash": str(i), "quiz_id": "followup",
         "turns": [{"role": "user", "trigger": "manual", "text": text}]} for i, text in enumerate([

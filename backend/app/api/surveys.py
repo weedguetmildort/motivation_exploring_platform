@@ -19,6 +19,7 @@ from ..services.surveys import (
     build_survey_state,
     submit_survey,
     record_item_shown,
+    load_saved_response, effective_survey_items,
 )
 
 router = APIRouter(prefix="/surveys", tags=["surveys"])
@@ -56,9 +57,8 @@ def require_survey_access(
     completed_retry = step_id in user.completed_steps and (
         request.method == "GET" or request.url.path.endswith("/submit")
     )
-    if completed_retry and not request.app.state.db["survey_responses"].find_one(
-        {"user_id": user.id, "stage": stage, "status": "completed"}, {"_id": 1}
-    ):
+    saved = load_saved_response(request.app.state.db, user.id, stage) if completed_retry else None
+    if completed_retry and (not saved or saved.get("status") != "completed"):
         # Legacy flags may outlive deleted data. Do not create a fresh attempt
         # behind a step that the participant's flow already considers finished.
         raise HTTPException(status_code=409, detail="Saved survey responses are unavailable; contact the study team")
@@ -90,6 +90,10 @@ def admin_delete_item(item_id: str, request: Request, user: UserPublic = Depends
     return {"ok": True}
 
 # ----- user flow -----
+
+@router.get("/preview/{stage}", response_model=list[SurveyItemPublic])
+def preview(stage: str, request: Request, _: UserPublic = Depends(require_admin)):
+    return effective_survey_items(request.app.state.db, stage)
 
 @router.get("/{stage}/state", response_model=SurveyStateResponse)
 def get_state(stage: str, request: Request, user: UserPublic = Depends(require_survey_access)):

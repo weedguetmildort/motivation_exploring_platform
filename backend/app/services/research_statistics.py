@@ -111,6 +111,8 @@ def spearman(pairs):
 
 
 def survey_associations(rows, participants, responses, items, seed=2026, repetitions=1000):
+    import hashlib
+    import json
     people = {p["participant_id"]: p for p in participants}
     definitions = {str(item["_id"]): item for item in items}
     outcomes = defaultdict(list)
@@ -120,6 +122,7 @@ def survey_associations(rows, participants, responses, items, seed=2026, repetit
             if value is not None and (metric != "wrong_ai_agreement" or row.get("wrong_ai_exposed") is True):
                 outcomes[(row["participant_id"], row["quiz_id"], metric)].append(float(value))
     groups = defaultdict(dict)
+    versions = {}
     for response in sorted(responses, key=lambda r: str(r.get("completed_at", ""))):
         if response.get("status") != "completed":
             continue
@@ -127,8 +130,9 @@ def survey_associations(rows, participants, responses, items, seed=2026, repetit
         quiz = "base" if stage == "post_base" else people.get(pid, {}).get("assigned_var") if stage == "post_variant" else stage[5:] if stage.startswith("post_") else None
         if not quiz:
             continue
+        saved_definitions = {item["id"]: item for item in response.get("item_snapshot", [])}
         for answer in response.get("answers", []):
-            item = definitions.get(answer.get("item_id"))
+            item = saved_definitions.get(answer.get("item_id")) or definitions.get(answer.get("item_id"))
             value = answer.get("value")
             if not item or item.get("type") != "likert" or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 continue
@@ -140,22 +144,24 @@ def survey_associations(rows, participants, responses, items, seed=2026, repetit
                 if lo is None or hi is None:
                     continue
                 value = lo + hi - value
+            version = hashlib.sha256(json.dumps({key: item.get(key) for key in ("prompt", "type", "reverse_scored", "scale")}, sort_keys=True).encode()).hexdigest()[:16]
+            versions[(answer["item_id"], version)] = item
             for metric in ("accuracy", "wrong_ai_agreement", "active_ms", "human_reasoning"):
                 measurements = outcomes.get((pid, quiz, metric))
                 if measurements:
-                    groups[(quiz, answer["item_id"], metric)][pid] = (value, mean(measurements))
+                    groups[(quiz, answer["item_id"], version, metric)][pid] = (value, mean(measurements))
     rng = random.Random(seed)
     results = []
-    for (quiz, item_id, metric), by_person in sorted(groups.items()):
+    for (quiz, item_id, version, metric), by_person in sorted(groups.items()):
         pairs = [pair for _, pair in sorted(by_person.items())]
         coefficient = spearman(pairs)
         samples = [spearman(rng.choices(pairs, k=len(pairs))) for _ in range(repetitions)] if coefficient is not None else []
         samples = [s for s in samples if s is not None]
-        results.append({"quiz_id": quiz, "item_id": item_id, "item_prompt": definitions[item_id].get("prompt"), "metric": metric,
+        results.append({"quiz_id": quiz, "item_id": item_id, "item_version": version, "item_prompt": versions[(item_id, version)].get("prompt"), "metric": metric,
                         "participants": len(pairs), "spearman_rho": coefficient,
                         "participant_bootstrap_95_interval": [quantile(samples, .025), quantile(samples, .975)] if len(samples) >= repetitions * .8 else None})
     return {"analysis_status": "exploratory", "associations": results,
-            "limitations": "Post-quiz Likert items are associated with same-quiz behavior, one point per participant. Reverse scoring uses exported item definitions. Item edits are not historically frozen. These associations are not causal and do not define a trust scale or validate a construct."}
+            "limitations": "Post-quiz Likert items are associated with same-quiz behavior, one point per participant and item version. Saved survey definitions govern reverse scoring when available; legacy responses fall back to the current definitions. These associations are not causal and do not define a trust scale or validate a construct."}
 
 
 def lexical_clusters(packets, threshold=.45, limit=500):

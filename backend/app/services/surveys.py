@@ -88,6 +88,16 @@ def _normalize_item_doc(doc: dict) -> dict:
     - likert => must have scale, options=None
     - single_select => must have >=2 options, scale=None
     """
+    scope = doc.get("scope")
+    if scope is not None:
+        targets = doc.get("stages") or []
+        if scope == "stages" and (not targets or any(s not in study_flow.survey_stage_settings() for s in targets)):
+            raise HTTPException(400, "Choose at least one valid survey stage")
+        if scope not in ("all_surveys", "post_quiz", "stages"):
+            raise HTTPException(400, "Unknown survey question scope")
+        doc["stages"] = list(dict.fromkeys(targets)) if scope == "stages" else []
+    elif not study_flow.is_known_survey_stage(doc.get("stage", "")):
+        raise HTTPException(400, "Unknown survey question stage")
     t = doc.get("type", "likert")
 
     if t == "likert":
@@ -152,6 +162,8 @@ def update_survey_item(db, item_id: str, patch: SurveyItemUpdate) -> SurveyItemP
     # Merge patch into existing doc
     merged = dict(existing)  # [ADD]
     merged.update(patch_data)  # [ADD]
+    if "stage" in patch_data and "scope" not in patch_data:
+        merged["scope"] = None  # Backward-compatible stage edits from older clients.
     merged["updated_at"] = now  # [UPDATE]
 
     # Normalize & validate based on final type
@@ -175,11 +187,56 @@ def delete_survey_item(db, item_id: str) -> None:
 
 # ---------- user survey state + submit ----------
 
+def item_applies(item, stage):
+    scope = item.scope if isinstance(item, SurveyItemPublic) else item.get("scope")
+    data = item.model_dump() if isinstance(item, SurveyItemPublic) else item
+    if scope == "all_surveys":
+        return True
+    if scope == "post_quiz":
+        return stage != "pre_quiz"
+    if scope == "stages":
+        return stage in (data.get("stages") or [])
+    return data.get("stage") == stage or (data.get("stage") == "post_base" and stage != "pre_quiz")
+
+
+def effective_survey_items(db, stage):
+    _validate_stage(stage)
+    return list({item.id: item for item in list_survey_items(db, active_only=True) if item_applies(item, stage)}.values())
+
+
+def load_saved_response(db, user_id, stage):
+    doc = get_survey_responses_collection(db).find_one({"user_id": user_id, "stage": stage})
+    if doc is None and stage.startswith("post_") and stage not in ("post_base", "post_variant"):
+        user = db["users"].find_one({"_id": ObjectId(user_id)})
+        if user and stage == study_flow.post_variant_stage(user.get("assigned_var") or ""):
+            doc = get_survey_responses_collection(db).find_one({"user_id": user_id, "stage": "post_variant"})
+    return doc
+
+
+def _snapshot_items(db, doc, stage, user_id):
+    if "item_snapshot" not in doc:
+        items = effective_survey_items(db, stage)
+        # A completed legacy response must not gain newly required questions.
+        if doc.get("status") == "completed":
+            answered = {a["item_id"] for a in doc.get("answers", [])}
+            items = [item for item in items if item.id in answered]
+        snapshot = [item.model_dump() for item in _seeded_shuffle(items, f"{user_id}:{stage}")]
+        user = db["users"].find_one({"_id": ObjectId(user_id)})
+        protocol = (user or {}).get("study_protocol") or {}
+        settings = study_flow.survey_stage_settings(protocol.get("survey_stages"))
+        name = settings.get(stage, {}).get("name") or "Final Survey"
+        col = get_survey_responses_collection(db)
+        col.update_one({"_id": doc["_id"], "item_snapshot": {"$exists": False}}, {"$set": {
+            "item_snapshot": snapshot, "survey_name": name, "study_flow_version": protocol.get("version"),
+        }})
+        doc = col.find_one({"_id": doc["_id"]})
+    return doc, [SurveyItemPublic(**item) for item in doc["item_snapshot"]]
+
 def _load_or_create_response_doc(db, user_id: str, user_email: str, stage: str) -> dict:
     ensure_survey_indexes(db)
     col = get_survey_responses_collection(db)
 
-    doc = col.find_one({"user_id": user_id, "stage": stage})
+    doc = load_saved_response(db, user_id, stage)
     if doc:
         return doc
 
@@ -207,19 +264,9 @@ def _load_or_create_response_doc(db, user_id: str, user_email: str, stage: str) 
 
 def build_survey_state(db, user_id: str, user_email: str, stage: str) -> SurveyStateResponse:
     stage = _validate_stage(stage)
-    question_stage = _question_stage_for_stage(stage)
-
-    # load items from question source stage
-    items = list_survey_items(db, stage=question_stage, active_only=True)
-
-    # Randomize question order per participant to control for order/anchoring
-    # effects. Seed on the actual response `stage` (not question_stage) so that
-    # post_base and post_variant — which reuse the same question set — get
-    # different orders for the same participant. Stable across refreshes.
-    items = _seeded_shuffle(items, f"{user_id}:{stage}")
-
     # load or create attempt doc from actual response stage
     doc = _load_or_create_response_doc(db, user_id, user_email, stage)
+    doc, items = _snapshot_items(db, doc, stage, user_id)
 
     answered_count = sum(1 for a in doc.get("answers", []) if a.get("answered_at"))
     total_items = len(items)
@@ -274,13 +321,8 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
         )
         return build_survey_state(db, user_id, user_email, stage)
 
-    question_stage = _question_stage_for_stage(stage)
-
-    # Validate item IDs against the question stage, not necessarily the response stage
-    valid_ids = set(
-        str(d["_id"])
-        for d in items_col.find({"stage": question_stage, "active": True}, {"_id": 1})
-    )
+    doc, items = _snapshot_items(db, doc, stage, user_id)
+    valid_ids = {item.id for item in items}
     for a in req.answers:
         if a.item_id not in valid_ids:
             raise HTTPException(status_code=400, detail=f"Invalid survey item_id: {a.item_id}")
@@ -311,13 +353,7 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     updated = col.find_one({"_id": doc["_id"]})
 
     # Compute completion using the question stage's required items
-    required_ids = set(
-        str(d["_id"])
-        for d in items_col.find(
-            {"stage": question_stage, "active": True, "required": True},
-            {"_id": 1},
-        )
-    )
+    required_ids = {item.id for item in items if item.required}
     answered_ids = set(
         x.get("item_id") for x in updated.get("answers", []) if x.get("answered_at")
     )

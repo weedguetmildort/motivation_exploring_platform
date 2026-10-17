@@ -129,7 +129,7 @@ def test_parallel_requests_do_not_switch_global_database(setup):
 
 def test_existing_config_and_drawn_size_are_preserved(setup):
     raw, db, student, _, _ = setup
-    save_study_config(db, mode="all_variants", questions_per_quiz=7)
+    save_study_config(db, mode="single_variant", questions_per_quiz=7)
     initialize_studies(raw)
     assert db["study_config"].find_one({"_id": "active_flow"})["questions_per_quiz"] == 7
     raw.users.update_one({"_id": ObjectId(student.id)}, {"$unset": {"study_protocol": ""}})

@@ -233,6 +233,7 @@ class StudyConfig:
     wrong_ai_count: int = 3
     wrong_ai_rate: Optional[float] = None
     requires_study1_completion: bool = True
+    survey_stages: tuple[tuple[str, str, bool], ...] = ()
 
     # Which question set each quiz draws from. Giving every quiz its own set is
     # what stops a participant seeing the same question twice across their four
@@ -253,6 +254,7 @@ class StudyConfig:
             "wrong_ai_count": self.wrong_ai_count,
             "wrong_ai_rate": self.wrong_ai_rate,
             "requires_study1_completion": self.requires_study1_completion,
+            "survey_stages": survey_stage_settings(self.survey_stages),
             "quiz_set_mode": self.quiz_set_mode,
             "quiz_set_map": dict(self.quiz_set_map),
         }
@@ -260,6 +262,23 @@ class StudyConfig:
 
 def get_study_config_collection(db) -> Collection:
     return db["study_config"]
+
+
+def survey_stage_settings(stored=None) -> dict:
+    """Stable survey IDs; names are administrative and never participant labels."""
+    supplied = stored if isinstance(stored, dict) else {key: {"name": name, "enabled": enabled} for key, name, enabled in (stored or ())}
+    return {step.key: {"name": (supplied.get(step.key, {}).get("name") or step.label).strip(),
+                       "enabled": supplied.get(step.key, {}).get("enabled", True)}
+            for step in STEP_REGISTRY.values() if step.kind == "survey" and step.key != LEGACY_POST_VARIANT_STAGE}
+
+
+def _survey_stage_tuple(stored=None):
+    return tuple((key, value["name"], value["enabled"]) for key, value in survey_stage_settings(stored).items())
+
+
+def study_profile_mode(db):
+    sid = getattr(db, "study_id", None)
+    return MODE_SINGLE_VARIANT if sid == "study-1" else MODE_ALL_VARIANTS if sid == "study-2" else None
 
 
 def _reconcile_variant_order(stored: Optional[Iterable[str]]) -> tuple[str, ...]:
@@ -324,6 +343,7 @@ def load_study_config(db) -> StudyConfig:
     mode = doc.get("mode", MODE_ALL_VARIANTS)
     if mode not in (MODE_ALL_VARIANTS, MODE_SINGLE_VARIANT):
         mode = MODE_ALL_VARIANTS
+    mode = study_profile_mode(db) or mode
 
     quiz_set_mode = doc.get("quiz_set_mode", QUIZ_SET_MODE_BALANCED_RANDOM)
     if quiz_set_mode not in QUIZ_SET_MODES:
@@ -334,10 +354,11 @@ def load_study_config(db) -> StudyConfig:
         variant_order=_reconcile_variant_order(doc.get("variant_order")),
         counterbalance=bool(doc.get("counterbalance", True)),
         version=int(doc.get("version", 1)),
-        questions_per_quiz=int(doc.get("questions_per_quiz", 5)),
+        questions_per_quiz=int(doc.get("questions_per_quiz", 10 if getattr(db, "study_id", None) == "study-1" else 5)),
         wrong_ai_count=int(doc.get("wrong_ai_count", 3)),
         wrong_ai_rate=doc.get("wrong_ai_rate"),
         requires_study1_completion=bool(doc.get("requires_study1_completion", True)),
+        survey_stages=_survey_stage_tuple(doc.get("survey_stages")),
         quiz_set_mode=quiz_set_mode,
         quiz_set_map=_reconcile_quiz_set_map(doc.get("quiz_set_map")),
     )
@@ -356,6 +377,7 @@ def save_study_config(
     counterbalance: Optional[bool] = None,
     quiz_set_mode: Optional[str] = None,
     quiz_set_map: Optional[dict | Iterable[tuple[str, str]]] = None,
+    survey_stages: Optional[dict] = None,
 ) -> StudyConfig:
     """Persist an admin flow change and bump the flow version.
 
@@ -363,6 +385,8 @@ def save_study_config(
     reorder stays visible in the data rather than silently splitting the cohort.
     """
     current = load_study_config(db)
+    if mode is not None and study_profile_mode(db) and mode != study_profile_mode(db):
+        raise ValueError("The quiz structure is fixed for this study")
 
     new_mode = mode if mode in (MODE_ALL_VARIANTS, MODE_SINGLE_VARIANT) else current.mode
     new_order = _reconcile_variant_order(
@@ -382,6 +406,7 @@ def save_study_config(
         wrong_ai_count=current.wrong_ai_count if wrong_ai_count is None else wrong_ai_count,
         wrong_ai_rate=wrong_ai_rate if wrong_ai_rate_supplied else current.wrong_ai_rate,
         requires_study1_completion=current.requires_study1_completion if requires_study1_completion is None else requires_study1_completion)
+    new_surveys = _survey_stage_tuple({**survey_stage_settings(current.survey_stages), **(survey_stages or {})})
     if not 1 <= protocol["questions_per_quiz"] <= 100 or not 0 <= protocol["wrong_ai_count"] <= 100:
         raise ValueError("Invalid question or wrong-advice count")
     if protocol["wrong_ai_rate"] is not None and not 0 <= protocol["wrong_ai_rate"] <= 1:
@@ -393,6 +418,7 @@ def save_study_config(
         or new_counterbalance != current.counterbalance
         or new_quiz_set_mode != current.quiz_set_mode
         or new_quiz_set_map != current.quiz_set_map
+        or new_surveys != current.survey_stages
     )
 
     version = current.version + 1 if changed else current.version
@@ -408,6 +434,7 @@ def save_study_config(
                 "version": version,
                 "quiz_set_mode": new_quiz_set_mode,
                 "quiz_set_map": dict(new_quiz_set_map),
+                "survey_stages": survey_stage_settings(new_surveys),
                 "updated_at": datetime.utcnow(),
             }
         },
@@ -422,6 +449,7 @@ def save_study_config(
         version=version,
         quiz_set_mode=new_quiz_set_mode,
         quiz_set_map=new_quiz_set_map,
+        survey_stages=new_surveys,
     )
 
 
@@ -465,7 +493,7 @@ def variant_sequence_for_seq(seq: int, config: StudyConfig) -> list[str]:
     return [variants[(offset + i) % n] for i in range(n)]
 
 
-def build_step_order(variant_sequence: Iterable[str]) -> list[str]:
+def build_step_order(variant_sequence: Iterable[str], survey_stages=None) -> list[str]:
     """Assemble the full step list: intro survey, base quiz, then each variant."""
     steps: list[str] = [survey_step_id(SurveyStage.pre_base.value)]
 
@@ -479,7 +507,8 @@ def build_step_order(variant_sequence: Iterable[str]) -> list[str]:
         steps.append(quiz_step_id(variant))
         steps.append(survey_step_id(post_variant_stage(variant)))
 
-    return steps
+    settings = survey_stage_settings(survey_stages)
+    return [step for step in steps if not step.startswith("survey:") or settings.get(step.split(":", 1)[1], {}).get("enabled", True)]
 
 
 def quiz_ids_in_order(step_order: Iterable[str]) -> list[str]:
@@ -587,7 +616,7 @@ def assign_flow(db, forced_first: Optional[str] = None) -> dict:
         # Legacy backup: one variant per participant, exactly as before.
         sequence = sequence[:1]
 
-    step_order = build_step_order(sequence)
+    step_order = build_step_order(sequence, config.survey_stages)
 
     return {
         "step_order": step_order,
@@ -649,6 +678,24 @@ def ensure_user_flow(db, doc: dict) -> dict:
     from their legacy boolean flags. Their assigned variant stays first so an
     in-flight participant continues where they left off.
     """
+    from .study_repair import repair_study1_flow
+    doc = repair_study1_flow(db, doc)
+    if doc.get("is_admin") and study_profile_mode(db):
+        config = load_study_config(db)
+        sequence = list(config.variant_order)
+        if config.mode == MODE_SINGLE_VARIANT:
+            sequence = [doc.get("assigned_var")] if doc.get("assigned_var") in all_variants() else sequence[:1]
+        order = build_step_order(sequence, config.survey_stages)
+        protocol = config.as_dict()
+        if doc.get("step_order") != order or doc.get("study_protocol") != protocol:
+            patch = {"step_order": order, "study_protocol": protocol, "study_flow_version": config.version,
+                "study_flow_mode": config.mode, "variant_sequence": sequence,
+                "assigned_var": sequence[0],
+                "completed_steps": [s for s in doc.get("completed_steps", []) if s in order],
+                "quiz_set_assignment": {**dict(zip(quiz_ids_in_order(order), ("a", "b", "c", "d"))), **(doc.get("quiz_set_assignment") or {})}}
+            patch.update(derive_legacy_flags({**doc, **patch}))
+            db["users"].update_one({"_id": doc["_id"]}, {"$set": patch})
+            doc = {**doc, **patch}
     if doc.get("step_order"):
         patch: dict = {}
 
@@ -687,7 +734,7 @@ def ensure_user_flow(db, doc: dict) -> dict:
     if config.mode == MODE_SINGLE_VARIANT:
         sequence = sequence[:1]
 
-    step_order = build_step_order(sequence)
+    step_order = build_step_order(sequence, (doc.get("study_protocol") or {}).get("survey_stages"))
     completed = _legacy_backfill_completed(doc, step_order)
 
     update = {
@@ -877,7 +924,7 @@ def derive_legacy_flags(doc: dict) -> dict:
     all_variant_quizzes_done = bool(variant_quiz_steps) and all(
         done(s) for s in variant_quiz_steps
     )
-    all_variant_surveys_done = bool(variant_survey_steps) and all(
+    all_variant_surveys_done = all(
         done(s) for s in variant_survey_steps
     )
 
@@ -887,7 +934,7 @@ def derive_legacy_flags(doc: dict) -> dict:
         stage = SurveyStage.complete.value
     elif not done(quiz_step_id(BASE_QUIZ_ID)):
         stage = SurveyStage.pre_base.value
-    elif not done(survey_step_id(SurveyStage.post_base.value)):
+    elif survey_step_id(SurveyStage.post_base.value) in step_order and not done(survey_step_id(SurveyStage.post_base.value)):
         stage = SurveyStage.post_base.value
     else:
         stage = SurveyStage.post_variant.value

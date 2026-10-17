@@ -88,7 +88,7 @@ def get_flow(user: UserPublic = Depends(get_current_user)):
 
 # ----- admin: flow ordering -----
 
-def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
+def _config_public(config: study_flow.StudyConfig, study_id=None) -> StudyConfigPublic:
     policy = access_policy()
     # Worked example of the orders participants will actually be handed, so the
     # admin can see the effect of a change before saving it.
@@ -110,6 +110,8 @@ def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
     known_quiz_ids = [study_flow.BASE_QUIZ_ID, *study_flow.all_variants()]
 
     return StudyConfigPublic(
+        study_id=study_id,
+        survey_stages=study_flow.survey_stage_settings(config.survey_stages),
         mode=config.mode,
         variant_order=list(config.variant_order),
         counterbalance=config.counterbalance,
@@ -137,7 +139,7 @@ def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
 @router.get("/config", response_model=StudyConfigPublic)
 def get_config(request: Request, user: UserPublic = Depends(require_admin)):
     db = request.app.state.db
-    return _config_public(study_flow.load_study_config(db))
+    return _config_public(study_flow.load_study_config(db), getattr(db, "study_id", None) if isinstance(getattr(db, "study_id", None), str) else None)
 
 
 @router.put("/config", response_model=StudyConfigPublic)
@@ -147,6 +149,16 @@ def update_config(
     user: UserPublic = Depends(require_admin),
 ):
     db = request.app.state.db
+
+    profile_mode = study_flow.study_profile_mode(db)
+    if data.mode is not None and profile_mode and data.mode != profile_mode:
+        raise HTTPException(400, "Study 1 uses the base and one variant; Study 2 uses the base and all variants")
+    if data.survey_stages is not None:
+        unknown = set(data.survey_stages) - set(study_flow.survey_stage_settings())
+        if unknown:
+            raise HTTPException(400, "Unknown survey stages: " + ", ".join(sorted(unknown)))
+        if any(not settings.name.strip() for settings in data.survey_stages.values()):
+            raise HTTPException(400, "Survey names cannot be blank")
 
     if data.variant_order is not None:
         known = set(study_flow.all_variants())
@@ -204,5 +216,6 @@ def update_config(
         counterbalance=data.counterbalance,
         quiz_set_mode=data.quiz_set_mode,
         quiz_set_map=data.quiz_set_map,
+        survey_stages={key: value.model_dump() for key, value in data.survey_stages.items()} if data.survey_stages is not None else None,
     )
-    return _config_public(config)
+    return _config_public(config, getattr(db, "study_id", None) if isinstance(getattr(db, "study_id", None), str) else None)

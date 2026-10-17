@@ -4,6 +4,11 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class SurveyStageSettings(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    enabled: bool = True
+
+
 # One stop in the participant flow, as exposed to the client.
 class StepPublic(BaseModel):
     id: str                       # e.g. "quiz:base", "survey:post_links"
@@ -51,6 +56,8 @@ class StudyConfigPublic(BaseModel):
     requires_study1_completion: bool = True
     requires_study2_approval: bool = True
     study_access_mode: str = "sequential_approval"
+    study_id: Optional[str] = None
+    survey_stages: dict[str, SurveyStageSettings] = Field(default_factory=dict)
     # Every variant the code currently declares, so the admin UI can render the
     # full list even if the stored order is stale.
     known_variants: List[str] = Field(default_factory=list)
@@ -74,6 +81,7 @@ class StudyConfigPublic(BaseModel):
 
 # Admin payload for changing the flow. All fields optional - partial update.
 class StudyConfigUpdate(BaseModel):
+    survey_stages: Optional[dict[str, SurveyStageSettings]] = None
     questions_per_quiz: Optional[int] = Field(None, ge=1, le=100)
     wrong_ai_count: Optional[int] = Field(None, ge=0, le=100)
     wrong_ai_rate: Optional[float] = Field(None, ge=0, le=1)

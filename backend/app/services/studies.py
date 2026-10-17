@@ -193,7 +193,18 @@ def initialize_studies(raw):
             "version": 1, "quiz_set_map": {}, "wrong_ai_count": 3, "wrong_ai_rate": None,
             "requires_study1_completion": sid == "study-2",
         }}, upsert=True)
+        db["study_config"].update_one({"_id": "active_flow", "mode": {"$ne": PROFILES[sid]["mode"]}},
+            {"$set": {"mode": PROFILES[sid]["mode"]}, "$inc": {"version": 1}})
     initialize_survey_bank(raw)
+    # Repair old saved journeys on deployment as well as on authentication.
+    # Only affected Study 1 accounts are selected; Study 2 is never migrated.
+    from itertools import combinations
+    from .study_flow import all_variants
+    from .study_repair import repair_study1_flow
+    query = {"$or": [{"step_order": {"$all": [f"quiz:{a}", f"quiz:{b}"]}}
+                     for a, b in combinations(all_variants(), 2)]}
+    for user in raw["users"].find(query):
+        repair_study1_flow(StudyDatabase(raw, "study-1"), user)
 
 
 def initialize_survey_bank(raw):
@@ -284,7 +295,7 @@ def ensure_admin_preview(raw, user):
     from .study_flow import load_study_config, build_step_order, quiz_ids_in_order
     db = StudyDatabase(raw, "study-2")
     config = load_study_config(db)
-    order = build_step_order(config.variant_order if config.mode == "all_variants" else config.variant_order[:1])
+    order = build_step_order(config.variant_order if config.mode == "all_variants" else config.variant_order[:1], config.survey_stages)
     raw["study_enrollments"].update_one({"_id": user["_id"]}, {"$setOnInsert": {
         "user_id": str(user["_id"]), "study_id": "study-2", "approved": True,
         "admin_preview": True, "consent": True, "consent_agreed_at": datetime.now(timezone.utc),

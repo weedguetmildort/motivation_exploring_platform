@@ -141,10 +141,13 @@ def export_quiz_answers(
 @router.get("/survey-responses")
 def export_survey_responses(
     request: Request,
+    include_archived: bool = False,
     _: UserPublic = Depends(_require_admin),
 ):
     col = request.app.state.db["survey_responses"]
     docs = list(col.find({}, sort=[("completed_at", 1)]))
+    if include_archived:
+        docs += list(request.app.state.db["survey_response_archive"].find({}))
     rows = []
     for doc in docs:
         user_id = _fmt(doc.get("user_id"))
@@ -157,6 +160,8 @@ def export_survey_responses(
                 "user_id": user_id,
                 "user_email": user_email,
                 "stage": stage,
+                "survey_name": doc.get("survey_name", ""),
+                "archived": bool(doc.get("archived_at")),
                 "item_id": _fmt(answer.get("item_id")),
                 "response_value": _fmt(answer.get("value")),
                 "submitted_at": submitted_at,
@@ -278,12 +283,14 @@ def _research_bundle_bytes(db, include_tests=False, include_archived=False):
     conversations = {attempt.get("conversation_id") for attempt in selected_attempts}
     attempts = {str(attempt["_id"]) for attempt in selected_attempts}
     files = {"questions": questions, "variants": variants, "conversation_packets": packets}
-    for collection in ("research_events", "messages", "ai_requests", "quiz_attempts", "quiz_attempt_archive", "survey_responses", "copy_events", "link_clicks", "reports", "research_annotations"):
+    for collection in ("research_events", "messages", "ai_requests", "quiz_attempts", "quiz_attempt_archive", "survey_responses", "survey_response_archive", "study_flow_repairs", "copy_events", "link_clicks", "reports", "research_annotations"):
         records = []
         for doc in db[collection].find({}):
             if doc.get("user_id") not in participant_ids:
                 continue
             if collection in ("quiz_attempts", "quiz_attempt_archive") and str(doc["_id"]) not in attempts:
+                continue
+            if collection == "survey_response_archive" and not include_archived:
                 continue
             if doc.get("conversation_id") and doc["conversation_id"] not in conversations:
                 continue

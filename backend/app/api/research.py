@@ -112,7 +112,8 @@ def research_statistics(request: Request, _: UserPublic = Depends(require_resear
         rows = filter_rows(research_data(db, include_tests, include_archived, participant_ids=ids), quiz_id, status, version, question_set, variant_position)
         report = {"paired": paired_comparisons(rows), "surveys": survey_associations(rows,
             [{"participant_id": str(u["_id"]), "assigned_var": u.get("assigned_var")} for u in selected],
-            list(db["survey_responses"].find({"user_id": {"$in": list(ids)}})), list(db["survey_items"].find({})))}
+            list(db["survey_responses"].find({"user_id": {"$in": list(ids)}})) +
+            (list(db["survey_response_archive"].find({"user_id": {"$in": list(ids)}})) if include_archived else []), list(db["survey_items"].find({})))}
         for row in report["paired"]["comparisons"] + report["surveys"]["associations"]:
             row["study_id"] = sid
         reports.append(report)
