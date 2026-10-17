@@ -56,9 +56,6 @@ BASE_QUIZ_ID = "base"
 # The base quiz is always first - it is the no-variant baseline measurement.
 BASE_FIRST = True
 
-# Survey stage whose *questions* every post-variant survey reuses.
-SHARED_POST_QUESTION_STAGE = SurveyStage.post_base.value
-
 # Legacy response stage used by the old single-variant flow. Still recognised so
 # historical survey_responses docs remain readable, but never scheduled.
 LEGACY_POST_VARIANT_STAGE = SurveyStage.post_variant.value
@@ -73,7 +70,6 @@ class Step:
     key: str                      # quiz_id for quizzes, response stage for surveys
     label: str
     route: str                    # frontend path to send the user to
-    question_stage: Optional[str] = None  # surveys: stage the items are read from
     variant: Optional[str] = None         # set for variant quizzes / their surveys
 
 
@@ -91,7 +87,7 @@ def post_variant_stage(variant: str) -> str:
     Each variant needs its OWN response stage: survey_responses is uniquely
     indexed on (user_id, stage), so three interstitial surveys cannot all share
     "post_base" - the second would read back the first's completed document.
-    The questions still come from post_base via `question_stage`.
+    Applicable questions are composed independently by services.surveys.
     """
     return f"post_{variant}"
 
@@ -121,7 +117,6 @@ def _build_registry() -> dict[str, Step]:
         key=SurveyStage.pre_base.value,
         label="Pre-Quiz Survey",
         route=f"/survey?stage={SurveyStage.pre_base.value}",
-        question_stage=SurveyStage.pre_base.value,
     )
 
     steps[quiz_step_id(BASE_QUIZ_ID)] = Step(
@@ -138,7 +133,6 @@ def _build_registry() -> dict[str, Step]:
         key=SurveyStage.post_base.value,
         label="Post-Base Quiz Survey",
         route=f"/survey?stage={SurveyStage.post_base.value}",
-        question_stage=SurveyStage.post_base.value,
     )
 
     for variant in all_variants():
@@ -160,7 +154,6 @@ def _build_registry() -> dict[str, Step]:
             key=stage,
             label=f"Post-{label} Survey",
             route=f"/survey?stage={stage}",
-            question_stage=SHARED_POST_QUESTION_STAGE,
             variant=variant,
         )
 
@@ -171,7 +164,6 @@ def _build_registry() -> dict[str, Step]:
         key=LEGACY_POST_VARIANT_STAGE,
         label="Final Survey",
         route=f"/survey?stage={LEGACY_POST_VARIANT_STAGE}",
-        question_stage=SHARED_POST_QUESTION_STAGE,
     )
 
     return steps
@@ -182,12 +174,6 @@ STEP_REGISTRY: dict[str, Step] = _build_registry()
 
 def get_step(step_id: str) -> Optional[Step]:
     return STEP_REGISTRY.get(step_id)
-
-
-def survey_question_stage(stage: str) -> Optional[str]:
-    """Where a survey response stage sources its question definitions."""
-    step = STEP_REGISTRY.get(survey_step_id(stage))
-    return step.question_stage if step else None
 
 
 def is_known_survey_stage(stage: str) -> bool:

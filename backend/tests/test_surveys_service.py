@@ -14,7 +14,6 @@ from app.services.surveys import (
     get_users_collection,
     ensure_survey_indexes,
     _validate_stage,
-    _question_stage_for_stage,
     _item_to_public,
     _normalize_item_doc,
     create_survey_item,
@@ -91,23 +90,6 @@ class TestValidateStage:
         with pytest.raises(HTTPException) as exc:
             _validate_stage("not_a_stage")
         assert exc.value.status_code == 400
-
-
-class TestQuestionStageForStage:
-    def test_pre_base_maps_to_itself(self):
-        assert _question_stage_for_stage("pre_quiz") == "pre_quiz"
-
-    def test_post_base_maps_to_itself(self):
-        assert _question_stage_for_stage("post_base") == "post_base"
-
-    def test_every_per_variant_stage_sources_post_base_items(self):
-        # One editable question bank feeds every interstitial survey.
-        for variant in study_flow.all_variants():
-            stage = study_flow.post_variant_stage(variant)
-            assert _question_stage_for_stage(stage) == "post_base"
-
-    def test_legacy_post_variant_maps_to_post_base(self):
-        assert _question_stage_for_stage("post_variant") == "post_base"
 
 
 # ── _item_to_public / _normalize_item_doc ────────────────────────────────────

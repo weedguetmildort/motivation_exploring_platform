@@ -53,15 +53,6 @@ def _validate_stage(stage: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid survey stage: {stage}")
     return stage
 
-def _question_stage_for_stage(stage: str) -> str:
-    """Which stage's *questions* a response stage displays.
-
-    Every post-variant survey reuses the post_base question set, so admins keep
-    editing one list in the Surveys Panel rather than one per variant.
-    """
-    return study_flow.survey_question_stage(stage) or stage
-
-
 def _seeded_shuffle(items: List, seed_str: str) -> List:
     """Return a copy of ``items`` shuffled deterministically from ``seed_str``.
 

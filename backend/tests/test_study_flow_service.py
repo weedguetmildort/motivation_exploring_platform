@@ -101,11 +101,6 @@ class TestStepRegistry:
         assert len(set(stages)) == len(stages)
         assert "post_base" not in stages
 
-    def test_every_variant_survey_sources_post_base_questions(self):
-        for variant in sf.all_variants():
-            stage = sf.post_variant_stage(variant)
-            assert sf.survey_question_stage(stage) == SurveyStage.post_base.value
-
     def test_legacy_post_variant_stage_stays_readable(self):
         assert sf.is_known_survey_stage(SurveyStage.post_variant.value)
 
@@ -117,7 +112,6 @@ class TestStepRegistry:
     def test_unknown_ids_are_rejected(self):
         assert sf.get_step("quiz:nope") is None
         assert not sf.is_known_survey_stage("nope")
-        assert sf.survey_question_stage("nope") is None
 
     def test_variant_label_falls_back_for_an_unlabelled_variant(self):
         assert sf.variant_label("brand_new") == "Brand New"
