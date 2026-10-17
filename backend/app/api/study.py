@@ -18,6 +18,7 @@ from ..schemas.study import (
 from ..schemas.question import ALL_SET_IDS
 from ..schemas.user import UserPublic
 from ..services import study_flow
+from ..services.studies import access_policy
 from .auth import get_current_user
 
 router = APIRouter(prefix="/study", tags=["study"])
@@ -88,6 +89,7 @@ def get_flow(user: UserPublic = Depends(get_current_user)):
 # ----- admin: flow ordering -----
 
 def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
+    policy = access_policy()
     # Worked example of the orders participants will actually be handed, so the
     # admin can see the effect of a change before saving it.
     if config.counterbalance and config.mode == study_flow.MODE_ALL_VARIANTS:
@@ -115,7 +117,9 @@ def _config_public(config: study_flow.StudyConfig) -> StudyConfigPublic:
         questions_per_quiz=config.questions_per_quiz,
         wrong_ai_count=config.wrong_ai_count,
         wrong_ai_rate=config.wrong_ai_rate,
-        requires_study1_completion=config.requires_study1_completion,
+        requires_study1_completion=policy["requires_study1_completion"],
+        requires_study2_approval=policy["requires_approval"],
+        study_access_mode=policy["mode"],
         known_variants=study_flow.all_variants(),
         variant_labels={v: study_flow.variant_label(v) for v in study_flow.all_variants()},
         preview=preview,
@@ -194,7 +198,8 @@ def update_config(
         wrong_ai_count=data.wrong_ai_count,
         wrong_ai_rate=data.wrong_ai_rate,
         wrong_ai_rate_supplied="wrong_ai_rate" in data.model_fields_set,
-        requires_study1_completion=data.requires_study1_completion,
+        # Ignore the legacy access field from older clients. The deployment
+        # policy applies to both existing and future enrollments.
         variant_order=data.variant_order,
         counterbalance=data.counterbalance,
         quiz_set_mode=data.quiz_set_mode,

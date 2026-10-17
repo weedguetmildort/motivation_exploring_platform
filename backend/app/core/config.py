@@ -1,7 +1,19 @@
 import os
 from functools import lru_cache
 
+STUDY_ACCESS_MODES = {
+    "sequential_approval": (True, True),
+    "sequential": (True, False),
+    "independent_approval": (False, True),
+    "independent": (False, False),
+}
+
 class Settings:
+    def __init__(self):
+        self.STUDY_ACCESS_MODE = os.getenv("STUDY_ACCESS_MODE", "sequential_approval").strip().lower()
+        if self.STUDY_ACCESS_MODE not in STUDY_ACCESS_MODES:
+            raise ValueError("STUDY_ACCESS_MODE must be one of: " + ", ".join(STUDY_ACCESS_MODES))
+
     # Mongo
     MONGO_URL: str = os.getenv("MONGO_URL", "mongodb://localhost:27017")
     MONGO_DB: str = os.getenv("MONGO_DB", "mep_dev")

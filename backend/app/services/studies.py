@@ -13,6 +13,7 @@ from bson import ObjectId
 from fastapi import HTTPException
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
+from ..core.config import get_settings, STUDY_ACCESS_MODES
 
 STUDY_IDS = ("study-1", "study-2")
 GLOBAL_FIELDS = {"email", "password_hash", "first_name", "last_name", "is_admin", "is_test",
@@ -22,6 +23,13 @@ PROFILES = {
     "study-1": {"mode": "single_variant", "questions_per_quiz": 10, "quiz_set_mode": "preset"},
     "study-2": {"mode": "all_variants", "questions_per_quiz": 5, "quiz_set_mode": "balanced_random"},
 }
+
+
+def access_policy():
+    mode = get_settings().STUDY_ACCESS_MODE
+    requires_first, requires_approval = STUDY_ACCESS_MODES[mode]
+    return {"mode": mode, "requires_study1_completion": requires_first,
+            "requires_approval": requires_approval}
 
 
 class Cursor:
@@ -210,36 +218,65 @@ def check_access(raw, user, study_id):
     if study_id == "study-1" or user.get("is_admin"):
         return
     enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]})
-    if not enrollment or not enrollment.get("approved"):
+    policy = access_policy()
+    if policy["requires_approval"] and not (enrollment or {}).get("approved"):
         raise HTTPException(403, "Study 2 is available during your interview after administrator approval")
-    required = enrollment.get("requires_study1_completion", True)
-    if required and not study1_complete(raw, user):
+    if policy["requires_study1_completion"] and not study1_complete(raw, user):
         raise HTTPException(403, "Complete Study 1 before starting Study 2")
 
 
 def enrollment_status(raw, user, study_id):
     from .study_flow import ensure_user_flow, reconcile_saved_progress
     enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]}) or {}
+    policy = access_policy()
     approved = study_id == "study-1" or bool(enrollment.get("approved")) or bool(user.get("is_admin"))
-    doc = StudyDatabase(raw, study_id)["users"].find_one({"_id": user["_id"]}) if approved else None
+    # Progress remains visible even when approval is revoked; access is separate.
+    doc = StudyDatabase(raw, study_id)["users"].find_one({"_id": user["_id"]})
     if doc and study_id == "study-1":
         doc = reconcile_saved_progress(StudyDatabase(raw, study_id), ensure_user_flow(StudyDatabase(raw, study_id), doc))
     order = (doc or {}).get("step_order") or []
     completed = len(set((doc or {}).get("completed_steps") or []) & set(order))
     finished = bool(order) and completed == len(order)
-    eligible, reason = approved, None
-    if not approved:
+    eligible, reason = True, None
+    if study_id == "study-2" and policy["requires_approval"] and not approved:
+        eligible = False
         reason = "Available during your interview"
-    elif study_id == "study-2" and not user.get("is_admin") and enrollment.get("requires_study1_completion", True) and not study1_complete(raw, user):
+    elif study_id == "study-2" and not user.get("is_admin") and policy["requires_study1_completion"] and not study1_complete(raw, user):
         eligible, reason = False, "Complete Study 1 first"
     return {"study_id": study_id, "label": "Study 1" if study_id == "study-1" else "Study 2",
         "approved": approved, "available": eligible, "reason": reason,
-        "status": "completed" if finished else "in_progress" if (doc or {}).get("started_at") or completed else "approved" if approved else "not_approved",
+        "status": "completed" if finished else "in_progress" if (doc or {}).get("started_at") or completed else "approved" if approved else "ready" if eligible else "not_approved",
         "completed_steps": completed, "total_steps": len(order), "finished": finished,
         "consent_required": study_id == "study-2" and not user.get("is_admin") and (
             not (doc or {}).get("consent_agreed_at") or bool((doc or {}).get("consent_declined_at")) or (doc or {}).get("consent") is False),
         "approved_at": enrollment.get("approved_at") if study_id == "study-2" else None,
         "interview_at": enrollment.get("interview_at") if study_id == "study-2" else None}
+
+
+def ensure_study2_enrollment(raw, user, source="self_enrollment"):
+    """Freeze a protocol on first entry, without manufacturing admin approval."""
+    from .study_flow import assign_flow
+    enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]})
+    if (enrollment or {}).get("step_order"):
+        return
+    policy = access_policy()
+    flow = assign_flow(StudyDatabase(raw, "study-2"))
+    flow["study_protocol"] = {**flow["study_protocol"],
+        "requires_study1_completion": policy["requires_study1_completion"],
+        "study_access_mode": policy["mode"], "requires_study2_approval": policy["requires_approval"]}
+    now = datetime.now(timezone.utc)
+    try:
+        raw["study_enrollments"].update_one({"_id": user["_id"], "$or": [
+            {"step_order": {"$exists": False}}, {"step_order": None}, {"step_order": []},
+        ]}, {"$set": {**flow, "user_id": str(user["_id"]), "study_id": "study-2",
+            "access_mode_at_enrollment": policy["mode"], "enrollment_source": source,
+            "requires_study1_completion": policy["requires_study1_completion"],
+            "consent": (enrollment or {}).get("consent", False),
+            "completed_steps": (enrollment or {}).get("completed_steps", []),
+        }, "$setOnInsert": {"approved": False, "created_at": now}}, upsert=enrollment is None)
+    except DuplicateKeyError:
+        # Another request has already frozen this enrollment. Keep its snapshot.
+        pass
 
 
 def ensure_admin_preview(raw, user):
@@ -260,7 +297,6 @@ def ensure_admin_preview(raw, user):
 
 
 def approve_study2(raw, user_id, admin_id, approved, interview_at=None, notes=""):
-    from .study_flow import assign_flow, load_study_config
     if not ObjectId.is_valid(user_id):
         raise HTTPException(404, "Participant not found")
     user = raw["users"].find_one({"_id": ObjectId(user_id)})
@@ -268,21 +304,8 @@ def approve_study2(raw, user_id, admin_id, approved, interview_at=None, notes=""
         raise HTTPException(404, "Participant not found")
     now = datetime.now(timezone.utc)
     # First approval freezes the full protocol. A re-grant preserves progress.
-    enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]})
-    if approved and not (enrollment or {}).get("step_order"):
-        db = StudyDatabase(raw, "study-2")
-        config = load_study_config(db)
-        flow = assign_flow(db)
-        try:
-            raw["study_enrollments"].update_one({"_id": user["_id"], "step_order": {"$exists": False}}, {"$set": {
-                **flow, "user_id": user_id, "study_id": "study-2", "approved": False,
-                "consent": False, "completed_steps": [], "requires_study1_completion": config.requires_study1_completion,
-                "created_at": now,
-            }}, upsert=enrollment is None)
-        except DuplicateKeyError:
-            # Another administrator froze the same enrollment concurrently.
-            # Keep their snapshot instead of replacing it or failing the grant.
-            pass
+    if approved:
+        ensure_study2_enrollment(raw, user, source="admin_approval")
     # Atomically append the audit record with the access change.
     change = {"approved": approved, "admin_id": admin_id, "at": now, "notes": notes,
               "interview_at": interview_at}

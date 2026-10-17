@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from .auth import get_current_user
 from ..schemas.user import UserPublic
 from ..services.studies import (STUDY_IDS, StudyDatabase, raw_database, enrollment_status,
-                               check_access, approve_study2)
+                               check_access, approve_study2, access_policy)
 
 router = APIRouter(prefix="/studies", tags=["studies"])
 
@@ -20,7 +20,7 @@ def admin(user: UserPublic = Depends(get_current_user)):
 def catalog(request: Request, user: UserPublic = Depends(get_current_user)):
     raw = raw_database(request.app.state.db)
     doc = raw["users"].find_one({"_id": ObjectId(user.id)})
-    return {"studies": [enrollment_status(raw, doc, sid) for sid in STUDY_IDS]}
+    return {"studies": [enrollment_status(raw, doc, sid) for sid in STUDY_IDS], "access_policy": access_policy()}
 
 
 @router.post("/start")
@@ -77,7 +77,7 @@ def participants(request: Request, search: str = Query("", max_length=200),
             **enrollment_status(raw, user, "study-2"),
             "notes": enrollment.get("interviewer_notes", ""),
             "access_history": [{**h, "at": h["at"].isoformat()} for h in enrollment.get("access_history", [])]})
-    return {"participants": result, "page": page, "total": raw["users"].count_documents(query)}
+    return {"participants": result, "page": page, "total": raw["users"].count_documents(query), "access_policy": access_policy()}
 
 
 @router.patch("/participants/{user_id}/study-2-access")

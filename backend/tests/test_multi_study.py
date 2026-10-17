@@ -138,11 +138,91 @@ def test_existing_config_and_drawn_size_are_preserved(setup):
     assert doc["study_protocol"]["questions_per_quiz"] == 4
 
 
-def test_prerequisite_can_be_disabled_for_future_enrollments(setup):
+def test_environment_overrides_legacy_prerequisite_for_existing_enrollments(setup, monkeypatch):
+    from app.core.config import get_settings
     raw, db, student, admin, client = setup
-    save_study_config(StudyDatabase(raw, "study-2"), requires_study1_completion=False)
     approve_study2(raw, student.id, admin, True)
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 403
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent_approval")
     assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+
+
+@pytest.mark.parametrize("mode", ["sequential_approval", "sequential", "independent_approval", "independent"])
+@pytest.mark.parametrize("finished_first", [False, True])
+@pytest.mark.parametrize("approved", [False, True])
+def test_access_policy_matrix_catalog_and_direct_api_agree(setup, monkeypatch, mode, finished_first, approved):
+    from app.core.config import get_settings, STUDY_ACCESS_MODES
+    raw, db, student, admin, client = setup
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", mode)
+    if finished_first:
+        finish_first(raw, student)
+    if approved:
+        approve_study2(raw, student.id, admin, True)
+    first_required, approval_required = STUDY_ACCESS_MODES[mode]
+    allowed = (not first_required or finished_first) and (not approval_required or approved)
+    catalog = client.get("/studies/catalog", headers=headers()).json()
+    assert catalog["access_policy"] == {"mode": mode, "requires_study1_completion": first_required, "requires_approval": approval_required}
+    assert catalog["studies"][0]["available"] is True
+    assert catalog["studies"][1]["available"] is allowed
+    response = client.get("/studies/study-2/auth/me", headers=headers())
+    assert response.status_code == (200 if allowed else 403)
+    if allowed:
+        assert len(response.json()["user"]["step_order"]) == 9
+        enrollment = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+        assert bool(enrollment.get("approved")) is approved
+        # Approval-free access still requires fresh, study-specific consent.
+        assert client.get("/studies/study-2/surveys/pre_quiz/state", headers=headers()).status_code == 403
+        assert client.post("/studies/study-2/auth/consent", json={"consent_text": "Study 2 consent"}, headers=headers()).status_code == 200
+        assert client.get("/studies/study-2/study/next", headers=headers()).json()["next_step"]["id"] == "survey:pre_quiz"
+    assert raw.users.count_documents({"email": student.email}) == 1
+
+
+def test_open_enrollment_survives_mode_changes_without_granting_approval(setup, monkeypatch):
+    from app.core.config import get_settings
+    raw, db, student, admin, client = setup
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent")
+    assert client.get("/studies/catalog", headers=headers()).json()["studies"][1]["available"]
+    assert raw.study_enrollments.count_documents({}) == 0  # Browsing is not enrollment.
+    assert client.post("/studies/study-2/studies/start", headers=headers()).status_code == 200
+    original = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    raw.study_enrollments.update_one({"_id": original["_id"]}, {"$set": {"completed_steps": ["survey:pre_quiz"]}})
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent_approval")
+    assert client.get("/studies/study-2/auth/me", headers=headers()).status_code == 403
+    assert client.get("/studies/catalog", headers=headers()).json()["studies"][1]["completed_steps"] == 1
+    approve_study2(raw, student.id, admin, True)
+    assert client.get("/studies/study-2/auth/me", headers=headers()).status_code == 200
+    approve_study2(raw, student.id, admin, False)
+    assert client.get("/studies/study-2/auth/me", headers=headers()).status_code == 403
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent")
+    assert client.get("/studies/study-2/auth/me", headers=headers()).status_code == 200
+    final = raw.study_enrollments.find_one({"_id": original["_id"]})
+    assert final["study_protocol"] == original["study_protocol"]
+    assert final["completed_steps"] == ["survey:pre_quiz"]
+    assert final["approved"] is False
+    assert final["access_mode_at_enrollment"] == "independent"
+
+
+def test_deprecated_api_prerequisite_cannot_override_environment(setup, monkeypatch):
+    from app.core.config import get_settings
+    raw, db, student, admin, client = setup
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent")
+    result = client.put("/studies/study-2/study/config", headers=headers("admin@example.com"),
+                        json={"requires_study1_completion": True})
+    assert result.status_code == 200
+    assert result.json()["requires_study1_completion"] is False
+    assert result.json()["requires_study2_approval"] is False
+    assert result.json()["study_access_mode"] == "independent"
+
+
+def test_access_mode_validation_and_default(monkeypatch):
+    from app.core.config import Settings
+    monkeypatch.delenv("STUDY_ACCESS_MODE", raising=False)
+    assert Settings().STUDY_ACCESS_MODE == "sequential_approval"
+    monkeypatch.setenv("STUDY_ACCESS_MODE", " Independent ")
+    assert Settings().STUDY_ACCESS_MODE == "independent"
+    monkeypatch.setenv("STUDY_ACCESS_MODE", "invalid")
+    with pytest.raises(ValueError, match="STUDY_ACCESS_MODE must be one of"):
+        Settings()
 
 
 def test_survey_banks_and_saved_responses_stay_separate(setup):

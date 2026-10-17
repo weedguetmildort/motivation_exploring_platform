@@ -1,7 +1,7 @@
 """Resolve explicit /studies/{id}/... API routes without shared mutable state."""
 from starlette.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
-from ..services.studies import StudyDatabase, STUDY_IDS, check_access
+from ..services.studies import StudyDatabase, STUDY_IDS, check_access, ensure_study2_enrollment
 
 
 class StudyMiddleware:
@@ -32,6 +32,8 @@ class StudyMiddleware:
             if sid == "study-2" and user.get("is_admin"):
                 from ..services.studies import ensure_admin_preview
                 await run_in_threadpool(ensure_admin_preview, raw, user)
+            elif sid == "study-2":
+                await run_in_threadpool(ensure_study2_enrollment, raw, user)
             inner_path = "/" + (parts[3] if len(parts) > 3 else "")
             if sid == "study-2" and not user.get("is_admin") and inner_path.startswith(("/quiz/", "/surveys/", "/chat/", "/research/events")):
                 enrollment = await run_in_threadpool(raw["study_enrollments"].find_one, {"_id": user["_id"]})

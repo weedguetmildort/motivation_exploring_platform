@@ -49,6 +49,8 @@ class StudyConfigPublic(BaseModel):
     wrong_ai_count: int = 3
     wrong_ai_rate: Optional[float] = None
     requires_study1_completion: bool = True
+    requires_study2_approval: bool = True
+    study_access_mode: str = "sequential_approval"
     # Every variant the code currently declares, so the admin UI can render the
     # full list even if the stored order is stale.
     known_variants: List[str] = Field(default_factory=list)
@@ -75,7 +77,8 @@ class StudyConfigUpdate(BaseModel):
     questions_per_quiz: Optional[int] = Field(None, ge=1, le=100)
     wrong_ai_count: Optional[int] = Field(None, ge=0, le=100)
     wrong_ai_rate: Optional[float] = Field(None, ge=0, le=1)
-    requires_study1_completion: Optional[bool] = None
+    # Accepted from older clients, but access is controlled by STUDY_ACCESS_MODE.
+    requires_study1_completion: Optional[bool] = Field(None, deprecated=True)
     mode: Optional[Literal["all_variants", "single_variant"]] = None
     variant_order: Optional[List[str]] = None
     counterbalance: Optional[bool] = None
