@@ -1,5 +1,14 @@
 export type StudyId = "study-1" | "study-2";
 
+export type StudyAccessPolicy = {
+  mode: "sequential_approval" | "sequential" | "independent_approval" | "independent";
+  requires_study1_completion: boolean;
+  requires_approval: boolean;
+};
+export const DEFAULT_ACCESS_POLICY: StudyAccessPolicy = {
+  mode: "sequential_approval", requires_study1_completion: true, requires_approval: true,
+};
+
 export function rememberStudy(study: StudyId) {
   try { sessionStorage.setItem("mep.selectedStudy", study); } catch { /* Explicit URLs still work without storage. */ }
 }

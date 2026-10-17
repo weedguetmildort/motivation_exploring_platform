@@ -49,6 +49,8 @@ export type StudyConfig = {
   wrong_ai_count?: number;
   wrong_ai_rate?: number | null;
   requires_study1_completion?: boolean;
+  requires_study2_approval?: boolean;
+  study_access_mode?: string;
   known_variants: string[];
   variant_labels: Record<string, string>;
   preview: string[][];
@@ -67,7 +69,6 @@ export type StudyConfigUpdate = {
   questions_per_quiz?: number;
   wrong_ai_count?: number;
   wrong_ai_rate?: number | null;
-  requires_study1_completion?: boolean;
   mode?: "all_variants" | "single_variant";
   variant_order?: string[];
   counterbalance?: boolean;

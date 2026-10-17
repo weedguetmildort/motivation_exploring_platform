@@ -35,7 +35,6 @@ export default function StudyFlowPanel() {
   const [questionCount, setQuestionCount] = useState(5);
   const [wrongCount, setWrongCount] = useState(3);
   const [wrongRate, setWrongRate] = useState("");
-  const [requiresFirst, setRequiresFirst] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +44,6 @@ export default function StudyFlowPanel() {
     setConfig(c);
     setQuestionCount(c.questions_per_quiz ?? 5); setWrongCount(c.wrong_ai_count ?? 3);
     setWrongRate(c.wrong_ai_rate == null ? "" : String(c.wrong_ai_rate));
-    setRequiresFirst(c.requires_study1_completion ?? true);
     setOrder(c.variant_order);
     setMode(c.mode);
     setCounterbalance(c.counterbalance);
@@ -106,7 +104,6 @@ export default function StudyFlowPanel() {
       const c = await updateStudyConfig({
         questions_per_quiz: questionCount, wrong_ai_count: wrongCount,
         wrong_ai_rate: wrongRate === "" ? null : Number(wrongRate),
-        requires_study1_completion: requiresFirst,
         mode,
         variant_order: order,
         counterbalance,
@@ -142,7 +139,6 @@ export default function StudyFlowPanel() {
     (questionCount !== (config.questions_per_quiz ?? 5) ||
       wrongCount !== (config.wrong_ai_count ?? 3) ||
       wrongRate !== (config.wrong_ai_rate == null ? "" : String(config.wrong_ai_rate)) ||
-      requiresFirst !== (config.requires_study1_completion ?? true) ||
       mode !== config.mode ||
       counterbalance !== config.counterbalance ||
       order.join(",") !== config.variant_order.join(",") ||
@@ -338,12 +334,12 @@ export default function StudyFlowPanel() {
         </section>
 
         <section className="rounded-xl border bg-white p-4 space-y-3">
-          <h2 className="text-lg font-semibold">Quiz size and interview prerequisites</h2>
+          <h2 className="text-lg font-semibold">Quiz size and AI advice</h2>
           <p className="text-sm text-gray-600">These settings apply to future enrollments. Existing participants keep their saved protocol. A rate overrides the wrong-advice count; question pools smaller than the requested count produce fewer questions, recorded in the export.</p>
           <label className="block">Questions per quiz<input type="number" min={1} max={100} value={questionCount} onChange={e => setQuestionCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
           <label className="block">Questions assigned wrong AI advice<input type="number" min={0} max={100} value={wrongCount} onChange={e => setWrongCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
           <label className="block">Wrong AI advice rate (optional, 0–1)<input type="number" min={0} max={1} step={.05} value={wrongRate} onChange={e => setWrongRate(e.target.value)} className="ml-3 rounded border p-2" /></label>
-          {selectedStudy() === "study-2" && <label className="block"><input type="checkbox" checked={requiresFirst} onChange={e => setRequiresFirst(e.target.checked)} /> Require Study 1 completion before Study 2 starts</label>}
+          {selectedStudy() === "study-2" && <p className="text-sm text-gray-600">Study access is controlled by the backend STUDY_ACCESS_MODE setting ({config.study_access_mode ?? "sequential_approval"}). Study 1 completion: {config.requires_study1_completion ? "required" : "optional"}. Administrator approval: {config.requires_study2_approval !== false ? "required" : "optional"}.</p>}
         </section>
         {/* Question sets */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">

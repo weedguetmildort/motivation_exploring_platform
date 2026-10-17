@@ -20,3 +20,13 @@ test("admin can approve and revoke interview access without resetting progress",
   fireEvent.click(await screen.findByRole("button", { name: "Revoke access" }));
   expect(await screen.findByText(/Study 2 access revoked/)).toHaveTextContent("Saved progress is preserved");
 });
+
+test("approval-free mode explains that removing approval does not block access", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ participants: [{ id: "student", name: "Test Student", email: "student@example.com", approved: true,
+    available: true, status: "in_progress", completed_steps: 1, total_steps: 9, notes: "", access_history: [] }], total: 1,
+    access_policy: { mode: "independent", requires_approval: false, requires_study1_completion: false } });
+  render(<StudyInterviewAccess />);
+  expect(await screen.findByText(/removing approval does not block access/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove approval" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Revoke access" })).not.toBeInTheDocument();
+});

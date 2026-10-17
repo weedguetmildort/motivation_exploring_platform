@@ -86,3 +86,54 @@ test("a cancelled navigation does not replace the saved tab selection", async ()
   await waitFor(() => expect(push).toHaveBeenCalled());
   expect(sessionStorage.getItem("mep.selectedStudy")).toBeNull();
 });
+
+test.each(["independent", "independent_approval"])("%s shows the selector to participants, with accurate approval rules", async mode => {
+  const approval = mode === "independent_approval";
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, { ...second, available: !approval, reason: approval ? "Available during your interview" : null }],
+    access_policy: { mode, requires_study1_completion: false, requires_approval: approval } });
+  render(<DashboardStudyAccess user={user} />);
+  expect(await screen.findByRole("heading", { name: "Choose a study" })).toBeInTheDocument();
+  expect(screen.queryByText("Admin only")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Preview progress/)).not.toBeInTheDocument();
+  expect(screen.queryByText("Your interview is available")).not.toBeInTheDocument();
+  if (approval) {
+    expect(screen.getByRole("button", { name: "Locked" })).toBeDisabled();
+    expect(screen.getByText("Approval required")).toBeInTheDocument();
+    expect(screen.getByText("Available during your interview")).toBeInTheDocument();
+  } else {
+    fireEvent.click(screen.getByRole("button", { name: "Open Study 2" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/consent?study=study-2"));
+    expect(screen.queryByText("Approval required")).not.toBeInTheDocument();
+  }
+});
+
+test("independent mode supports returning to Study 1 from the participant's Study 2 dashboard", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, second], access_policy: {
+    mode: "independent", requires_study1_completion: false, requires_approval: false,
+  } });
+  render(<DashboardStudyAccess user={{ ...user, study_id: "study-2" }} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open Study 1" }));
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/dashboard?study=study-1"));
+});
+
+test("sequential mode provides a next-study action without interview or approval copy", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, second], access_policy: {
+    mode: "sequential", requires_study1_completion: true, requires_approval: false,
+  } });
+  render(<DashboardStudyAccess user={user} />);
+  expect(await screen.findByText("Study 2 is ready")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Choose a study" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/researcher asks/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Continue to Study 2" }));
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/consent?study=study-2"));
+});
+
+test("sequential mode hides Study 2 until the prerequisite is satisfied", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, { ...second, available: false }], access_policy: {
+    mode: "sequential", requires_study1_completion: true, requires_approval: false,
+  } });
+  render(<DashboardStudyAccess user={user} />);
+  await act(async () => {});
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.queryByText("Study 2 is ready")).not.toBeInTheDocument();
+});
