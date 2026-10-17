@@ -15,14 +15,11 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from ..core.config import get_settings, STUDY_ACCESS_MODES
 
-STUDY_IDS = ("study-1", "study-2")
+from ..core.study_profiles import PROFILES, STUDY_IDS
 GLOBAL_FIELDS = {"email", "password_hash", "first_name", "last_name", "is_admin", "is_test",
                  "demographics", "demographics_completed", "created_at", "last_active_at"}
 SHARED_COLLECTIONS = {"questions", "knowledge_links", "allowlist"}
-PROFILES = {
-    "study-1": {"mode": "single_variant", "questions_per_quiz": 10, "quiz_set_mode": "preset"},
-    "study-2": {"mode": "all_variants", "questions_per_quiz": 5, "quiz_set_mode": "balanced_random"},
-}
+
 
 
 def access_policy():

@@ -41,6 +41,7 @@ from bson.objectid import ObjectId
 from pymongo import ReturnDocument
 from pymongo.collection import Collection
 
+from ..core.study_profiles import profile_for
 from ..schemas.question import ALL_SET_IDS
 from ..schemas.user import AssignedVar, SurveyStage
 
@@ -277,8 +278,7 @@ def _survey_stage_tuple(stored=None):
 
 
 def study_profile_mode(db):
-    sid = getattr(db, "study_id", None)
-    return MODE_SINGLE_VARIANT if sid == "study-1" else MODE_ALL_VARIANTS if sid == "study-2" else None
+    return profile_for(db).get("mode")
 
 
 def _reconcile_variant_order(stored: Optional[Iterable[str]]) -> tuple[str, ...]:
@@ -345,7 +345,7 @@ def load_study_config(db) -> StudyConfig:
         mode = MODE_ALL_VARIANTS
     mode = study_profile_mode(db) or mode
 
-    quiz_set_mode = doc.get("quiz_set_mode", QUIZ_SET_MODE_BALANCED_RANDOM)
+    quiz_set_mode = doc.get("quiz_set_mode", profile_for(db).get("quiz_set_mode", QUIZ_SET_MODE_BALANCED_RANDOM))
     if quiz_set_mode not in QUIZ_SET_MODES:
         quiz_set_mode = QUIZ_SET_MODE_BALANCED_RANDOM
 
@@ -354,7 +354,7 @@ def load_study_config(db) -> StudyConfig:
         variant_order=_reconcile_variant_order(doc.get("variant_order")),
         counterbalance=bool(doc.get("counterbalance", True)),
         version=int(doc.get("version", 1)),
-        questions_per_quiz=int(doc.get("questions_per_quiz", 10 if getattr(db, "study_id", None) == "study-1" else 5)),
+        questions_per_quiz=int(doc.get("questions_per_quiz", profile_for(db).get("questions_per_quiz", 5))),
         wrong_ai_count=int(doc.get("wrong_ai_count", 3)),
         wrong_ai_rate=doc.get("wrong_ai_rate"),
         requires_study1_completion=bool(doc.get("requires_study1_completion", True)),
