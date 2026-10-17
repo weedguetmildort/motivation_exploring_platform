@@ -3,7 +3,13 @@ import { apiFetch } from "./fetcher";
 
 export type SurveyStage = string;
 
+export type SurveyOption = { id: string; label: string };
+export type SurveyScale = { min: number; max: number; anchors?: string[] | null };
+
 export type SurveyItem = {
+  scope?: import("./surveyConfig").QuestionScope | null;
+  stages?: string[];
+  active?: boolean;
   id: string;
   stage: string;
   category?: string | null;
@@ -17,9 +23,9 @@ export type SurveyItem = {
   scale_max?: number;
   scale_left_label?: string | null;
   scale_right_label?: string | null;
-  scale?: { min: number; max: number; anchors?: string[] | null } | null;
+  scale?: SurveyScale | null;
   // for select types:
-  options?: { id: string; label: string }[];
+  options?: SurveyOption[] | null;
 };
 
 export type SurveyAnswer = {

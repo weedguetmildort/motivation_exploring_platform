@@ -15,7 +15,7 @@ export function questionTarget(item: TargetedQuestion): string {
     item.scope === "stages" ? item.stages?.[0] ?? item.stage : item.stage === "post_base" ? "post_quiz" : item.stage;
 }
 
-export function targetFields(target: string, stages: string[] = []) {
+export function targetFields(target: string, stages: string[] = []): { stage: string; scope: QuestionScope; stages: string[] } {
   if (target === "all_surveys" || target === "post_quiz") return { stage: target === "all_surveys" ? "pre_quiz" : "post_base", scope: target, stages: [] };
   const targets = [...new Set([target, ...stages])];
   return { stage: target, scope: "stages", stages: targets };

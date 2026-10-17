@@ -246,6 +246,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            options: null,
             scale: {
               min: 1,
               max: 5,
@@ -306,6 +307,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            scale: null,
             options: [
               { id: "a", label: "Option A" },
               { id: "b", label: "Option B" },
@@ -581,6 +583,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            options: null,
             scale: { min: 0, max: 6, anchors: ["Low", "High"] },
           }),
         }),
@@ -732,6 +735,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            options: null,
             scale: { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] },
           }),
         }),
