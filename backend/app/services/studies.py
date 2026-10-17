@@ -289,17 +289,12 @@ def ensure_study2_enrollment(raw, user, source="self_enrollment"):
 
 def ensure_admin_preview(raw, user):
     """Admin previews do not consume participant counterbalancing slots."""
-    from .study_flow import load_study_config, build_step_order, quiz_ids_in_order
+    from .study_preview import admin_preview_fields
     db = StudyDatabase(raw, "study-2")
-    config = load_study_config(db)
-    order = build_step_order(config.variant_order if config.mode == "all_variants" else config.variant_order[:1], config.survey_stages)
     raw["study_enrollments"].update_one({"_id": user["_id"]}, {"$setOnInsert": {
         "user_id": str(user["_id"]), "study_id": "study-2", "approved": True,
         "admin_preview": True, "consent": True, "consent_agreed_at": datetime.now(timezone.utc),
-        "study_protocol": config.as_dict(), "study_flow_version": config.version,
-        "study_flow_mode": config.mode, "step_order": order, "completed_steps": [],
-        "variant_sequence": list(config.variant_order), "assigned_var": config.variant_order[0],
-        "quiz_set_assignment": dict(zip(quiz_ids_in_order(order), ("a", "b", "c", "d"))),
+        **admin_preview_fields(db, {"completed_steps": []}),
         "progress_reconciled_version": 1,
     }}, upsert=True)
 

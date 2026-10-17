@@ -667,21 +667,8 @@ def ensure_user_flow(db, doc: dict) -> dict:
     from .study_repair import repair_study1_flow
     doc = repair_study1_flow(db, doc)
     if doc.get("is_admin") and study_profile_mode(db):
-        config = load_study_config(db)
-        sequence = list(config.variant_order)
-        if config.mode == MODE_SINGLE_VARIANT:
-            sequence = [doc.get("assigned_var")] if doc.get("assigned_var") in all_variants() else sequence[:1]
-        order = build_step_order(sequence, config.survey_stages)
-        protocol = config.as_dict()
-        if doc.get("step_order") != order or doc.get("study_protocol") != protocol:
-            patch = {"step_order": order, "study_protocol": protocol, "study_flow_version": config.version,
-                "study_flow_mode": config.mode, "variant_sequence": sequence,
-                "assigned_var": sequence[0],
-                "completed_steps": [s for s in doc.get("completed_steps", []) if s in order],
-                "quiz_set_assignment": {**dict(zip(quiz_ids_in_order(order), ("a", "b", "c", "d"))), **(doc.get("quiz_set_assignment") or {})}}
-            patch.update(derive_legacy_flags({**doc, **patch}))
-            db["users"].update_one({"_id": doc["_id"]}, {"$set": patch})
-            doc = {**doc, **patch}
+        from .study_preview import refresh_admin_preview
+        doc = refresh_admin_preview(db, doc)
     if doc.get("step_order"):
         patch: dict = {}
 
