@@ -39,7 +39,7 @@ export default function StudyInterviewAccess() {
     finally { setBusy(""); }
   }
   return <section aria-label="Study 2 interview approval" className="rounded-xl border bg-white p-4 space-y-3">
-    <h2 className="text-lg font-semibold">Study 2 interview access</h2>
+    <h2 className="text-lg font-semibold">{requiresApproval ? "Study 2 interview access" : "Study 2 access"}</h2>
     <p className="text-sm text-gray-600">Study 1 is open to registered participants. {requiresApproval ? "Approve Study 2 when arranging or starting the interview." : "Study 2 approval is optional in the current mode; removing approval does not block access."} Study 1 completion is {data?.access_policy?.requires_study1_completion === false ? "optional" : "required"}. Approval preserves progress and never grants admin access. Access rules are controlled by STUDY_ACCESS_MODE.</p>
     <label className="block text-sm">Find participant for Study 2<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Name, email, or account ID" className="block mt-1 w-full rounded border p-2" /></label>
     <button type="button" onClick={() => setRefresh(value => value + 1)} className="rounded border px-3 py-2 text-sm">Refresh interview access</button>

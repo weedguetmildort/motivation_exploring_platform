@@ -22,14 +22,14 @@ export default function StudyShell({ children }: { children: ReactNode }) {
         const result = await apiFetch<{ studies: Enrollment[] }>("/api/studies/catalog");
         const enrollment = result.studies.find(s => s.study_id === study);
         if (!cancelled) setContext({ path: router.asPath, study, enrollment,
-          error: enrollment ? undefined : "Unable to check interview access. Please try again." });
+          error: enrollment ? undefined : "Unable to check study access. Please try again." });
       } catch (cause) {
         if (cancelled) return;
         if (cause instanceof ApiError && cause.status === 401) { router.replace("/login"); return; }
         // A temporary polling failure must not discard an active question or
         // unsent chat. Every backend operation still enforces current approval.
         setContext(previous => previous?.path === router.asPath && previous.enrollment?.available
-          ? previous : { path: router.asPath, study, error: "Unable to check interview access. Refresh to try again." });
+          ? previous : { path: router.asPath, study, error: "Unable to check study access. Refresh to try again." });
       }
     }
     void load();
@@ -56,7 +56,7 @@ export default function StudyShell({ children }: { children: ReactNode }) {
   if (!context || context.path !== router.asPath) return <p role="status" className="p-6">Loading your study…</p>;
   if (context.error) return <p role="alert" className="p-6 text-red-700">{context.error}</p>;
   if (context.enrollment && !context.enrollment.available) return <main className="p-6">
-    <h1 className="text-xl font-semibold">Interview access unavailable</h1>
+    <h1 className="text-xl font-semibold">Study access unavailable</h1>
     <p>{context.enrollment.reason}</p><p>Your saved progress is preserved.</p>
     <a className="mt-4 inline-block text-blue-700 underline" href={studyPageUrl("/dashboard", "study-1")}>Return to dashboard</a>
   </main>;

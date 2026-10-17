@@ -24,7 +24,7 @@ test("an unapproved interview URL never mounts the study page", async () => {
   window.history.replaceState({}, "", "/dashboard?study=study-2");
   (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, second] });
   render(<StudyShell><p>Protected quiz</p></StudyShell>);
-  expect(await screen.findByRole("heading", { name: "Interview access unavailable" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Study access unavailable" })).toBeInTheDocument();
   expect(screen.queryByText("Protected quiz")).not.toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Return to dashboard" })).toHaveAttribute("href", "/dashboard?study=study-1");
 });
@@ -65,7 +65,7 @@ test.each([{}, { studies: [] }])("missing catalog entries fail closed: %j", asyn
   window.history.replaceState({}, "", "/dashboard?study=study-2");
   (apiFetch as jest.Mock).mockResolvedValue(result);
   render(<StudyShell><p>Protected quiz</p></StudyShell>);
-  expect(await screen.findByRole("alert")).toHaveTextContent(/Unable to check interview access/);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/Unable to check study access/);
   expect(screen.queryByText("Protected quiz")).not.toBeInTheDocument();
 });
 
@@ -99,7 +99,7 @@ test("a transient access refresh preserves an active page, but revocation unmoun
     expect(mounted).toHaveBeenCalledTimes(1);
     expect(unmounted).not.toHaveBeenCalled();
     await act(async () => { jest.advanceTimersByTime(15000); });
-    expect(screen.getByRole("heading", { name: "Interview access unavailable" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Study access unavailable" })).toBeInTheDocument();
     expect(unmounted).toHaveBeenCalledTimes(1);
   } finally { jest.useRealTimers(); }
 });
