@@ -308,7 +308,6 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
     stage = _validate_stage(stage)
 
     col = get_survey_responses_collection(db)
-    items_col = get_survey_items_collection(db)
 
     doc = _load_or_create_response_doc(db, user_id, user_email, stage)
 
@@ -322,10 +321,21 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
         return build_survey_state(db, user_id, user_email, stage)
 
     doc, items = _snapshot_items(db, doc, stage, user_id)
-    valid_ids = {item.id for item in items}
+    saved_items = {item.id: item for item in items}
+    submitted_ids = set()
     for a in req.answers:
-        if a.item_id not in valid_ids:
+        if a.item_id not in saved_items:
             raise HTTPException(status_code=400, detail=f"Invalid survey item_id: {a.item_id}")
+        if a.item_id in submitted_ids:
+            raise HTTPException(400, f"Duplicate survey item_id: {a.item_id}")
+        submitted_ids.add(a.item_id)
+        item = saved_items[a.item_id]
+        if item.type == "likert":
+            if type(a.value) is not int or not item.scale.min <= a.value <= item.scale.max:
+                raise HTTPException(400, f"Answer must be an integer from {item.scale.min} to {item.scale.max}: {a.item_id}")
+        elif item.type == "single_select":
+            if not isinstance(a.value, str) or a.value not in {option.id for option in item.options or []}:
+                raise HTTPException(400, f"Answer must be one of the saved survey options: {a.item_id}")
 
     now = datetime.utcnow()
 
@@ -352,7 +362,7 @@ def submit_survey(db, user_id: str, user_email: str, stage: str, req: SurveySubm
 
     updated = col.find_one({"_id": doc["_id"]})
 
-    # Compute completion using the question stage's required items
+    # Compute completion using the same frozen definitions the participant saw.
     required_ids = {item.id for item in items if item.required}
     answered_ids = set(
         x.get("item_id") for x in updated.get("answers", []) if x.get("answered_at")

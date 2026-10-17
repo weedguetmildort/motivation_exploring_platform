@@ -33,10 +33,16 @@ def user_to_public(doc: dict) -> UserPublic:
     """The single doc -> UserPublic mapping. api/auth.build_user_public
     delegates here; keep new UserPublic fields in this one place.
     """
+    protocol = dict(doc.get("study_protocol") or {})
+    if not doc.get("is_admin") and "survey_stages" in protocol:
+        # Descriptive study names are admin metadata. Participant clients only
+        # need the schedule; keep the stored protocol intact for researchers.
+        protocol["survey_stages"] = {key: {"enabled": value.get("enabled", True)}
+                                     for key, value in protocol["survey_stages"].items()}
     return UserPublic(
         id=str(doc["_id"]),
         study_id=doc.get("study_id", "study-1"),
-        study_protocol=doc.get("study_protocol") or {},
+        study_protocol=protocol,
         email=doc["email"],
         first_name=doc.get("first_name"),
         last_name=doc.get("last_name"),

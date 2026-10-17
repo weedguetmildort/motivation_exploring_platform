@@ -56,6 +56,9 @@ def test_named_survey_toggles_are_frozen_per_new_enrollment(setup):
     admin = client.get("/auth/me", headers=headers("admin@example.com")).json()["user"]
     assert len(admin["step_order"]) == 2
     assert admin["study_protocol"]["survey_stages"]["post_base"]["name"] == "Named post_base"
+    public_protocol = client.get("/auth/me", headers=headers()).json()["user"]["study_protocol"]
+    assert all("name" not in stage for stage in public_protocol["survey_stages"].values())
+    assert all("name" in stage for stage in db["users"].find_one({"_id": ObjectId(student.id)})["study_protocol"]["survey_stages"].values())
     assert client.put("/study/config", headers=headers("admin@example.com"), json={"mode": "all_variants"}).status_code == 400
 
 
@@ -95,6 +98,53 @@ def test_repaired_legacy_final_response_keeps_answers_and_retry_route(setup):
     assert client.get("/surveys/post_followup/state", headers=headers()).status_code == 200
     assert db["survey_responses"].find_one({"_id": result.inserted_id})["stage"] == "post_variant"
     assert "survey:post_followup" in client.get("/auth/me", headers=headers()).json()["user"]["completed_steps"]
+
+
+@pytest.mark.parametrize("invalid", [None, True, "4", 2.5, 0, 6])
+def test_likert_values_validate_against_opened_snapshot_before_any_answers_save(setup, invalid):
+    _, db, student, _, _ = setup
+    first = item(db, "Scale", scope="all_surveys")
+    second = item(db, "Other scale", scope="all_surveys")
+    build_survey_state(db, student.id, student.email, "pre_quiz")
+    with pytest.raises(Exception) as error:
+        submit_survey(db, student.id, student.email, "pre_quiz", SurveySubmitRequest(answers=[
+            {"item_id": first.id, "value": 4}, {"item_id": second.id, "value": invalid}]))
+    assert error.value.status_code == 400
+    assert db["survey_responses"].find_one({"user_id": student.id})["answers"] == []
+    db["survey_items"].update_many({}, {"$set": {"scale.max": 3}})
+    saved = submit_survey(db, student.id, student.email, "pre_quiz", SurveySubmitRequest(answers=[
+        {"item_id": first.id, "value": 5}, {"item_id": second.id, "value": 5}]))
+    assert saved.attempt.status == "completed"
+
+
+def test_choice_values_validate_against_original_options_after_an_edit(setup):
+    _, db, student, _, _ = setup
+    choice = item(db, "Choose", scope="all_surveys", type="single_select", options=[
+        {"id": "old-a", "label": "A"}, {"id": "old-b", "label": "B"}])
+    build_survey_state(db, student.id, student.email, "pre_quiz")
+    db["survey_items"].update_one({"_id": ObjectId(choice.id)}, {"$set": {"options": [
+        {"id": "new-a", "label": "New A"}, {"id": "new-b", "label": "New B"}]}})
+    with pytest.raises(Exception) as error:
+        submit_survey(db, student.id, student.email, "pre_quiz", SurveySubmitRequest(answers=[{"item_id": choice.id, "value": "new-a"}]))
+    assert error.value.status_code == 400
+    saved = submit_survey(db, student.id, student.email, "pre_quiz", SurveySubmitRequest(answers=[{"item_id": choice.id, "value": "old-a"}]))
+    assert saved.attempt.status == "completed"
+
+
+@pytest.mark.parametrize("retained_complete", [False, True])
+def test_study2_prerequisite_uses_repaired_retained_steps(setup, retained_complete):
+    from app.services.studies import approve_study2
+    raw, db, student, admin, client = setup
+    approve_study2(raw, student.id, admin, True)
+    retained = flow.build_step_order(["double"])
+    raw.users.update_one({"_id": ObjectId(student.id)}, {"$set": {
+        "step_order": flow.build_step_order(["links", "double", "followup"]), "assigned_var": "double",
+        "completed_steps": retained if retained_complete else retained[:-1]}})
+    # Go directly to Study 2: its prerequisite check must perform the repair
+    # without first requiring a separate Study 1 login or dashboard visit.
+    response = client.get("/studies/study-2/auth/me", headers=headers())
+    assert response.status_code == (200 if retained_complete else 403)
+    assert db["users"].find_one({"_id": ObjectId(student.id)})["step_order"] == retained
 
 
 def test_startup_repairs_partial_flow_and_preserves_legacy_flags(setup):
