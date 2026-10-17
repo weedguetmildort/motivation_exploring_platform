@@ -21,6 +21,7 @@ jobs:
     needs: tests
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: production
     env:
       HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
       APP_BACKEND: ${{ secrets.HEROKU_APP_BACKEND }}

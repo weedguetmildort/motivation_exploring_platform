@@ -10,7 +10,7 @@ from typing import Optional
 from openai import OpenAI
 
 from .questions import get_questions_collection
-from ..core.llm import get_llm_model
+from ..core.llm import get_llm_model, log_served_model
 
 _VALID_LEVELS = ("easy", "medium", "hard")
 
@@ -40,6 +40,7 @@ def llm_judge_difficulty(
             max_tokens=5,
             temperature=0,
         )
+        log_served_model("question_difficulty", model, getattr(resp, "model", None))
         answer = (resp.choices[0].message.content or "").strip().lower()
         for level in _VALID_LEVELS:
             if answer.startswith(level):

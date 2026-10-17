@@ -24,6 +24,7 @@ from ..services.chat import (
     detect_stated_choice,
     detect_manipulation_leak,
 )
+from ..core.llm import get_llm_model, log_served_model
 from ..services.search import _build_search_context, _inject_citation_links
 # from ..services.search import _run_search, _filter_valid_urls  # external search disabled
 from ..services.followup import generate_followup_questions
@@ -76,14 +77,20 @@ def _sse(data: dict) -> str:
 
 async def _stream_ai(messages: list[dict], temperature: float = TEMPERATURE) -> AsyncGenerator[str, None]:
     """Streams text delta tokens from the AI. Raises on failure."""
+    model = get_llm_model()
     stream = await _client.chat.completions.create(
-        model=os.getenv("UF_OPENAI_API_MODEL"),
+        model=model,
         messages=messages,
         stream=True,
         temperature=temperature,
         **({"max_tokens": MAX_TOKENS} if MAX_TOKENS > 0 else {}),
     )
+    logged = False
     async for chunk in stream:
+        if not logged:
+            # Every chunk repeats the served model; the first one settles it.
+            log_served_model("chat.stream", model, getattr(chunk, "model", None))
+            logged = True
         delta = chunk.choices[0].delta.content or ""
         if delta:
             yield delta

@@ -31,6 +31,11 @@ services:
       - "8000:8000"
     env_file:
       - ./.env
+    volumes:
+      # Mount only app/ — mounting ./backend would shadow the image's installed
+      # dependencies with the host's .venv. Without this the container serves
+      # whatever was baked in at build time, so backend edits need --build.
+      - ./backend/app:/app/app
     # environment:
     #   - ENV=development
       # - UF_OPENAI_API_KEY=${UF_OPENAI_API_KEY}
@@ -39,6 +44,9 @@ services:
       # - MONGO_DB=mep_dev
     # depends_on:
     #   - mongo
+    # Overrides the image CMD for dev only: --reload restarts uvicorn on save,
+    # so Dockerfile.dev stays deployable as-is.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
 
 #   mongo:

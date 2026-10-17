@@ -61,6 +61,19 @@ def participant_at(step_id=None, **overrides):
     return UserPublic(**fields)
 
 
+# ── LLM served-model log ─────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _reset_served_model_log():
+    """app.core.llm dedupes its served-model logging process-wide, so without
+    this one test's log line suppresses the next test's. Clear it either side."""
+    from app.core.llm import reset_served_model_log
+
+    reset_served_model_log()
+    yield
+    reset_served_model_log()
+
+
 # ── MongoDB mock helpers ─────────────────────────────────────────────────────
 
 @pytest.fixture
