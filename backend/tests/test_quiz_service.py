@@ -331,7 +331,8 @@ class TestResetQuizAttempt:
 
         reset_quiz_attempt(mock_db, user_id, "base")
 
-        mock_col.delete_one.assert_called_once_with({"user_id": user_id, "quiz_id": "base"})
+        mock_col.delete_one.assert_called_once()
+        assert mock_col.delete_one.call_args[0][0]["_id"] == ObjectId(user_id)
         set_doc = mock_col.update_one.call_args[0][1]["$set"]
         assert "quiz:base" not in set_doc["completed_steps"]
         assert set_doc["quiz_base_completed"] is False
@@ -348,9 +349,8 @@ class TestResetQuizAttempt:
 
         reset_quiz_attempt(mock_db, user_id, "followup")
 
-        mock_col.delete_one.assert_called_once_with(
-            {"user_id": user_id, "quiz_id": "followup"}
-        )
+        mock_col.delete_one.assert_called_once()
+        assert mock_col.delete_one.call_args[0][0]["_id"] == ObjectId(user_id)
         set_doc = mock_col.update_one.call_args[0][1]["$set"]
         assert "quiz:followup" not in set_doc["completed_steps"]
         # No longer "all variant quizzes done".
@@ -364,9 +364,8 @@ class TestResetQuizAttempt:
 
         reset_quiz_attempt(mock_db, user_id, "unknown-quiz")
 
-        mock_col.delete_one.assert_called_once_with(
-            {"user_id": user_id, "quiz_id": "unknown-quiz"}
-        )
+        mock_col.delete_one.assert_called_once()
+        assert mock_col.delete_one.call_args[0][0]["_id"] == ObjectId(user_id)
         # The attempt is deleted, but the flow is left completely untouched.
         mock_col.update_one.assert_not_called()
 

@@ -2,19 +2,7 @@
 from copy import deepcopy
 from datetime import datetime
 from . import study_flow as flow
-
-
-def _archive(db, collection, query):
-    for result in db[collection].find(query):
-        # Copy before removal. If a concurrent answer changes this result,
-        # retry with its latest value rather than dropping the newer answer.
-        while result:
-            db["quiz_attempt_archive" if collection == "quiz_attempts" else "survey_response_archive"].replace_one(
-                {"_id": result["_id"]}, {**result, "archived_at": datetime.utcnow(),
-                 "archive_reason": "study1_flow_repair"}, upsert=True)
-            if db[collection].delete_one({k: v for k, v in result.items() if k != "study_id"}).deleted_count:
-                break
-            result = db[collection].find_one({"_id": result["_id"]})
+from .result_archive import archive_results
 
 
 def repair_study1_flow(db, doc):
@@ -39,8 +27,8 @@ def repair_study1_flow(db, doc):
     history.update_one({"_id": uid}, {"$setOnInsert": {"user_id": uid, "original": deepcopy({k: doc.get(k) for k in fields}),
         "retained_variant": assigned, "reason": "study1_flow_repair", "started_at": datetime.utcnow()}}, upsert=True)
     extra = [v for v in flow.all_variants() if v != assigned]
-    _archive(db, "quiz_attempts", {"user_id": uid, "quiz_id": {"$in": extra}})
-    _archive(db, "survey_responses", {"user_id": uid, "stage": {"$in": [flow.post_variant_stage(v) for v in extra]}})
+    archive_results(db, "quiz_attempts", {"user_id": uid, "quiz_id": {"$in": extra}}, "study1_flow_repair")
+    archive_results(db, "survey_responses", {"user_id": uid, "stage": {"$in": [flow.post_variant_stage(v) for v in extra]}}, "study1_flow_repair")
     # Preserve the historical survey schedule, not today's settings. The repair
     # only removes the mistakenly assigned variants.
     settings = (doc.get("study_protocol") or {}).get("survey_stages")

@@ -194,9 +194,8 @@ def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
     col = get_quiz_attempts_collection(db)
     existing = col.find_one({"user_id": user_id, "quiz_id": quiz_id})
     if existing:
-        archived = {**existing, "archived_at": datetime.utcnow(), "archive_reason": "admin_reset"}
-        db["quiz_attempt_archive"].replace_one({"_id": existing["_id"]}, archived, upsert=True)
-    col.delete_one({"user_id": user_id, "quiz_id": quiz_id})
+        from .result_archive import archive_result
+        archive_result(db, "quiz_attempts", existing, "admin_reset")
     study_flow.unmark_step_completed(db, user_id, study_flow.quiz_step_id(quiz_id))
     # A reset means "redo this quiz from scratch", so pick up any change the
     # admin has made to the question-set map since it was first drawn.
