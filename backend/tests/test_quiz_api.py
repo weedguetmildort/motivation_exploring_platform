@@ -381,41 +381,46 @@ class TestGetQuizResultsEndpoint:
 
 # ── POST /quiz/{quiz_id}/reset (admin only) ──────────────────────────────────
 
-class TestResetQuiz:
-    def test_admin_can_reset(self, quiz_client_oid, mock_col):
-        resp = quiz_client_oid.post("/quiz/base/reset")
+@pytest.fixture
+def reset_store(quiz_client_oid):
+    import mongomock
+    db = mongomock.MongoClient().db
+    quiz_client_oid.app.state.db = db
+    order = standard_step_order()
+    db.users.insert_one({"_id": ObjectId(quiz_client_oid.admin_id), "step_order": order,
+        "completed_steps": order, "quiz_set_assignment": {}})
+    return db
 
-        assert resp.status_code == 200
-        assert resp.json() == {"ok": True}
-        mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "base"})
+
+class TestResetQuiz:
+    def test_admin_can_reset(self, quiz_client_oid, reset_store):
+        db = reset_store
+        attempt = {"user_id": quiz_client_oid.admin_id, "quiz_id": "base", "conversation_id": "chat", "answers": [{"choice_id": "a"}]}
+        oid = db.quiz_attempts.insert_one(attempt).inserted_id
+        resp = quiz_client_oid.post("/quiz/base/reset")
+        assert resp.status_code == 200 and resp.json() == {"ok": True}
+        assert db.quiz_attempts.count_documents({}) == 0
+        saved = db.quiz_attempt_archive.find_one({"_id": oid})
+        assert saved["answers"] == [{"choice_id": "a"}] and saved["conversation_id"] == "chat"
+        assert saved["archive_reason"] == "admin_reset"
 
     def test_non_admin_forbidden(self, regular_quiz_client, mock_col):
-        resp = regular_quiz_client.post("/quiz/base/reset")
-        assert resp.status_code == 403
+        assert regular_quiz_client.post("/quiz/base/reset").status_code == 403
         mock_col.delete_one.assert_not_called()
 
-    def test_reset_variant_quiz_updates_user_flags(self, quiz_client_oid, mock_col):
-        # The participant must actually have completed the step for a reset to
-        # revert anything — resetting a step that was never done is a no-op.
-        order = standard_step_order()
-        mock_col.find_one.return_value = {
-            "_id": ObjectId(quiz_client_oid.admin_id),
-            "step_order": order,
-            "completed_steps": list(order),
-            "quiz_set_assignment": {},
-        }
+    def test_reset_variant_quiz_updates_user_flags(self, quiz_client_oid, reset_store):
+        db = reset_store
+        db.quiz_attempts.insert_one({"user_id": quiz_client_oid.admin_id, "quiz_id": "followup"})
+        assert quiz_client_oid.post("/quiz/followup/reset").status_code == 200
+        saved = db.users.find_one({"_id": ObjectId(quiz_client_oid.admin_id)})
+        assert "quiz:followup" not in saved["completed_steps"]
+        assert saved["quiz_variant_completed"] is False
+        assert db.quiz_attempt_archive.count_documents({"quiz_id": "followup"}) == 1
 
-        resp = quiz_client_oid.post("/quiz/followup/reset")
-
-        assert resp.status_code == 200
-        mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "followup"})
-        set_doc = mock_col.update_one.call_args[0][1]["$set"]
-        assert "quiz:followup" not in set_doc["completed_steps"]
-        assert set_doc["quiz_variant_completed"] is False
-
-    def test_reset_unknown_quiz_id_only_deletes(self, quiz_client_oid, mock_col):
-        resp = quiz_client_oid.post("/quiz/some-unknown-id/reset")
-
-        assert resp.status_code == 200
-        mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "some-unknown-id"})
-        mock_col.update_one.assert_not_called()
+    def test_reset_unknown_quiz_id_only_deletes(self, quiz_client_oid, reset_store):
+        db = reset_store
+        before = db.users.find_one({})
+        db.quiz_attempts.insert_one({"user_id": quiz_client_oid.admin_id, "quiz_id": "some-unknown-id"})
+        assert quiz_client_oid.post("/quiz/some-unknown-id/reset").status_code == 200
+        assert db.quiz_attempts.count_documents({}) == 0
+        assert db.users.find_one({}) == before
