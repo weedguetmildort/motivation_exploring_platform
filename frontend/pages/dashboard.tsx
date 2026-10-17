@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
-import { getStudyFlow, type StudyFlowResponse } from "../lib/study";
+import { buildStudySteps } from "../lib/studySteps";
+import { isFollowupEligible } from "../lib/quiz2";
+import ProgressBar from "../components/ProgressBar";
+import PageHeader from "../components/PageHeader";
+import DashboardStudyAccess from "../components/DashboardStudyAccess";
+import { studyPageUrl } from "../lib/studySelection";
 
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [flow, setFlow] = useState<StudyFlowResponse | null>(null);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -14,21 +18,13 @@ export default function DashboardPage() {
     (async () => {
       try {
         const res = await getMe();
-        const u = res.user
-
+        const u = res.user;
+        if (u.study_id === "study-2" && (!u.consent_agreed_at || u.consent_declined_at || u.consent === false)) { router.replace("/consent"); return; }
         if (!cancelled && !u.demographics_completed) {
           router.replace("/demographics");
           return;
         }
-
         if (!cancelled) setUser(u);
-
-        try {
-          const f = await getStudyFlow();
-          if (!cancelled) setFlow(f);
-        } catch {
-          // Flow display is non-essential; the page still works without it.
-        }
       } catch {
         if (!cancelled) router.replace("/login");
       } finally {
@@ -36,7 +32,7 @@ export default function DashboardPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [router]);
+  }, []);
 
   if (checking) {
     return (
@@ -52,153 +48,190 @@ export default function DashboardPage() {
     try { await logout(); } finally { router.replace("/login"); }
   }
 
+  const steps = buildStudySteps(user);
+  const nextStep = steps.find((s) => !s.completed && s.path);
+  const allComplete = steps.every((s) => s.completed);
+  const actionVerb = steps.some(step => step.completed) ? "Continue" : "Start";
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="site-header">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">Dashboard</h1>
-            <p className="page-subtitle">Welcome to the dashboard, {user.email}</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/profile")}
-              className="btn-primary"
-            >
-              Profile
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Dashboard"
+        subtitle="Study progress overview."
+        onProfile={() => router.push("/profile")}
+        onLogout={onLogout}
+      />
 
-      <div className="page-container">
-        {/* Participant's own progress through the study. Replaces the fixed
-            "Quiz" tile — the flow is now base plus every variant, in an order
-            assigned per participant. */}
-        {flow && flow.total_steps > 0 && (
-          <section className="mb-6 rounded-2xl border bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg 2xl:text-xl font-semibold">
-                  {flow.finished ? "Study complete" : "Your progress"}
-                </h2>
-                <p className="text-sm text-gray-600">
-                  {flow.finished
-                    ? "You’ve finished every step. Thank you for participating."
-                    : `Step ${flow.completed_count + 1} of ${flow.total_steps}`}
-                </p>
+      <div className="page-container flex flex-col gap-4">
+        <DashboardStudyAccess user={user} />
+        <ProgressBar user={user} horizontal />
+
+        {/* ── Next Step Hero Card ── */}
+        {allComplete ? (
+          <div className="w-full rounded-2xl border-2 border-blue-200 bg-blue-50 p-6 text-center shadow-sm">
+            <p className="text-xl font-semibold text-blue-800">Study Complete — thank you for participating!</p>
+          </div>
+        ) : nextStep ? (
+          <div className="w-full rounded-2xl border-2 border-blue-500 bg-white shadow-md overflow-hidden">
+            <div className="bg-blue-600 px-6 py-4">
+              <p className="text-xs font-semibold uppercase tracking-widest text-blue-200 mb-1">Next Step</p>
+              <h2 className="text-2xl font-bold text-white">{nextStep.label}</h2>
+              <p className="mt-1 text-sm text-blue-100">{nextStep.subtitle}</p>
+            </div>
+            <div className="px-6 py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Estimated time: <span className="font-medium text-gray-700">{nextStep.time}</span>
               </div>
-
-              {!flow.finished && (
-                <button
-                  onClick={() => {
-                    const current = flow.steps.find(
-                      (s) => s.id === flow.current_step_id,
-                    );
-                    router.push(current?.route ?? "/survey");
-                  }}
-                  className="btn-primary"
-                >
-                  Continue
-                </button>
-              )}
+              <button
+                onClick={() => router.push(nextStep.path)}
+                className="w-full sm:w-auto rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white shadow hover:bg-blue-700 active:scale-[0.98] transition-all"
+              >
+                {actionVerb} the {nextStep.label}
+              </button>
             </div>
+          </div>
+        ) : null}
 
-            <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className="h-full rounded-full bg-blue-600 transition-all"
-                style={{
-                  width: `${Math.round(
-                    (flow.completed_count / flow.total_steps) * 100,
-                  )}%`,
-                }}
-              />
+        {/* ── Follow-Up Study (admin-granted + main study complete) ── */}
+        {isFollowupEligible(user) && (
+          <div className="flex w-full flex-col gap-4 rounded-2xl border-2 border-blue-300 bg-blue-50 p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-blue-500">Available to you</p>
+              <h2 className="text-xl font-bold text-blue-900">Follow-up study</h2>
+              <p className="mt-1 text-sm text-blue-700">You&apos;ve been invited to take part in a follow-up study.</p>
             </div>
-
-            <ol className="mt-4 space-y-1">
-              {flow.steps.map((s) => {
-                const isCurrent = s.id === flow.current_step_id;
-                return (
-                  <li
-                    key={s.id}
-                    className={[
-                      "flex items-center gap-2 rounded-md px-2 py-1 text-sm",
-                      isCurrent ? "bg-blue-50 font-medium text-blue-800" : "",
-                      s.completed ? "text-gray-500" : "text-gray-700",
-                    ].join(" ")}
-                  >
-                    <span aria-hidden="true">
-                      {s.completed ? "✓" : isCurrent ? "→" : "•"}
-                    </span>
-                    <span className={s.completed ? "line-through" : ""}>
-                      {s.label}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-          </section>
+            <button
+              onClick={() => router.push("/followup_study")}
+              className="w-full rounded-xl bg-blue-600 px-8 py-3 text-base font-semibold text-white shadow transition-all hover:bg-blue-700 active:scale-[0.98] sm:w-auto"
+            >
+              Start
+            </button>
+          </div>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          {user?.is_admin && (
-            <a
-              href="/chat"
-              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-            >
-              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Chat</h2>
-              <p className="text-sm text-gray-600">
-                Ask questions and interact with AI chatbot
-              </p>
-            </a>
-          )}
-          
-          {user?.is_admin && (
-            <a
-              href="/playground"
-              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-            >
-              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Playground</h2>
-              <p className="text-sm text-gray-600">Sandbox to see how the different quiz styles look</p>
-            </a>
-          )}
+        {/* ── My Reports link ── */}
+        <div className="flex justify-end">
+          <a
+            href={studyPageUrl("/my_reports")}
+            className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            My issue reports →
+          </a>
+        </div>
 
-          {user?.is_admin && (
-            <a
-              href="/admin"
-              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
-            >
-              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Admin Panel</h2>
-              <p className="text-sm text-gray-600">Manage questions and content</p>
-            </a>
-          )}
-          {/* Participants reach their quizzes through the progress card above,
-              which follows their assigned order. Admins keep direct links so
-              they can open any variant out of sequence for testing. */}
-          {user?.is_admin &&
-            flow?.steps
-              .filter((s) => s.kind === "quiz")
-              .map((s) => (
-                <a
-                  key={s.id}
-                  href={s.route}
-                  className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+        {/* ── Admin Section ── */}
+        {user.is_admin && (
+          <>
+            <div className="relative mt-2">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-300" />
+              </div>
+              <div className="relative flex justify-start">
+                <span className="bg-gray-50 pr-3 text-xs font-semibold uppercase tracking-widest text-gray-400">Admin</span>
+              </div>
+            </div>
+
+            {/* Tools */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              {([
+                {
+                  href: "/chat",
+                  label: "Chat",
+                  desc: "Ask questions and interact with AI",
+                  icon: <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />,
+                },
+                {
+                  href: "/playground",
+                  label: "Playground",
+                  desc: "Preview and compare quiz styles",
+                  icon: <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />,
+                },
+                {
+                  href: "/admin",
+                  label: "Admin Panel",
+                  desc: "Manage questions and content",
+                  icon: <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />,
+                },
+              ] as const).map((tool) => (
+                <a key={tool.href} href={studyPageUrl(tool.href)}
+                  className="group flex items-center gap-5 rounded-2xl border bg-white p-5 shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
                 >
-                  <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">
-                    {s.label}
-                  </h2>
-                  <p className="text-sm text-gray-600">
-                    {s.completed ? "Completed — reopen" : "Begin the Quiz"}
-                  </p>
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors">
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>{tool.icon}</svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900 leading-tight">{tool.label}</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">{tool.desc}</p>
+                  </div>
                 </a>
               ))}
-        </div>
+            </div>
+
+            {/* Study flow separator */}
+            <div className="relative mt-1">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-start">
+                <span className="bg-gray-50 pr-3 text-xs font-medium uppercase tracking-widest text-gray-400">Study Flow</span>
+              </div>
+            </div>
+
+            {/* Quizzes */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {([
+                { href: "/quiz/base",     label: "Base Quiz",           theme: "base" },
+                { href: "/quiz/followup", label: "Follow-Up Questions", theme: "followup" },
+                { href: "/quiz/double",   label: "Dual Agent",          theme: "double" },
+                { href: "/quiz/links",    label: "Embedded Links",      theme: "links" },
+              ] as const).filter(q => !user.step_order?.length || user.step_order.includes(`quiz:${q.href.split("/").pop()}`)).map((q) => (
+                <a key={q.href} href={studyPageUrl(q.href)} data-quiz-theme={q.theme}
+                  className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-accent-400 hover:shadow-md transition-all"
+                >
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent-50 text-accent-600 group-hover:bg-accent-100 transition-colors">
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900 leading-tight">{q.label}</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">Quiz · 10 min</p>
+                  </div>
+                </a>
+              ))}
+            </div>
+
+            {/* Surveys */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              {(user.step_order?.length ? steps.filter(step => step.kind === "survey").map(step => {
+                const key = new URLSearchParams(step.path.split("?")[1]).get("stage") ?? "";
+                const names = (user.study_protocol?.survey_stages ?? {}) as Record<string, { name?: string }>;
+                return { href: step.path, label: names[key]?.name ?? step.label, desc: step.subtitle };
+              }) : [
+                { href: "/survey?stage=pre_quiz",     label: "Pre-Quiz Survey", desc: "Before the base quiz · 5 min" },
+                { href: "/survey?stage=post_base",    label: "Mid Survey",      desc: "After the base quiz · 5 min" },
+                { href: "/survey?stage=post_variant", label: "Final Survey",    desc: "After the variant quiz · 5 min" },
+              ]).map((s) => (
+                <a key={s.href} href={studyPageUrl(s.href)}
+                  className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
+                >
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-500 group-hover:bg-blue-100 transition-colors">
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900 leading-tight">{s.label}</h2>
+                    <p className="text-sm text-gray-500 mt-0.5">{s.desc}</p>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

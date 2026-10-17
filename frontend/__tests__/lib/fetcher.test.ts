@@ -1,0 +1,125 @@
+import { apiFetch, ApiError } from "../../lib/fetcher";
+
+describe("apiFetch", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState({}, "", "/dashboard");
+    global.fetch = jest.fn();
+  });
+
+  it("records the actual study-scoped URL on a 400 response", async () => {
+    window.history.replaceState({}, "", "/survey?study=study-2");
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 400, text: async () => JSON.stringify({ detail: "Invalid survey item_id" }) });
+    await expect(apiFetch("/api/surveys/pre_quiz/submit")).rejects.toMatchObject({
+      status: 400, url: "/api/studies/study-2/surveys/pre_quiz/submit", message: "Invalid survey item_id",
+    });
+  });
+
+  it("sends credentials and JSON content-type by default", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify({ hello: "world" }),
+    });
+
+    const result = await apiFetch("/api/thing");
+
+    expect(result).toEqual({ hello: "world" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/thing",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      })
+    );
+  });
+
+  it("merges custom headers with defaults", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "{}",
+    });
+
+    await apiFetch("/api/thing", { headers: { "X-Custom": "abc" } });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/thing",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Custom": "abc",
+        }),
+      })
+    );
+  });
+
+  it("returns null when response body is empty", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 204,
+      statusText: "No Content",
+      text: async () => "",
+    });
+
+    const result = await apiFetch("/api/thing");
+    expect(result).toBeNull();
+  });
+
+  it("returns null when response body is not valid JSON", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => "not json",
+    });
+
+    const result = await apiFetch("/api/thing");
+    expect(result).toBeNull();
+  });
+
+  it("throws an error using the 'detail' field on non-ok responses", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      text: async () => JSON.stringify({ detail: "Invalid input" }),
+    });
+
+    await expect(apiFetch("/api/thing")).rejects.toThrow("Invalid input");
+  });
+
+  it("throws an error using the 'message' field on non-ok responses", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Server Error",
+      text: async () => JSON.stringify({ message: "Boom" }),
+    });
+
+    await expect(apiFetch("/api/thing")).rejects.toThrow("Boom");
+  });
+
+  it("falls back to status text when no JSON error fields are present", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+      text: async () => "",
+    });
+
+    await expect(apiFetch("/api/thing")).rejects.toThrow("503 Service Unavailable");
+  });
+
+  it.each([401, 404])("preserves HTTP %s and the request path for flow diagnostics", async (status) => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false, status, statusText: "Error",
+      text: async () => JSON.stringify({ detail: "Request failed" }),
+    });
+    const error = await apiFetch("/api/study/next").catch(e => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status, url: "/api/study/next", message: "Request failed" });
+  });
+});

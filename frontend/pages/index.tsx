@@ -1,13 +1,28 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/router";
+import { getMe } from "../lib/auth";
 import Disclaimer from "../components/Disclaimer";
 
 export default function Landing() {
+  const router = useRouter();
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMe()
+      .then(() => { if (!cancelled) router.replace("/dashboard"); })
+      .catch(() => { if (!cancelled) setChecking(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (checking) return null;
+
   return (
     <div className="grid min-h-screen place-items-center bg-gray-50 p-6">
       <div className="max-w-md rounded-2xl border bg-white p-6 shadow-sm">
 
         <h1 className="mb-2 text-xl font-semibold">
-          Motivation Exploring Platform
+          AI Problem-Solving Research Study
         </h1>
 
         <p className="mb-4 text-sm text-gray-600">
@@ -33,7 +48,7 @@ export default function Landing() {
             groupName="Emerging Technologies in Education Group"
             institution="University of Florida"
             contactEmail="weedguet.mildort@ufl.edu"
-            supervisor="Dr. Neha Rani IRB Protocol #"
+            supervisor="Dr. Neha Rani IRB Protocol #ET00053311"
         />
 
       </div>

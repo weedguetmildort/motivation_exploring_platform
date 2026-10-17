@@ -1,3 +1,7 @@
+import SurveyTimeline from "../components/SurveyTimeline";
+import { DEFAULT_SURVEY_STAGES } from "../lib/surveyConfig";
+import type { SurveyStages } from "../lib/study";
+import { selectedStudy } from "../lib/studySelection";
 // frontend/pages/study_flow_panel.tsx
 //
 // Admin control over the participant flow ordering. What a step *is* stays in
@@ -9,11 +13,12 @@
 // reorder cannot scramble a participant's run.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, logout } from "../lib/auth";
+import { getMe, logout, invalidateMeCache } from "../lib/auth";
 import {
   getStudyConfig,
   updateStudyConfig,
   type StudyConfig,
+  type QuizSetMode,
 } from "../lib/study";
 
 export default function StudyFlowPanel() {
@@ -26,6 +31,14 @@ export default function StudyFlowPanel() {
     "all_variants",
   );
   const [counterbalance, setCounterbalance] = useState(true);
+  const [quizSetMode, setQuizSetMode] = useState<QuizSetMode>("balanced_random");
+  // quiz_id -> set letter. "" means unmapped (draws from the whole pool).
+  const [quizSetMap, setQuizSetMap] = useState<Record<string, string>>({});
+
+  const [surveys, setSurveys] = useState<SurveyStages>(DEFAULT_SURVEY_STAGES);
+  const [questionCount, setQuestionCount] = useState(5);
+  const [wrongCount, setWrongCount] = useState(3);
+  const [wrongRate, setWrongRate] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,9 +46,23 @@ export default function StudyFlowPanel() {
 
   function applyConfig(c: StudyConfig) {
     setConfig(c);
+    setSurveys(c.survey_stages ?? DEFAULT_SURVEY_STAGES);
+    setQuestionCount(c.questions_per_quiz ?? 5); setWrongCount(c.wrong_ai_count ?? 3);
+    setWrongRate(c.wrong_ai_rate == null ? "" : String(c.wrong_ai_rate));
     setOrder(c.variant_order);
     setMode(c.mode);
     setCounterbalance(c.counterbalance);
+    setQuizSetMode(c.quiz_set_mode);
+    setQuizSetMap(c.quiz_set_map);
+  }
+
+  function setQuizSet(quizId: string, setId: string) {
+    setQuizSetMap((prev) => {
+      const next = { ...prev };
+      if (setId) next[quizId] = setId;
+      else delete next[quizId];
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -80,11 +107,17 @@ export default function StudyFlowPanel() {
     setError(null);
     try {
       const c = await updateStudyConfig({
+        survey_stages: surveys,
+        questions_per_quiz: questionCount, wrong_ai_count: wrongCount,
+        wrong_ai_rate: wrongRate === "" ? null : Number(wrongRate),
         mode,
         variant_order: order,
         counterbalance,
+        quiz_set_mode: quizSetMode,
+        ...(quizSetMode === "preset" ? { quiz_set_map: quizSetMap } : {}),
       });
       applyConfig(c);
+      invalidateMeCache();
       setSavedAt(new Date().toLocaleTimeString());
     } catch (e) {
       console.error(e);
@@ -102,21 +135,43 @@ export default function StudyFlowPanel() {
     }
   }
 
+  const serializeMap = (m: Record<string, string>) =>
+    Object.entries(m)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([q, s]) => `${q}:${s}`)
+      .join(",");
+
   const dirty =
     !!config &&
-    (mode !== config.mode ||
+    (JSON.stringify(surveys) !== JSON.stringify(config.survey_stages ?? DEFAULT_SURVEY_STAGES) ||
+      questionCount !== (config.questions_per_quiz ?? 5) ||
+      wrongCount !== (config.wrong_ai_count ?? 3) ||
+      wrongRate !== (config.wrong_ai_rate == null ? "" : String(config.wrong_ai_rate)) ||
+      mode !== config.mode ||
       counterbalance !== config.counterbalance ||
-      order.join(",") !== config.variant_order.join(","));
+      order.join(",") !== config.variant_order.join(",") ||
+      quizSetMode !== config.quiz_set_mode ||
+      serializeMap(quizSetMap) !== serializeMap(config.quiz_set_map));
+
+  // Two quizzes sharing a set is exactly the repetition per-quiz sets exist to
+  // prevent, so surface it before the server refuses the save.
+  const duplicateSets = (() => {
+    const used = Object.values(quizSetMap);
+    return [...new Set(used.filter((s) => used.filter((x) => x === s).length > 1))];
+  })();
+
+  const unmappedQuizzes = (config?.known_quiz_ids ?? []).filter(
+    (q) => !quizSetMap[q],
+  );
 
   // Mirrors backend build_step_order: pre-quiz survey, base quiz, post-base
   // survey, then each variant followed by its own survey.
   function previewSteps(sequence: string[]): string[] {
     const labels = config?.variant_labels ?? {};
-    const steps = ["Pre-Quiz Survey", "Base Quiz", "Post-Base Quiz Survey"];
-    for (const v of sequence) {
-      const label = labels[v] ?? v;
-      steps.push(`${label} Quiz`, `Post-${label} Survey`);
-    }
+    const steps: string[] = [];
+    function survey(key: string) { if (surveys[key]?.enabled !== false) steps.push(surveys[key]?.name ?? key); }
+    survey("pre_quiz"); steps.push("Base Quiz"); survey("post_base");
+    for (const v of sequence) { steps.push(`${labels[v] ?? v} Quiz`); survey(`post_${v}`); }
     return steps;
   }
 
@@ -182,6 +237,7 @@ export default function StudyFlowPanel() {
               type="radio"
               name="mode"
               className="mt-1"
+              disabled={!!config.study_id}
               checked={mode === "all_variants"}
               onChange={() => setMode("all_variants")}
             />
@@ -202,6 +258,7 @@ export default function StudyFlowPanel() {
               type="radio"
               name="mode"
               className="mt-1"
+              disabled={!!config.study_id}
               checked={mode === "single_variant"}
               onChange={() => setMode("single_variant")}
             />
@@ -210,18 +267,20 @@ export default function StudyFlowPanel() {
                 One variant per participant (between-subjects)
               </span>
               <span className="block text-sm text-gray-600">
-                The original behaviour, kept as a fallback: the base quiz plus a
+                The original Study 1 structure: the base quiz plus a
                 single round-robin-assigned variant.
               </span>
             </span>
           </label>
         </section>
 
+        <p className="my-4 text-sm font-medium text-blue-800">{(config.study_id ?? selectedStudy()) === "study-1" ? "Study 1 · Base + one assigned variant" : "Study 2 · Base + all variants"}. The quiz structure is fixed for each study.</p>
+        <SurveyTimeline stages={surveys} onChange={setSurveys} />
         {/* Order */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Variant order</h2>
           <p className="mt-1 text-sm text-gray-600">
-            The base quiz always runs first — it is the no-assistance baseline.
+            The base interaction quiz always runs first.
             This list controls the variants that follow it.
           </p>
 
@@ -285,6 +344,138 @@ export default function StudyFlowPanel() {
           </label>
         </section>
 
+        <section className="rounded-xl border bg-white p-4 space-y-3">
+          <h2 className="text-lg font-semibold">Quiz size and AI advice</h2>
+          <p className="text-sm text-gray-600">These settings apply to future enrollments. Existing participants keep their saved protocol. A rate overrides the wrong-advice count; question pools smaller than the requested count produce fewer questions, recorded in the export.</p>
+          <label className="block">Questions per quiz<input type="number" min={1} max={100} value={questionCount} onChange={e => setQuestionCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
+          <label className="block">Questions assigned wrong AI advice<input type="number" min={0} max={100} value={wrongCount} onChange={e => setWrongCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
+          <label className="block">Wrong AI advice rate (optional, 0–1)<input type="number" min={0} max={1} step={.05} value={wrongRate} onChange={e => setWrongRate(e.target.value)} className="ml-3 rounded border p-2" /></label>
+          {selectedStudy() === "study-2" && <p className="text-sm text-gray-600">Study access is controlled by the backend STUDY_ACCESS_MODE setting ({config.study_access_mode ?? "sequential_approval"}). Study 1 completion: {config.requires_study1_completion ? "required" : "optional"}. Administrator approval: {config.requires_study2_approval !== false ? "required" : "optional"}.</p>}
+        </section>
+        {/* Question sets */}
+        <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">Question sets</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Each quiz draws from its own set, so a participant never sees the
+            same question twice. A quiz left unmapped draws from the whole
+            question bank and can overlap with other unmapped quizzes.
+          </p>
+
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-gray-50">
+            <input
+              type="radio"
+              name="quizSetMode"
+              className="mt-1"
+              checked={quizSetMode === "preset"}
+              onChange={() => setQuizSetMode("preset")}
+            />
+            <span>
+              <span className="block text-sm font-medium">Preset</span>
+              <span className="block text-sm text-gray-600">
+                A fixed set per quiz, the same for every participant.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-gray-50">
+            <input
+              type="radio"
+              name="quizSetMode"
+              className="mt-1"
+              checked={quizSetMode === "random"}
+              onChange={() => setQuizSetMode("random")}
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                Random per participant
+              </span>
+              <span className="block text-sm text-gray-600">
+                Each participant gets their own random set-to-quiz mapping,
+                fixed at sign-up. Set usage balances on average, but can be
+                uneven in a small sample.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-gray-50">
+            <input
+              type="radio"
+              name="quizSetMode"
+              className="mt-1"
+              checked={quizSetMode === "balanced_random"}
+              onChange={() => setQuizSetMode("balanced_random")}
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                Balanced random (default)
+              </span>
+              <span className="block text-sm text-gray-600">
+                Randomize assignments in blocks of {config.known_sets?.length ?? 4}
+                {" "}participants within each quiz order. Each quiz receives every
+                question set once per complete block, and each participant uses
+                distinct sets. Assignments stay fixed at sign-up. Populate all
+                question sets before enrolling participants. Balance applies to
+                assigned participants; dropouts can make completed results uneven.
+              </span>
+            </span>
+          </label>
+
+          {quizSetMode === "preset" && (
+            <div className="mt-4">
+              <ul className="space-y-2">
+                {(config.known_quiz_ids ?? []).map((quizId) => (
+                  <li
+                    key={quizId}
+                    className="flex items-center justify-between rounded-lg border bg-gray-50 px-3 py-2"
+                  >
+                    <span className="text-sm font-medium">
+                      {config.quiz_labels?.[quizId] ?? quizId}
+                      <span className="ml-2 text-xs text-gray-500">({quizId})</span>
+                    </span>
+
+                    <select
+                      aria-label={`Question set for ${config.quiz_labels?.[quizId] ?? quizId}`}
+                      value={quizSetMap[quizId] ?? ""}
+                      onChange={(e) => setQuizSet(quizId, e.target.value)}
+                      className="rounded border px-2 py-1 text-sm"
+                    >
+                      <option value="">— whole pool</option>
+                      {(config.known_sets ?? []).map((setId) => (
+                        <option key={setId} value={setId}>
+                          Set {setId.toUpperCase()}
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                ))}
+              </ul>
+
+              {duplicateSets.length > 0 && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700"
+                >
+                  Set {duplicateSets.map((x) => x.toUpperCase()).join(", ")} is
+                  used by more than one quiz. Questions could repeat across those
+                  quizzes — give each its own set.
+                </p>
+              )}
+
+              {duplicateSets.length === 0 && unmappedQuizzes.length > 0 && (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                  {unmappedQuizzes.length} quiz
+                  {unmappedQuizzes.length === 1 ? "" : "zes"} still draw from the
+                  whole pool and can overlap:{" "}
+                  {unmappedQuizzes
+                    .map((q) => config.quiz_labels?.[q] ?? q)
+                    .join(", ")}
+                  .
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+
         {/* Preview */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">
@@ -327,7 +518,7 @@ export default function StudyFlowPanel() {
           </button>
           <button
             onClick={onSave}
-            disabled={!dirty || saving}
+            disabled={!dirty || saving || questionCount < 1 || questionCount > 100 || wrongCount < 0 || wrongCount > 100 || (wrongRate !== "" && (Number(wrongRate) < 0 || Number(wrongRate) > 1)) || (quizSetMode === "preset" && duplicateSets.length > 0)}
             className="btn-primary disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save flow"}

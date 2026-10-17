@@ -37,20 +37,48 @@ export type StudyFlowResponse = {
   mode: string;
 };
 
+/** How each quiz's question set is chosen. */
+export type QuizSetMode = "preset" | "random" | "balanced_random";
+export type SurveyStageSetting = { name: string; enabled: boolean };
+export type SurveyStages = Record<string, SurveyStageSetting>;
+
 export type StudyConfig = {
+  study_id?: string | null;
+  survey_stages?: SurveyStages;
   mode: "all_variants" | "single_variant";
   variant_order: string[];
   counterbalance: boolean;
   version: number;
+  questions_per_quiz?: number;
+  wrong_ai_count?: number;
+  wrong_ai_rate?: number | null;
+  requires_study1_completion?: boolean;
+  requires_study2_approval?: boolean;
+  study_access_mode?: string;
   known_variants: string[];
   variant_labels: Record<string, string>;
   preview: string[][];
+
+  // Per-quiz question sets. Giving each quiz its own set is what keeps a
+  // participant's quizzes disjoint — a quiz absent from the map draws from the
+  // whole pool.
+  quiz_set_mode: QuizSetMode;
+  quiz_set_map: Record<string, string>;
+  known_sets: string[];
+  known_quiz_ids: string[];
+  quiz_labels: Record<string, string>;
 };
 
 export type StudyConfigUpdate = {
+  survey_stages?: SurveyStages;
+  questions_per_quiz?: number;
+  wrong_ai_count?: number;
+  wrong_ai_rate?: number | null;
   mode?: "all_variants" | "single_variant";
   variant_order?: string[];
   counterbalance?: boolean;
+  quiz_set_mode?: QuizSetMode;
+  quiz_set_map?: Record<string, string>;
 };
 
 export async function getNextStep() {

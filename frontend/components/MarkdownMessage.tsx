@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -32,6 +32,18 @@ function convertListBody(body: string, ordered: boolean): string {
     .join("\n");
 }
 
+// Re-indent the body of a display-math block so every line sits at `indent`.
+// The common leading whitespace is stripped first, so a body the model indented
+// to match its list item doesn't arrive at KaTeX with that indent baked in.
+function reindentMathBody(body: string, indent: string): string {
+  const lines = body.replace(/^[ \t]*\n/, "").replace(/\s+$/, "").split("\n");
+  const widths = lines
+    .filter((l) => l.trim().length > 0)
+    .map((l) => (/^[ \t]*/.exec(l) as RegExpExecArray)[0].length);
+  const common = widths.length > 0 ? Math.min(...widths) : 0;
+  return lines.map((l) => indent + l.slice(common)).join("\n");
+}
+
 function wrapExpressions(text: string): string {
   // Step 0: Unwrap fenced code blocks whose content is LaTeX so the inner
   // content gets processed as math/text instead of shown as raw code.
@@ -51,7 +63,26 @@ function wrapExpressions(text: string): string {
   text = text.replace(/(?:^|\n)\[\n([\s\S]+?)\n\](?:\n|$)/g,
     (_, inner) => `\n$$\n${inner.trim()}\n$$\n`);
   text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, inner) => `$${inner.trim()}$`);
-  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, inner) => `$$\n${inner.trim()}\n$$`);
+
+  // \[...\] opening its own line is a display block. Both fences MUST keep that
+  // line's indentation: models routinely put these inside a list item —
+  //     - ...the combination formula:
+  //       \[
+  //       \binom{6}{2} = 15
+  //       \]
+  // — and emitting the opening fence indented (in the list item) while hoisting
+  // the closing fence to column 0 (outside it) left the block unterminated. Every
+  // later $$ then paired with the wrong partner, so formulas rendered as literal
+  // text and the prose between them rendered as math (or as a red KaTeX error).
+  text = text.replace(
+    /(^|\n)([ \t]*)\\\[([\s\S]+?)\\\][ \t]*(?=\n|$)/g,
+    (_m, lead: string, indent: string, inner: string) =>
+      `${lead}${indent}$$\n${reindentMathBody(inner, indent)}\n${indent}$$`,
+  );
+
+  // Any remaining \[...\] sits mid-line, so keep it inline rather than forcing a
+  // block that would split the sentence around it.
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, inner) => `$$${inner.trim()}$$`);
 
   // Step 2: Collapse inline $...$ that spans a single newline.
   // remark-math only parses single-line inline math. The AI sometimes wraps a
@@ -162,79 +193,93 @@ const schema = {
   },
 };
 
-const components = {
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="text-blue-600 underline hover:text-blue-800"
-    >
-      {children}
-    </a>
-  ),
-  // Apply blockquote-style border to KaTeX display math blocks so all display
-  // math uses the same visual container. Inner KaTeX divs pass through unchanged.
-  div: ({ className, children, style }: { className?: string; children?: React.ReactNode; style?: React.CSSProperties }) => {
-    if (className?.includes("katex-display")) {
-      return (
-        <div
-          className={`${className} relative border-2 border-gray-800 rounded px-3 py-2 my-2 overflow-x-auto max-w-full`}
-          style={style}
-        >
-          {children}
-        </div>
-      );
-    }
-    return <div className={className} style={style}>{children}</div>;
-  },
-  table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="overflow-x-auto my-3">
-      <table className="w-full border-collapse text-sm">{children}</table>
-    </div>
-  ),
-  th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="border border-gray-300 bg-gray-50 px-3 py-2 text-left font-semibold whitespace-nowrap">
-      {children}
-    </th>
-  ),
-  td: ({ children }: { children?: React.ReactNode }) => (
-    <td className="border border-gray-300 px-3 py-2 align-top">{children}</td>
-  ),
-  hr: () => <hr className="!mt-3 !mb-1 border-gray-300" />,
-  ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
-  ),
-  ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
-  ),
-  li: ({ children }: { children?: React.ReactNode }) => (
-    <li className="leading-normal">{children}</li>
-  ),
-  blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote className="inline-block border-2 border-gray-800 rounded px-3 py-2 my-2 break-words overflow-wrap-anywhere text-[1.15em] max-w-full">
-      {children}
-    </blockquote>
-  ),
-  // Prevent code blocks from overflowing the bubble — scroll horizontally instead.
-  pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="overflow-x-auto max-w-full rounded bg-gray-100 p-2 text-sm">
-      {children}
-    </pre>
-  ),
-  code: ({ className, children }: { className?: string; children?: React.ReactNode }) => (
-    <code className={`${className ?? ""} break-all`}>{children}</code>
-  ),
-};
+function makeComponents(dark: boolean, onLinkClick?: (href: string) => void) {
+  return {
+    a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        onClick={() => { if (href) onLinkClick?.(href); }}
+        className={dark ? "text-white underline opacity-90 hover:opacity-100" : "text-blue-600 underline hover:text-blue-800"}
+      >
+        {children}
+      </a>
+    ),
+    div: ({ className, children, style }: { className?: string; children?: React.ReactNode; style?: React.CSSProperties }) => {
+      if (className?.includes("katex-display")) {
+        return (
+          <div
+            className={`${className} relative border-2 rounded px-3 py-2 my-2 overflow-x-auto max-w-full ${dark ? "border-white/60" : "border-gray-800"}`}
+            style={style}
+          >
+            {children}
+          </div>
+        );
+      }
+      return <div className={className} style={style}>{children}</div>;
+    },
+    table: ({ children }: { children?: React.ReactNode }) => (
+      <div className="overflow-x-auto my-3">
+        <table className="w-full border-collapse text-sm">{children}</table>
+      </div>
+    ),
+    th: ({ children }: { children?: React.ReactNode }) => (
+      <th className={`border px-3 py-2 text-left font-semibold whitespace-nowrap ${dark ? "border-white/40 bg-white/10" : "border-gray-300 bg-gray-50"}`}>
+        {children}
+      </th>
+    ),
+    td: ({ children }: { children?: React.ReactNode }) => (
+      <td className={`border px-3 py-2 align-top ${dark ? "border-white/40" : "border-gray-300"}`}>{children}</td>
+    ),
+    hr: () => <hr className={`!mt-3 !mb-1 ${dark ? "border-white/40" : "border-gray-300"}`} />,
+    ul: ({ children }: { children?: React.ReactNode }) => (
+      <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
+    ),
+    ol: ({ children }: { children?: React.ReactNode }) => (
+      <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
+    ),
+    li: ({ children }: { children?: React.ReactNode }) => (
+      <li className="leading-normal">{children}</li>
+    ),
+    blockquote: ({ children }: { children?: React.ReactNode }) => (
+      <blockquote className={`inline-block border-2 rounded px-3 py-2 my-2 break-words overflow-wrap-anywhere text-[1.15em] max-w-full ${dark ? "border-white/60" : "border-gray-800"}`}>
+        {children}
+      </blockquote>
+    ),
+    pre: ({ children }: { children?: React.ReactNode }) => (
+      <pre className={`overflow-x-auto max-w-full rounded p-2 text-sm ${dark ? "bg-white/15 text-white" : "bg-gray-100 text-gray-900"}`}>
+        {children}
+      </pre>
+    ),
+    code: ({ className, children }: { className?: string; children?: React.ReactNode }) => (
+      <code className={`${className ?? ""} break-all`}>{children}</code>
+    ),
+  };
+}
 
-const inlineComponents = {
-  ...components,
-  p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-};
-
-export default function MarkdownMessage({ content, inline = false }: { content: string; inline?: boolean }) {
+export default function MarkdownMessage({
+  content,
+  inline = false,
+  dark = false,
+  onLinkClick,
+}: Readonly<{
+  content: string;
+  inline?: boolean;
+  dark?: boolean;
+  onLinkClick?: (href: string) => void;
+}>) {
   const wrapped_content = wrapExpressions(content);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const baseComponents = useMemo(() => makeComponents(dark, onLinkClick), [dark, onLinkClick]);
+  const activeComponents = useMemo(() => {
+    if (!inline) return baseComponents;
+    return {
+      ...baseComponents,
+      p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+    };
+  }, [inline, baseComponents]);
 
   // Scale down display math blocks that are wider than their container so they
   // never overflow the chat bubble — even when the user changes browser zoom.
@@ -276,7 +321,7 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
         [rehypeSanitize, schema],
         [rehypeKatex, { output: "html" }],
       ]}
-      components={inline ? inlineComponents : components}
+      components={activeComponents}
     >
       {wrapped_content}
     </ReactMarkdown>
@@ -285,7 +330,7 @@ export default function MarkdownMessage({ content, inline = false }: { content: 
   if (inline) return <span>{rendered}</span>;
 
   return (
-    <div ref={containerRef} className="prose prose-sm text-[0.8125rem] max-w-none break-words [&>*+h2]:mt-5 [&>*+h3]:mt-4 [&>*+h4]:mt-3 [&>p+p]:mt-3">
+    <div ref={containerRef} className="prose prose-base text-base max-w-none break-words [&>*+h2]:mt-5 [&>*+h3]:mt-4 [&>*+h4]:mt-3 [&>p+p]:mt-3">
       {rendered}
     </div>
   );

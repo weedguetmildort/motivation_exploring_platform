@@ -49,6 +49,29 @@ class AIMessageMetadata(BaseModel):
         default=None,
         description="Tokens generated in the response"
     )
+    answer_incorrectly: Optional[bool] = Field(
+        default=None,
+        description="Whether the AI was instructed to answer incorrectly"
+    )
+    stated_choice_id: Optional[dict[str, Optional[str]]] = Field(
+        default=None,
+        description=(
+            "Maps an agent tag to the answer-choice id the reply named. "
+            "Single-agent endpoints use the key 'default'; dual-agent mode uses "
+            "'A'/'B'. A None value means no single choice could be confidently detected."
+        )
+    )
+    manipulation_leaked: Optional[dict[str, bool]] = Field(
+        default=None,
+        description=(
+            "Maps an agent tag to whether the reply appears to reveal that the AI was "
+            "told to answer incorrectly (e.g. 'since we are to select an incorrect "
+            "answer...'). Only populated when answer_incorrectly is True. Single-agent "
+            "endpoints use the key 'default'; dual-agent mode uses 'A'/'B'. Used to flag "
+            "and audit prompt leakage — participants must never see that their answer "
+            "is deliberately wrong."
+        )
+    )
     custom_metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Flexible field for any additional metadata or analysis data"
@@ -97,3 +120,17 @@ class ConversationHistory(BaseModel):
     """Full conversation history with optional metadata."""
     conversation_id: str
     messages: list[ConversationMessage]
+
+
+class MessageSummary(BaseModel):
+    """Admin-facing flattened view of an assistant message."""
+    id: str
+    conversation_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    question_id: Optional[str] = None
+    trigger: Optional[str] = None
+    stated_choice_id: Optional[dict[str, Optional[str]]] = None
+    answer_incorrectly: Optional[bool] = None
+    manipulation_leaked: Optional[dict[str, bool]] = None
+    created_at: datetime

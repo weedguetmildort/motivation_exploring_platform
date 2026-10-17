@@ -9,6 +9,7 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+      - next_cache:/app/.next
     environment:
       - NODE_ENV=development
       - WATCHPACK_POLLING=true
@@ -49,5 +50,6 @@ services:
 #       - mongo_data:/data/db
 #     restart: unless-stopped
 
-# volumes:
+volumes:
+  next_cache:
 #   mongo_data:

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import Link from "next/link";
+import PageHeader from "../components/PageHeader";
 
 
 export default function AdminPage() {
@@ -57,31 +58,19 @@ useEffect(() => {
     
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="site-header">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">Admin Panel</h1>
-            <p className="page-subtitle">Manage quiz questions and survey questions</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
-            >
-              Back to Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Admin Panel"
+        subtitle="Manage quiz questions and survey questions"
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
       <div className="page-container">
         <div className="grid gap-4 sm:grid-cols-2">
+          <Link href="/research_panel" className="rounded-2xl border p-5 shadow-sm hover:shadow transition">
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Research Results</h2>
+            <p className="text-sm text-gray-600">Compare quiz and AI interaction averages, filter participant demographics, and inspect individual results</p>
+          </Link>
   
           {user?.is_admin && (
             <Link
@@ -112,6 +101,66 @@ useEffect(() => {
               <p className="text-sm text-gray-600">
                 Reorder quiz variants and set counterbalancing
               </p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/links_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Links Panel</h2>
+              <p className="text-sm text-gray-600">Manage links, review discovered links, and trigger health checks</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/allowlist_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Trusted Domain Allowlist</h2>
+              <p className="text-sm text-gray-600">Manage domains approved for link discovery and health checks</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/reports_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Issue Reports</h2>
+              <p className="text-sm text-gray-600">Review and respond to issues submitted by quiz participants</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/participants_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Participants Panel</h2>
+              <p className="text-sm text-gray-600">View participant progress, study stage, and attrition signals</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/analytics_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Analytics Panel</h2>
+              <p className="text-sm text-gray-600">Browse copy events, link clicks, and chat interaction data</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/export_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Export Data</h2>
+              <p className="text-sm text-gray-600">Download participants, quiz answers, survey responses, events, and chat messages as CSV</p>
             </Link>
           )}
         </div>

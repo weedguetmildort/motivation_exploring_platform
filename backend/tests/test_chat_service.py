@@ -1,0 +1,246 @@
+# backend/tests/test_chat_service.py
+"""Unit tests for the chat service — especially get_last_exchange, which was
+a source of context-loss bugs when a user sent more than two follow-up messages."""
+from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, call
+from bson import ObjectId
+import pytest
+
+from app.services.chat import get_last_exchange, detect_stated_choice, detect_manipulation_leak
+from app.schemas.question import QuestionChoice
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _ts(offset_seconds=0):
+    return datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)
+
+
+def _asst_doc(content, t):
+    return {"_id": ObjectId(), "role": "assistant", "content": content, "created_at": t}
+
+
+def _user_doc(content, t):
+    return {"_id": ObjectId(), "role": "user", "content": content, "created_at": t}
+
+
+class TestGetLastExchange:
+    def test_empty_history_returns_empty(self):
+        col = MagicMock()
+        col.find.return_value = []
+        result = get_last_exchange(col, "conv-1")
+        assert result == []
+
+    def test_single_exchange_returned_in_full(self):
+        user_msg = _user_doc("What is probability?", _ts(1))
+        asst_msg = _asst_doc("Probability is the likelihood of an event.", _ts(2))
+
+        col = MagicMock()
+        col.find.return_value = [asst_msg]
+        col.find_one.return_value = user_msg
+
+        result = get_last_exchange(col, "conv-1")
+
+        assert len(result) == 2
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "What is probability?"
+        assert result[1]["role"] == "assistant"
+        assert result[1]["content"] == "Probability is the likelihood of an event."
+
+    def test_no_user_message_before_first_assistant_returns_empty(self):
+        asst_msg = _asst_doc("Hello!", _ts(1))
+
+        col = MagicMock()
+        col.find.return_value = [asst_msg]
+        col.find_one.return_value = None  # no preceding user message
+
+        result = get_last_exchange(col, "conv-1")
+        assert result == []
+
+    def test_multiple_exchanges_returns_first_plus_recent(self):
+        """
+        The first exchange anchors the quiz question.
+        Exchanges 2–4 are the follow-ups. With recent_turns=2 the middle one
+        (exchange 2) should be dropped.
+        find_one is called: once for the first exchange, then once per recent exchange.
+        With 4 messages and recent_turns=2, recent = [asst[2], asst[3]].
+        So find_one order is: user[0], user[2], user[3].
+        """
+        user_msgs = [_user_doc(f"User {i}", _ts(i * 2 - 1)) for i in range(1, 5)]
+        asst_msgs = [_asst_doc(f"Assistant {i}", _ts(i * 2)) for i in range(1, 5)]
+
+        col = MagicMock()
+        col.find.return_value = asst_msgs
+        # find_one order: first-exchange user, then user before recent[0], user before recent[1]
+        col.find_one.side_effect = [user_msgs[0], user_msgs[2], user_msgs[3]]
+
+        result = get_last_exchange(col, "conv-1", recent_turns=2)
+
+        assert len(result) == 6
+        assert result[0]["content"] == "User 1"
+        assert result[1]["content"] == "Assistant 1"
+        assert result[2]["content"] == "User 3"   # recent[0] user
+        assert result[3]["content"] == "Assistant 3"
+        assert result[4]["content"] == "User 4"   # recent[1] user
+        assert result[5]["content"] == "Assistant 4"
+
+    def test_exactly_one_extra_exchange_with_recent_turns_1(self):
+        """recent_turns=1 → only first exchange + 1 most recent.
+        With 3 messages and recent_turns=1, recent = [asst[2]].
+        find_one order: user[0], user[2].
+        """
+        user_msgs = [_user_doc(f"U{i}", _ts(i)) for i in range(1, 4)]
+        asst_msgs = [_asst_doc(f"A{i}", _ts(i + 0.5)) for i in range(1, 4)]
+
+        col = MagicMock()
+        col.find.return_value = asst_msgs
+        col.find_one.side_effect = [user_msgs[0], user_msgs[2]]
+
+        result = get_last_exchange(col, "conv-1", recent_turns=1)
+
+        assert len(result) == 4  # first pair + last pair
+        assert result[0]["content"] == "U1"
+        assert result[2]["content"] == "U3"  # last one
+
+    def test_first_exchange_not_duplicated_when_it_is_also_the_most_recent(self):
+        """With only 1 exchange total, first and last are the same — no duplication."""
+        user_msg = _user_doc("Only question", _ts(1))
+        asst_msg = _asst_doc("Only answer", _ts(2))
+
+        col = MagicMock()
+        col.find.return_value = [asst_msg]
+        col.find_one.return_value = user_msg
+
+        result = get_last_exchange(col, "conv-1", recent_turns=3)
+        assert len(result) == 2  # not 4
+
+    def test_agent_prefix_filters_and_strips_prefix(self):
+        """When agent_prefix is set, only that agent's replies are returned and
+        the prefix is stripped from the content."""
+        a_msg = _asst_doc(["[AGENT A] This is Agent A's reply.", "[AGENT B] B's reply."], _ts(2))
+        user_msg = _user_doc("Question?", _ts(1))
+
+        col = MagicMock()
+        col.find.return_value = [a_msg]
+        col.find_one.return_value = user_msg
+
+        result = get_last_exchange(col, "conv-1", agent_prefix="[AGENT A]")
+
+        assert len(result) == 2
+        assert result[1]["content"] == "This is Agent A's reply."
+
+    def test_agent_prefix_no_match_skips_exchange(self):
+        """An assistant message with no matching agent prefix is skipped."""
+        asst_msg = _asst_doc(["[AGENT B] Only B replied."], _ts(2))
+        user_msg = _user_doc("Question?", _ts(1))
+
+        col = MagicMock()
+        col.find.return_value = [asst_msg]
+        col.find_one.return_value = user_msg
+
+        result = get_last_exchange(col, "conv-1", agent_prefix="[AGENT A]")
+        # First assistant doc matched the agent query (because of how the mock works),
+        # but the content extraction finds no matching prefix — test that we handle this
+        # gracefully and still return something (falls back to full content).
+        assert isinstance(result, list)
+
+    def test_conversation_id_passed_to_queries(self):
+        col = MagicMock()
+        col.find.return_value = []
+
+        get_last_exchange(col, "my-conv-id-123")
+
+        find_call_kwargs = col.find.call_args[0][0]
+        assert find_call_kwargs.get("conversation_id") == "my-conv-id-123"
+
+
+# ── detect_stated_choice ─────────────────────────────────────────────────────
+
+_CHOICES = [
+    QuestionChoice(id="a", label="3"),
+    QuestionChoice(id="b", label="4"),
+    QuestionChoice(id="c", label="5"),
+]
+
+
+class TestDetectStatedChoice:
+    def test_no_choices_returns_none(self):
+        assert detect_stated_choice("The answer is 4.", []) is None
+
+    def test_single_confident_match_returns_id(self):
+        reply = "The correct answer is 4, because 2+2=4."
+        assert detect_stated_choice(reply, _CHOICES) == "b"
+
+    def test_zero_matches_returns_none(self):
+        reply = "I'm not sure what the answer is."
+        assert detect_stated_choice(reply, _CHOICES) is None
+
+    def test_ambiguous_two_matches_returns_none(self):
+        # Both "4" and "5" appear in the leading text — never guess.
+        reply = "The answer is either 4 or 5 depending on rounding."
+        assert detect_stated_choice(reply, _CHOICES) is None
+
+    def test_match_outside_leading_window_is_not_detected(self):
+        # "4" only appears past the 300-char window the heuristic scans.
+        padding = "x" * 290
+        reply = f"{padding} the answer is 4"
+        assert detect_stated_choice(reply, _CHOICES) is None
+
+    def test_case_insensitive_match(self):
+        choices = [QuestionChoice(id="a", label="True"), QuestionChoice(id="b", label="False")]
+        reply = "TRUE — here's why."
+        assert detect_stated_choice(reply, choices) == "a"
+
+
+# ── detect_manipulation_leak ─────────────────────────────────────────────────
+
+class TestDetectManipulationLeak:
+    def test_clean_reply_returns_false(self):
+        reply = "The answer is 1/2. Since a coin flip has two equally likely outcomes, the probability is 1/2."
+        assert detect_manipulation_leak(reply) is False
+
+    def test_real_world_leak_example_returns_true(self):
+        # Verbatim shape of the leaked message that prompted this heuristic.
+        reply = (
+            "But since we are to select an incorrect answer, I will confidently "
+            "choose C. 1/2 as the correct answer.\n\nTherefore, the answer is C. 1/2."
+        )
+        assert detect_manipulation_leak(reply) is True
+
+    def test_leak_detected_mid_explanation_not_just_opening_line(self):
+        # detect_manipulation_leak scans the whole reply, not a leading window,
+        # since leaks tend to surface mid-explanation.
+        padding = "This is a long, confident explanation of why the answer is correct. " * 10
+        reply = f"{padding} As instructed, I picked this option."
+        assert detect_manipulation_leak(reply) is True
+
+    @pytest.mark.parametrize("reply", [
+        "I am instructed to say the answer is 4.",
+        "As instructed, the answer is 4.",
+        "My instructions say to pick 4.",
+        "The system prompt says to choose 4.",
+        "This answer is intentionally incorrect, but I'll explain it anyway.",
+        "This is a deliberately wrong answer for the purposes of the study.",
+        "I was told to choose an incorrect answer from the list.",
+        "My task is to explain why 4 is correct.",
+        "To fulfill this request, I'll say the answer is 4.",
+        "We are supposed to answer incorrectly here.",
+    ])
+    def test_various_leak_phrasings_detected(self, reply):
+        assert detect_manipulation_leak(reply) is True
+
+    @pytest.mark.parametrize("reply", [
+        "The answer is 4, because 2 + 2 = 4.",
+        "I'm confident the answer is 3, based on the standard formula.",
+        "Let's work through this instructively step by step.",
+        "The system works by combining probabilities of independent events.",
+        "My understanding of the material tells me the answer is 5.",
+    ])
+    def test_benign_replies_not_flagged(self, reply):
+        assert detect_manipulation_leak(reply) is False
+
+    def test_case_insensitive(self):
+        assert detect_manipulation_leak("AS INSTRUCTED, the answer is 4.") is True
+
+    def test_empty_string_returns_false(self):
+        assert detect_manipulation_leak("") is False

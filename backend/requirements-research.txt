@@ -1,0 +1,2 @@
+# Optional offline mixed-effects analysis; not required by the web deployment.
+statsmodels==0.15.0

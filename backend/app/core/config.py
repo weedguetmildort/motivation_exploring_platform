@@ -1,7 +1,19 @@
 import os
 from functools import lru_cache
 
+STUDY_ACCESS_MODES = {
+    "sequential_approval": (True, True),
+    "sequential": (True, False),
+    "independent_approval": (False, True),
+    "independent": (False, False),
+}
+
 class Settings:
+    def __init__(self):
+        self.STUDY_ACCESS_MODE = os.getenv("STUDY_ACCESS_MODE", "sequential_approval").strip().lower()
+        if self.STUDY_ACCESS_MODE not in STUDY_ACCESS_MODES:
+            raise ValueError("STUDY_ACCESS_MODE must be one of: " + ", ".join(STUDY_ACCESS_MODES))
+
     # Mongo
     MONGO_URL: str = os.getenv("MONGO_URL", "mongodb://localhost:27017")
     MONGO_DB: str = os.getenv("MONGO_DB", "mep_dev")
@@ -9,7 +21,7 @@ class Settings:
     # JWT / Auth
     JWT_SECRET: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
     JWT_ALG: str = os.getenv("JWT_ALG", "HS256")
-    JWT_EXPIRES_MIN: int = int(os.getenv("JWT_EXPIRES_MIN", "60"))  # 60 minutes
+    JWT_EXPIRES_MIN: int = int(os.getenv("JWT_EXPIRES_MIN", "180"))  # 3 hours
 
     COOKIE_NAME: str = os.getenv("COOKIE_NAME", "session")
     COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "").lower() in {"1","true","yes"}  # True in prod
@@ -24,6 +36,13 @@ class Settings:
 
     # Environment
     ENV: str = os.getenv("ENV", "development")
+
+    # Link Health & Discovery
+    LINK_CHECK_INTERVAL_HOURS: int = int(os.getenv("LINK_CHECK_INTERVAL_HOURS", "12"))
+    MAX_LIVE_LINKS_PER_SUBJECT: int = int(os.getenv("MAX_LIVE_LINKS_PER_SUBJECT", "30"))
+    MAX_RETRIES_LINK_CHECK: int = int(os.getenv("MAX_RETRIES_LINK_CHECK", "3"))
+    CANDIDATES_PER_CYCLE: int = int(os.getenv("CANDIDATES_PER_CYCLE", "1"))
+    LINK_REQUEST_TIMEOUT: int = int(os.getenv("LINK_REQUEST_TIMEOUT", "10"))
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

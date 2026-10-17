@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
+import { getStudyConfig, type SurveyStages } from "../lib/study";
+import { DEFAULT_SURVEY_STAGES, questionApplies, questionTarget, targetFields, type QuestionScope } from "../lib/surveyConfig";
+import { selectedStudy } from "../lib/studySelection";
 
 export default function SurveyPanelPage() {
   type SurveyStage = "pre_quiz" | "post_base" | string;
@@ -18,6 +21,8 @@ export default function SurveyPanelPage() {
   type SurveyItem = {
     id: string;
     stage: SurveyStage;
+    scope?: QuestionScope | null;
+    stages?: string[];
     prompt: string;
     type: SurveyItemType;
     required: boolean;
@@ -43,6 +48,10 @@ export default function SurveyPanelPage() {
   const [checking, setChecking] = useState(true);
 
   // Create form
+  const [settings, setSettings] = useState<SurveyStages>(DEFAULT_SURVEY_STAGES);
+  const [extraStages, setExtraStages] = useState<string[]>([]);
+  const [previewStage, setPreviewStage] = useState("pre_quiz");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [stage, setStage] = useState<SurveyStage>("pre_quiz");
   const [type, setType] = useState<SurveyItemType>("likert");
   const [category, setCategory] = useState("");
@@ -78,17 +87,21 @@ export default function SurveyPanelPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Only two editable question sets. Every interstitial survey in the flow —
-  // after the base quiz and after each variant quiz — displays the "post_base"
-  // items, so they are written once here. Each stage still stores its own
-  // responses separately. See backend services/study_flow.SHARED_POST_QUESTION_STAGE.
-  const stages = useMemo(
-    () => [
-      { value: "pre_quiz", label: "Pre-Quiz" },
-      { value: "post_base", label: "Post-Quiz (shown after every quiz)" },
-    ],
-    [],
-  );
+  const stages = useMemo(() => [
+    { value: "all_surveys", label: "All surveys in this study" },
+    { value: "post_quiz", label: "All post-quiz surveys" },
+    ...Object.entries(settings).map(([value, item]) => ({ value, label: item.name })),
+  ], [settings]);
+  useEffect(() => {
+    const requested = [router.query?.stage].flat()[0];
+    if (requested && Object.keys(settings).includes(requested)) { setStage(requested); setPreviewStage(requested); }
+  }, [router.query?.stage, settings]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    getStudyConfig().then(config => { if (!cancelled && config?.survey_stages) setSettings(config.survey_stages); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user]);
 
   function sanitizeOptions(opts: SurveyOption[]) {
     return opts
@@ -106,12 +119,12 @@ export default function SurveyPanelPage() {
         if (cancel) return;
 
         if (!res.user.is_admin) {
-          window.location.href = "/dashboard";
+          router.replace("/dashboard");
           return;
         }
         setUser(res.user);
       } catch {
-        if (!cancel) window.location.href = "/login";
+        if (!cancel) router.replace("/login");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -192,7 +205,7 @@ export default function SurveyPanelPage() {
     setSaving(true);
     try {
       const payload: any = {
-        stage,
+        ...targetFields(stage, extraStages),
         category: category.trim() || null,
         prompt: prompt.trim(),
         type,
@@ -275,7 +288,7 @@ export default function SurveyPanelPage() {
       const t = (editDraft.type ?? "likert") as SurveyItemType;
 
       const payload: any = {
-        stage: editDraft.stage,
+        ...targetFields(questionTarget({ stage: editDraft.stage ?? "pre_quiz", scope: editDraft.scope, stages: editDraft.stages }), editDraft.stages),
         category: (editDraft.category as any)?.trim?.()
           ? (editDraft.category as any).trim()
           : null,
@@ -355,7 +368,7 @@ export default function SurveyPanelPage() {
               Survey Questions Panel
             </h1>
             <p className="page-subtitle">
-              Manage stage-based surveys (pre-quiz, mid-quiz, end-quiz, final).
+              {selectedStudy() === "study-1" ? "Study 1 · Base + one assigned variant" : "Study 2 · Base + all variants"}. Shared questions and stage-specific additions stay within this study.
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -377,6 +390,14 @@ export default function SurveyPanelPage() {
 
       {/* Create */}
       <div className="page-container">
+        <section aria-label="Effective survey preview" className="mb-6 rounded-xl border bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold">Effective survey preview</h2>
+          <p className="mt-1 text-sm text-gray-600">Includes active shared questions and additions for this stage. Already opened surveys keep their saved questions.</p>
+          <label className="mt-3 block text-sm">Preview survey<select value={previewStage} onChange={e => setPreviewStage(e.target.value)} className="ml-3 rounded border p-2">{Object.entries(settings).map(([key, item]) => <option key={key} value={key}>{item.name}{item.enabled ? "" : " (disabled for new enrollments)"}</option>)}</select></label>
+          <p className="mt-3 text-sm">{items.filter(item => questionApplies(item, previewStage)).length} active questions · {settings[previewStage]?.enabled ? "Enabled" : "Disabled"}</p>
+          <button type="button" onClick={() => setPreviewOpen(value => !value)} aria-expanded={previewOpen} className="mt-3 rounded-lg border px-3 py-2 text-sm">{previewOpen ? "Hide preview" : "Preview effective survey"}</button>
+          {previewOpen && <ol className="mt-3 list-inside list-decimal space-y-2">{items.filter(item => questionApplies(item, previewStage)).map(item => <li key={item.id}>{item.prompt}{item.required ? " (required)" : " (optional)"}</li>)}</ol>}
+        </section>
         <div className="bg-white rounded-xl p-8 shadow-sm border">
           <h2 className="text-xl 2xl:text-2xl font-semibold mb-4">Add Survey Item</h2>
 
@@ -386,7 +407,8 @@ export default function SurveyPanelPage() {
                 <label className="block text-sm font-medium mb-1">Stage</label>
                 <select
                   value={stage}
-                  onChange={(e) => setStage(e.target.value)}
+                  aria-label="Question target"
+                  onChange={(e) => { setStage(e.target.value); setExtraStages([]); }}
                   className="w-full rounded-lg border px-3 py-2 text-sm"
                 >
                   {stages.map((s) => (
@@ -400,6 +422,7 @@ export default function SurveyPanelPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Type</label>
                 <select
+                  aria-label="Question type"
                   value={type}
                   onChange={(e) => setType(e.target.value as SurveyItemType)}
                   className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -418,14 +441,17 @@ export default function SurveyPanelPage() {
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full rounded-lg border px-3 py-2 text-sm"
                   placeholder="e.g., TRUST, NFC, AI Literacy"
-                  required
                 />
               </div>
             </div>
 
+            {Object.keys(settings).includes(stage) && <fieldset className="rounded-lg border p-4"><legend className="text-sm font-medium">Also include in these surveys</legend>
+              <div className="flex flex-wrap gap-4">{Object.entries(settings).filter(([key]) => key !== stage).map(([key, item]) => <label key={key} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={extraStages.includes(key)} onChange={e => setExtraStages(previous => e.target.checked ? [...previous, key] : previous.filter(value => value !== key))} />{item.name}</label>)}</div>
+            </fieldset>}
             <div>
               <label className="block text-sm font-medium mb-1">Prompt</label>
               <textarea
+                aria-label="Question prompt"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -579,7 +605,7 @@ export default function SurveyPanelPage() {
                     <div className="flex justify-between items-start gap-4">
                       <div className="min-w-0">
                         <div className="text-xs text-gray-500">
-                          Stage: <span className="font-medium">{it.stage}</span>
+                          Stage: <span className="font-medium">{stages.find(target => target.value === questionTarget(it))?.label ?? it.stage}{it.scope === "stages" && (it.stages?.length ?? 0) > 1 ? ` (+${it.stages!.length - 1} more)` : ""}</span>
                           {it.category ? (
                             <>
                               {" "}
@@ -621,13 +647,11 @@ export default function SurveyPanelPage() {
                             <div className="grid gap-3 sm:grid-cols-3">
                               <div>
                                 <label className="block text-xs font-medium mb-1">Stage</label>
-                                <input
-                                  value={(editDraft.stage as string) ?? ""}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, stage: e.target.value }))
-                                  }
-                                  className="w-full rounded border px-2 py-1 text-sm"
-                                />
+                                <select aria-label="Edit question target" value={questionTarget({ stage: editDraft.stage ?? "pre_quiz", scope: editDraft.scope, stages: editDraft.stages })}
+                                  onChange={e => setEditDraft(d => ({ ...d, ...targetFields(e.target.value), scope: targetFields(e.target.value).scope as QuestionScope }))} className="w-full rounded border px-2 py-1 text-sm">
+                                  {stages.map(target => <option key={target.value} value={target.value}>{target.label}</option>)}
+                                </select>
+                                {editDraft.scope === "stages" && <fieldset className="mt-2 space-y-1"><legend className="text-xs">Also include in</legend>{Object.entries(settings).filter(([key]) => key !== editDraft.stage).map(([key, value]) => <label key={key} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={editDraft.stages?.includes(key) ?? false} onChange={e => setEditDraft(d => ({ ...d, stages: e.target.checked ? [...(d.stages ?? []), key] : (d.stages ?? []).filter(stage => stage !== key) }))} />{value.name}</label>)}</fieldset>}
                               </div>
 
                               <div>

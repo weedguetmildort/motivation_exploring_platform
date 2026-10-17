@@ -14,6 +14,7 @@ export type QuizAttemptPublic = {
   status: "in_progress" | "completed" | string;
   total_questions: number;
   answered_count: number;
+  incorrect_question_ids: string[];
 };
 
 export type QuizStateResponse = {
@@ -46,10 +47,11 @@ export async function getQuizState(quizID: string) {
   return apiFetch<QuizStateResponse>("/api/quiz/{quiz_id}/state".replace("{quiz_id}", quizID));
 }
 
-export async function submitQuizAnswer(quizID: string, questionId: string, choiceId: string) {
+export async function submitQuizAnswer(quizID: string, questionId: string, choiceId: string,
+  telemetry?: { telemetry_page_id: string; telemetry_elapsed_ms: number }) {
   return apiFetch<QuizStateResponse>("/api/quiz/{quiz_id}/answer".replace("{quiz_id}", quizID), {
     method: "POST",
-    body: JSON.stringify({ question_id: questionId, choice_id: choiceId }),
+    body: JSON.stringify({ question_id: questionId, choice_id: choiceId, ...telemetry }),
   });
 }
 

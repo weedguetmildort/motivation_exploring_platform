@@ -24,7 +24,7 @@ export default function MentionSuggestions({
             onClick={() => onSelect(agent)}
             className={`w-full text-left px-4 py-2 cursor-pointer ${
               index === selectedIndex
-                ? "bg-blue-500 text-white"
+                ? "bg-accent-500 text-white"
                 : "hover:bg-gray-100"
             }`}
           >

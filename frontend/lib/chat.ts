@@ -1,4 +1,30 @@
+import { studyApiPath } from "./studySelection";
 import { apiFetch } from "./fetcher";
+import type { QuestionResearch } from "./research";
+
+export interface Citation {
+  n: number;
+  title: string;
+  url: string;
+}
+
+export function injectCitationLinks(text: string, citations: Citation[]): string {
+  let result = text;
+  for (const { n, url } of citations) {
+    const N = String(n);
+    // Primary: [key phrase][N] or [key phrase] [N] → [key phrase](url)
+    result = result.replaceAll(
+      new RegExp(String.raw`\[([^\]\[]+)\]\s*\[${N}\]`, "g"),
+      `[$1](${url})`,
+    );
+    // Fallback: bare [N] not already followed by ( → [N](url)
+    result = result.replaceAll(
+      new RegExp(String.raw`\[${N}\](?!\()`, "g"),
+      `[${N}](${url})`,
+    );
+  }
+  return result;
+}
 
 export interface AIMessageMetadata {
   sources?: string[];
@@ -20,25 +46,82 @@ export interface ChatResponse {
 
 export async function loadUserHistory(conversationId: string): Promise<{
   conversation_id: string;
-  messages: { role: string; content: string | string[] }[];
+  messages: { role: string; content: string | string[]; request_id?: string; question_id?: string }[];
 }> {
   return apiFetch(`/api/chat/load_user_history/${conversationId}`);
 }
 
+export type ChatTrigger = "manual" | "followup_chip" | "auto_question";
+
+export interface SendChatOptions {
+  requestId?: string;
+  research?: QuestionResearch;
+  signal?: AbortSignal;
+  onToken?: (delta: string, agent?: string) => void;
+  onDone?: (replies: string[], convId: string) => void;
+  onFollowupToken?: (delta: string) => void;
+  answerIncorrectly?: boolean;
+  answerChoices?: { id: string; label: string }[];
+  questionId?: string;
+  trigger?: ChatTrigger;
+}
+
 export async function sendChat(
+  quizId: string, conversationId: string | null, message: string, agents: string[] = [], options: SendChatOptions = {},
+): Promise<ChatResponse> {
+  const requestId = options.requestId ?? crypto.randomUUID();
+  const research = options.research;
+  research?.emit("prompt_sent", { request_id: requestId, trigger: options.trigger ?? "manual" });
+  const started = new Set<string>();
+  let completed = false;
+  try {
+    const result = await sendChatStream(quizId, conversationId, message, agents, {
+      ...options, requestId,
+      onToken: (delta, agent) => {
+        const key = agent ?? "default";
+        if (!started.has(key)) {
+          started.add(key);
+          research?.emit("ai_first_token", { request_id: requestId, agent: key as "default" | "A" | "B" });
+        }
+        options.onToken?.(delta, agent);
+      },
+      onDone: (replies, convId) => {
+        completed = true;
+        research?.emit("ai_response_completed", { request_id: requestId });
+        options.onDone?.(replies, convId);
+      },
+    });
+    if (!completed) throw new Error("AI response ended before completion");
+    return result;
+  } catch (error) {
+    research?.emit(error instanceof Error && error.name === "AbortError" ? "ai_response_cancelled" : "ai_response_failed", { request_id: requestId });
+    throw error;
+  }
+}
+
+async function sendChatStream(
   quizId: string,
   conversationId: string | null,
   message: string,
   agents: string[] = [],
-  signal?: AbortSignal,
-  onToken?: (delta: string, agent?: string) => void,
+  options: SendChatOptions = {},
 ): Promise<ChatResponse> {
-  const resp = await fetch(`/api/chat/${quizId}`, {
+  const { signal, onToken, onDone, onFollowupToken, answerIncorrectly, answerChoices, questionId, trigger } = options;
+  const resp = await fetch(studyApiPath(`/api/chat/${quizId}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     signal,
-    body: JSON.stringify({ message, conversation_id: conversationId, agents }),
+    body: JSON.stringify({
+      request_id: options.requestId,
+      message,
+      conversation_id: conversationId,
+      agents,
+      answer_incorrectly: answerIncorrectly ?? false,
+      answer_choices: (answerChoices ?? []).map((c) => ({ id: c.id, label: c.label })),
+      question_id: questionId ?? null,
+      trigger: trigger ?? null,
+    }),
   });
 
   if (!resp.ok) {
@@ -57,6 +140,27 @@ export async function sendChat(
   const replyMap: Record<string, string> = {};
   let returnedConvId = conversationId ?? "";
   let followupQuestions: string[] | undefined;
+  let citations: Citation[] = [];
+
+  // Batch token updates: flush to React at most once per animation frame (~16ms).
+  // This avoids one re-render per token while keeping streaming visually smooth.
+  const FOLLOWUP_KEY = "__followup__";
+  const tokenBuffer: Record<string, string> = {};
+
+  const flushTokens = () => {
+    for (const [key, accumulatedDelta] of Object.entries(tokenBuffer)) {
+      if (accumulatedDelta) {
+        if (key === FOLLOWUP_KEY) {
+          onFollowupToken?.(accumulatedDelta);
+        } else {
+          const agentName = key === "default" ? undefined : key;
+          onToken?.(accumulatedDelta, agentName);
+        }
+        tokenBuffer[key] = "";
+      }
+    }
+  };
+  const flushInterval = setInterval(flushTokens, 16);
 
   try {
     while (true) {
@@ -78,24 +182,54 @@ export async function sendChat(
           const agent = event.agent != null ? (event.agent as string) : undefined;
           const key = agent ?? "default";
           replyMap[key] = (replyMap[key] ?? "") + delta;
-          onToken?.(delta, agent);
+          tokenBuffer[key] = (tokenBuffer[key] ?? "") + delta;
         } else if (event.type === "followup") {
-          followupQuestions = event.questions as string[];
+          if ("token" in event) {
+            // Streaming follow-up token — buffer at 60fps alongside main tokens.
+            tokenBuffer[FOLLOWUP_KEY] = (tokenBuffer[FOLLOWUP_KEY] ?? "") + (event.token as string);
+          } else {
+            // Batch questions (backwards compat for endpoints that send the full array).
+            followupQuestions = [...(followupQuestions ?? []), ...(event.questions as string[])];
+          }
+        } else if (event.type === "citations") {
+          citations = (event.citations as Citation[]) ?? [];
         } else if (event.type === "done") {
           returnedConvId = (event.conversation_id as string) ?? returnedConvId;
+          if (onDone) {
+            flushTokens();
+            const backendReply = event.reply as string | undefined;
+            let replies: string[];
+            if (backendReply === undefined) {
+              const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort((a, b) => a.localeCompare(b));
+              const rawReplies = agentKeys.length > 0
+                ? agentKeys.map(k => replyMap[k])
+                : [replyMap["default"] ?? ""];
+              replies = citations.length > 0
+                ? rawReplies.map(r => injectCitationLinks(r, citations))
+                : rawReplies;
+            } else {
+              replies = [backendReply];
+            }
+            onDone(replies, returnedConvId);
+          }
         } else if (event.type === "error") {
           throw new Error((event.detail as string) ?? "Upstream AI request failed");
         }
       }
     }
   } finally {
+    clearInterval(flushInterval);
+    flushTokens(); // flush any tokens that arrived since the last interval tick
     reader.releaseLock();
   }
 
   const agentKeys = Object.keys(replyMap).filter(k => k !== "default").sort();
-  const replies = agentKeys.length > 0
+  const rawReplies = agentKeys.length > 0
     ? agentKeys.map(k => replyMap[k])
     : [replyMap["default"] ?? ""];
+  const replies = citations.length > 0
+    ? rawReplies.map(r => injectCitationLinks(r, citations))
+    : rawReplies;
 
   return { replies, conversationId: returnedConvId, followupQuestions };
 }

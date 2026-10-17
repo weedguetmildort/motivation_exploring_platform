@@ -6,12 +6,28 @@ import { apiFetch } from "../lib/fetcher";
 export default function QuestionPanelPage() {
   type ChoiceInput = { id: string; label: string };
 
+  type SetId = "a" | "b" | "c" | "d";
+  type Difficulty = "easy" | "medium" | "hard";
+
   type Question = {
     id: string;
     stem: string;
     subtitle?: string | null;
     choices: { id: string; label: string }[];
     correct_choice_id: string;
+    set?: SetId | null;
+    difficulty?: Difficulty | null;
+    difficulty_source?: "ai" | "manual" | null;
+    difficulty_checked?: boolean;
+  };
+
+  const SETS: SetId[] = ["a", "b", "c", "d"];
+  const DIFFICULTIES: Difficulty[] = ["easy", "medium", "hard"];
+
+  const DIFFICULTY_BADGE: Record<Difficulty, string> = {
+    easy: "bg-green-100 text-green-800",
+    medium: "bg-yellow-100 text-yellow-800",
+    hard: "bg-red-100 text-red-800",
   };
 
   const router = useRouter();
@@ -42,6 +58,9 @@ export default function QuestionPanelPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [correctChoiceId, setCorrectChoiceId] = useState("");
   const [editCorrectChoiceId, setEditCorrectChoiceId] = useState("");
+
+  const [judging, setJudging] = useState(false);
+  const [judgeMessage, setJudgeMessage] = useState<string | null>(null);
 
   function beginEdit(q: Question) {
     setEditingId(q.id);
@@ -100,6 +119,54 @@ export default function QuestionPanelPage() {
       alert("Failed to delete question.");
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function assignSet(questionId: string, value: SetId | null) {
+    try {
+      const updated = await apiFetch<Question>(`/api/questions/${questionId}/set`, {
+        method: "PATCH",
+        body: JSON.stringify({ set: value }),
+      });
+      setQuestions((prev) => prev.map((q) => (q.id === questionId ? updated : q)));
+    } catch (e) {
+      console.error("Failed to assign set", e);
+      alert("Failed to assign set.");
+    }
+  }
+
+  async function overrideDifficulty(questionId: string, value: Difficulty | null) {
+    try {
+      const updated = await apiFetch<Question>(`/api/questions/${questionId}/difficulty`, {
+        method: "PATCH",
+        body: JSON.stringify({ difficulty: value }),
+      });
+      setQuestions((prev) => prev.map((q) => (q.id === questionId ? updated : q)));
+    } catch (e) {
+      console.error("Failed to set difficulty", e);
+      alert("Failed to set difficulty.");
+    }
+  }
+
+  async function judgeDifficultyNow() {
+    setJudging(true);
+    setJudgeMessage(null);
+    try {
+      const result = await apiFetch<{ judged: number; skipped: number }>(
+        "/api/questions/judge-difficulty",
+        { method: "POST" },
+      );
+      const data = await apiFetch<Question[]>("/api/questions/");
+      setQuestions(data);
+      setJudgeMessage(
+        `Judged ${result.judged} question${result.judged === 1 ? "" : "s"}` +
+          (result.skipped ? `, ${result.skipped} left unjudged.` : "."),
+      );
+    } catch (e) {
+      console.error("Failed to judge difficulty", e);
+      setJudgeMessage("Failed to run difficulty judging.");
+    } finally {
+      setJudging(false);
     }
   }
 
@@ -206,6 +273,31 @@ export default function QuestionPanelPage() {
     }
   }
 
+  // ── Summary counts (client-side over the loaded list) ──────────────────────
+  const topicCounts = (() => {
+    const map = new Map<string, number>();
+    for (const q of questions) {
+      const key = (q.stem || "").trim() || "(untitled)";
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+  })();
+
+  const difficultyCounts = {
+    easy: questions.filter((q) => q.difficulty === "easy").length,
+    medium: questions.filter((q) => q.difficulty === "medium").length,
+    hard: questions.filter((q) => q.difficulty === "hard").length,
+    unjudged: questions.filter((q) => !q.difficulty).length,
+  };
+
+  const setCounts = {
+    a: questions.filter((q) => q.set === "a").length,
+    b: questions.filter((q) => q.set === "b").length,
+    c: questions.filter((q) => q.set === "c").length,
+    d: questions.filter((q) => q.set === "d").length,
+    unassigned: questions.filter((q) => !q.set).length,
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -220,6 +312,13 @@ export default function QuestionPanelPage() {
             </p>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              onClick={judgeDifficultyNow}
+              disabled={judging}
+              className="btn-secondary disabled:opacity-60"
+            >
+              {judging ? "Judging…" : "Judge difficulty now"}
+            </button>
             <button
               onClick={() => router.push("/dashboard")}
               className="btn-primary"
@@ -244,7 +343,7 @@ export default function QuestionPanelPage() {
           <form onSubmit={onSubmit} className="space-y-4 text-left">
             <div>
               <label className="block text-sm font-medium mb-1">
-                Question stem
+                Topic
               </label>
               <textarea
                 className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -256,7 +355,7 @@ export default function QuestionPanelPage() {
 
             <div>
               <label className="block text-sm font-medium mb-1">
-                Subtitle (optional)
+                Question
               </label>
               <textarea
                 className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -322,6 +421,40 @@ export default function QuestionPanelPage() {
         <div className="bg-white rounded-xl p-8 shadow-sm border text-center">
           <h2 className="text-xl 2xl:text-2xl font-semibold mb-2">View Questions</h2>
 
+          {/* Summary counts */}
+          {questions.length > 0 && (
+            <div className="mb-4 space-y-2 text-left">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold text-gray-500 uppercase tracking-wide mr-1">Topic</span>
+                {topicCounts.map(([topic, count]) => (
+                  <span key={topic} className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-700">
+                    {topic} {count}
+                  </span>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold text-gray-500 uppercase tracking-wide mr-1">Difficulty</span>
+                <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-800">Easy {difficultyCounts.easy}</span>
+                <span className="rounded-full bg-yellow-100 px-2 py-0.5 font-medium text-yellow-800">Medium {difficultyCounts.medium}</span>
+                <span className="rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-800">Hard {difficultyCounts.hard}</span>
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">Unjudged {difficultyCounts.unjudged}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold text-gray-500 uppercase tracking-wide mr-1">Set</span>
+                {SETS.map((s) => (
+                  <span key={s} className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-800">
+                    {s.toUpperCase()} {setCounts[s]}
+                  </span>
+                ))}
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">Unassigned {setCounts.unassigned}</span>
+              </div>
+            </div>
+          )}
+
+          {judgeMessage && (
+            <p className="mb-3 text-sm text-gray-700 text-left" role="status">{judgeMessage}</p>
+          )}
+
           {loadingQuestions && (
             <p className="text-sm text-gray-500 text-center">
               Loading questions…
@@ -359,6 +492,27 @@ export default function QuestionPanelPage() {
                         {!isEditing && q.subtitle && (
                           <div className="mt-1 text-xs text-gray-600">
                             {q.subtitle}
+                          </div>
+                        )}
+                        {!isEditing && (
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {q.difficulty ? (
+                              <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${DIFFICULTY_BADGE[q.difficulty]}`}>
+                                {q.difficulty[0].toUpperCase() + q.difficulty.slice(1)}
+                                {q.difficulty_source === "manual"
+                                  ? " · manual"
+                                  : q.difficulty_source === "ai"
+                                  ? " · AI"
+                                  : ""}
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                                Unjudged
+                              </span>
+                            )}
+                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                              Set {q.set ? q.set.toUpperCase() : "—"}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -403,12 +557,50 @@ export default function QuestionPanelPage() {
                       </ul>
                     )}
 
+                    {/* Inline set + difficulty controls */}
+                    {!isEditing && (
+                      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs">
+                        <label className="flex items-center gap-1">
+                          <span className="text-gray-500">Set</span>
+                          <select
+                            aria-label={`Set for ${q.stem}`}
+                            value={q.set ?? ""}
+                            onChange={(e) =>
+                              assignSet(q.id, (e.target.value || null) as SetId | null)
+                            }
+                            className="rounded border px-2 py-1"
+                          >
+                            <option value="">Unassigned</option>
+                            {SETS.map((s) => (
+                              <option key={s} value={s}>{s.toUpperCase()}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <span className="text-gray-500">Difficulty</span>
+                          <select
+                            aria-label={`Difficulty for ${q.stem}`}
+                            value={q.difficulty ?? ""}
+                            onChange={(e) =>
+                              overrideDifficulty(q.id, (e.target.value || null) as Difficulty | null)
+                            }
+                            className="rounded border px-2 py-1"
+                          >
+                            <option value="">Unjudged</option>
+                            {DIFFICULTIES.map((d) => (
+                              <option key={d} value={d}>{d[0].toUpperCase() + d.slice(1)}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
+
                     {/* Edit form */}
                     {isEditing && (
                       <div className="mt-3 space-y-3 text-xs">
                         <div>
                           <label className="block font-medium mb-1">
-                            Question stem
+                            Topic
                           </label>
                           <textarea
                             className="w-full rounded border px-2 py-1"
@@ -420,7 +612,7 @@ export default function QuestionPanelPage() {
 
                         <div>
                           <label className="block font-medium mb-1">
-                            Subtitle (optional)
+                            Question
                           </label>
                           <textarea
                             className="w-full rounded border px-2 py-1"

@@ -27,6 +27,8 @@ class SurveyScale(BaseModel):
 # and that single_select items have at least two non-empty options.
 class SurveyItemBase(BaseModel):
     stage: SurveyStage
+    scope: Optional[Literal["all_surveys", "post_quiz", "stages"]] = None
+    stages: List[str] = Field(default_factory=list)
     prompt: str = Field(min_length=1)
     type: SurveyItemType = "likert"
     required: bool = True
@@ -94,6 +96,9 @@ class SurveyItemCreate(SurveyItemBase):
 # Payload sent by an admin when partially updating a survey item.
 # All fields are optional so only changed fields need to be provided.
 class SurveyItemUpdate(BaseModel):
+    stage: Optional[str] = None
+    scope: Optional[Literal["all_surveys", "post_quiz", "stages"]] = None
+    stages: Optional[List[str]] = None
     prompt: Optional[str] = None
     type: Optional[SurveyItemType] = None
     required: Optional[bool] = None

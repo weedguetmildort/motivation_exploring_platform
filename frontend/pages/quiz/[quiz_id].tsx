@@ -1,8 +1,8 @@
 // frontend/pages/quiz/[quiz_id].tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/router";
 import QuestionBox, { Choice } from "../../components/QuestionBox";
-import { getMe, logout, type User } from "../../lib/auth";
+import { getMe, invalidateMeCache, logout, type User } from "../../lib/auth";
 import {
   getQuizState,
   submitQuizAnswer,
@@ -13,15 +13,29 @@ import {
 } from "../../lib/quiz";
 import ChatBox from "../../components/ChatBox";
 import QuizCompletionCard from "../../components/QuizCompletionCard";
-import { getNextStep, quizStepId } from "../../lib/study";
+import PageHeader from "../../components/PageHeader";
+import {
+  STEP_SUBTITLES,
+  buildStudySteps,
+  quizPath,
+  quizStepId,
+  stepIndexForPath,
+} from "../../lib/studySteps";
+import { getNextStep } from "../../lib/study";
+import { createReport, type ReportCategory } from "../../lib/reports";
+import { ApiError } from "../../lib/fetcher";
+import { QuestionResearch } from "../../lib/research";
 
-type ExtendedUser = User;
+// Access and post-completion routing are decided by the backend
+// (GET /study/next), which is also enforced server-side in api/quiz.py. The
+// four ladders that used to live here duplicated that logic and assumed a
+// single variant quiz per participant.
 
 export default function QuizPage() {
   const router = useRouter();
   const rawQuizId = [router.query.quiz_id].flat()[0] ?? null;
 
-  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
   const [quizState, setQuizState] = useState<QuizStateResponse | null>(null);
@@ -34,10 +48,36 @@ export default function QuizPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const [externalQuestion, setExternalQuestion] = useState<string | null>(null);
   const [firstChatResponded, setFirstChatResponded] = useState(false);
+  const [showReportForm, setShowReportForm] = useState(false);
+  const [reportCategory, setReportCategory] = useState<ReportCategory>("other");
+  const [reportDescription, setReportDescription] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportSuccess, setReportSuccess] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const lastResetQuestionId = useRef<string | undefined>(undefined);
+  const researchRoot = useRef<HTMLDivElement>(null);
+  const [research, setResearch] = useState<QuestionResearch | undefined>();
 
   const quizId = rawQuizId;
+
+  // Position and label come from the participant's own flow, which is no longer
+  // a fixed 5 steps with exactly two quizzes.
+  const allSteps = user ? buildStudySteps(user) : [];
+  const thisStepIndex = quizId
+    ? stepIndexForPath(allSteps, quizPath(quizId))
+    : -1;
+  const thisStep = thisStepIndex === -1 ? null : allSteps[thisStepIndex];
+
+  function handleFlowError(cause: unknown, message: string) {
+    console.error(cause);
+    if (cause instanceof ApiError && cause.status === 401) {
+      invalidateMeCache();
+      router.replace("/login");
+      return;
+    }
+    setError(cause instanceof ApiError ? `${message} (${cause.status}: ${cause.message})` : message);
+  }
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -50,11 +90,10 @@ export default function QuizPage() {
         const res = await getMe();
         if (cancel) return;
 
-        const u = res.user as ExtendedUser;
+        const u = res.user as User;
 
-        // Admins can open any quiz to test it; participants may only be on the
-        // step the backend says is current. One question, one answer — no
-        // client-side re-derivation of the flow.
+        // Admins may open any quiz to test it; a participant may only be on the
+        // step the backend says is current.
         if (!u.is_admin) {
           const next = await getNextStep();
           if (cancel) return;
@@ -66,8 +105,8 @@ export default function QuizPage() {
         }
 
         setUser(u);
-      } catch {
-        if (!cancel) router.replace("/login");
+      } catch (e) {
+        if (!cancel) handleFlowError(e, "Unable to load your study. Please reload or contact the study team.");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -76,7 +115,7 @@ export default function QuizPage() {
     return () => {
       cancel = true;
     };
-  }, [router, router.isReady, rawQuizId, quizId]);
+  }, [router.isReady, rawQuizId, quizId]);
 
   useEffect(() => {
     if (!user) return;
@@ -99,8 +138,7 @@ export default function QuizPage() {
           setSelectedChoice(null);
         }
       } catch (e) {
-        console.error(e);
-        if (!cancel) setError("Failed to load quiz.");
+        if (!cancel) handleFlowError(e, "Failed to load quiz.");
       }
     })();
 
@@ -113,6 +151,15 @@ export default function QuizPage() {
   const attempt = quizState?.attempt;
   const conversationId = quizState?.conversation_id ?? null;
   const quizCompleted = attempt?.status === "completed";
+  useEffect(() => {
+    if (!user || !conversationId || !current || !researchRoot.current) { setResearch(undefined); return; }
+    const tracker = new QuestionResearch({ userId: user.id, conversationId, questionId: current.id });
+    setResearch(tracker);
+    return tracker.start(researchRoot.current);
+  }, [user?.id, conversationId, current?.id]);
+  const answerIncorrectly = Boolean(
+    current && attempt?.incorrect_question_ids?.includes(current.id),
+  );
 
   useEffect(() => {
     if (!current) return;
@@ -125,21 +172,26 @@ export default function QuizPage() {
     setExternalQuestion(null);
     setFirstChatResponded(false);
     setQuestionCollapsed(false);
+    setShowReportForm(false);
+    setReportCategory("other");
+    setReportDescription("");
+    setReportSuccess(false);
+    setReportError(null);
   }, [current?.id]);
 
   async function redirectAfterCompletion() {
     if (!quizId) return;
     try {
+      invalidateMeCache();
       const next = await getNextStep();
       router.replace(next.next_route);
     } catch (e) {
-      console.error(e);
-      router.replace("/dashboard");
+      handleFlowError(e, "Unable to open the next step. Please try Continue again.");
     }
   }
 
   useEffect(() => {
-    if (!quizCompleted || !user || !quizId) return;
+    if (!quizCompleted || !user?.is_admin || !quizId) return;
     let cancel = false;
     getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
     return () => { cancel = true; };
@@ -153,7 +205,7 @@ export default function QuizPage() {
     );
   }
 
-  if (!user) return null;
+  if (!user) return error ? <div className="p-8" role="alert">{error}</div> : null;
 
   async function onLogout() {
     try {
@@ -178,69 +230,75 @@ export default function QuizPage() {
     setHasAskedChat(true);
   }
 
+  async function onSubmitReport(e: FormEvent) {
+    e.preventDefault();
+    if (!reportDescription.trim() || reportSubmitting) return;
+    setReportSubmitting(true);
+    setReportError(null);
+    try {
+      await createReport({
+        category: reportCategory,
+        description: reportDescription,
+        quiz_id: quizId ?? undefined,
+        question_id: current?.id ?? undefined,
+      });
+      setReportSuccess(true);
+      setReportDescription("");
+      setShowReportForm(false);
+    } catch {
+      setReportError("Failed to submit report. Please try again.");
+    } finally {
+      setReportSubmitting(false);
+    }
+  }
+
   async function onSubmit() {
     if (!quizId || !current || !selectedChoice || submitting) {
       return;
     }
 
     setSubmitting(true);
+    research?.emit("answer_submit_clicked", { choice_id: selectedChoice });
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
+      const state = await submitQuizAnswer(quizId, current.id, selectedChoice, research?.submissionContext());
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
-      console.error(e);
-      setError("Failed to submit answer.");
+      research?.emit("answer_submit_failed", { choice_id: selectedChoice });
+      handleFlowError(e, "Failed to submit answer.");
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] [@media(max-height:700px)]:h-auto bg-gray-50">
-      <header className="shrink-0 bg-white border-b px-4 py-3 sm:px-6 sm:py-4">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">
-              Quiz {quizId ?? rawQuizId}
-              {attempt && (
-                <span className="ml-3 text-base 2xl:text-lg font-normal text-gray-500">
-                  {attempt.answered_count} of {attempt.total_questions} answered
-                  {quizCompleted && (
-                    <span className="ml-2 font-semibold text-green-700">(Completed)</span>
-                  )}
+      //Keep at page height on normal zoom levels but overflow and expand on very short viewports or when zoomed in, so the user can always access the whole quiz interface and see the quiz completion card without needing to scroll through the chat.
+    <div ref={researchRoot} data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
+      <PageHeader
+        className="shrink-0"
+        title={
+          <>
+            {thisStep?.label ?? "Quiz"}
+            {quizCompleted ? (
+              <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
+            ) : (
+              thisStepIndex !== -1 && (
+                <span className="ml-3 text-base font-normal text-gray-400">
+                  Step {thisStepIndex + 1} of {allSteps.length}
                 </span>
-              )}
-            </h1>
-            {!quizCompleted && (
-              <p className="page-subtitle">
-                Answer each question once. Your progress is saved automatically.
-              </p>
+              )
             )}
-          </div>
+          </>
+        }
+        subtitle={!quizCompleted ? STEP_SUBTITLES.quiz_base : undefined}
+        onDashboard={() => router.replace("/dashboard")}
+        onLogout={onLogout}
+      />
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => router.replace("/dashboard")}
-              className="text-sm px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-            >
-              Back to Dashboard
-            </button>
-
-            <button
-              onClick={onLogout}
-              className="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 transition"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="flex-1 min-h-0 md:overflow-auto [@media(max-height:700px)]:flex-none">
-        <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto px-3 py-2 md:px-6 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
+      <div className="flex-1 min-h-0 overflow-hidden [@media(max-height:760px)]:flex-none [@media(max-height:760px)]:overflow-visible">
+        <div className="px-page py-2 md:py-6 h-full md:h-auto [@media(max-height:700px)]:h-auto">
           <div className="flex flex-col gap-2 md:gap-4 h-full md:h-auto [@media(max-height:700px)]:h-auto">
             {error && (
               <div className="text-sm text-red-600" role="alert">
@@ -250,25 +308,26 @@ export default function QuizPage() {
 
             {quizCompleted ? (
               <div className="overflow-auto flex-1 min-h-0 md:flex-none">
-              <QuizCompletionCard
-                isAdmin={user.is_admin}
-                quizResults={quizResults}
-                onDashboard={() => router.replace("/dashboard")}
-                onNextStep={redirectAfterCompletion}
-                onReset={user.is_admin ? async () => {
-                  if (!quizId) return;
-                  await resetQuiz(quizId);
-                  const state = await getQuizState(quizId);
-                  setQuizState(state);
-                  setSelectedChoice(null);
-                  setQuizResults(null);
-                } : undefined}
-              />
+                <QuizCompletionCard
+                  isAdmin={user.is_admin}
+                  quizResults={quizResults}
+                  onDashboard={() => router.replace("/dashboard")}
+                  onNextStep={redirectAfterCompletion}
+                  onReset={user.is_admin ? async () => {
+                    if (!quizId) return;
+                    await resetQuiz(quizId);
+                    invalidateMeCache();
+                    const state = await getQuizState(quizId);
+                    setQuizState(state);
+                    setSelectedChoice(null);
+                    setQuizResults(null);
+                  } : undefined}
+                />
               </div>
             ) : (
               <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
-                  <section className="rounded-xl border bg-white shadow-sm">
+                  <section data-research-region="question" className="rounded-xl border bg-white shadow-sm">
                     {!quizState && (
                       <div className="p-4 text-sm text-gray-500">Loading quiz…</div>
                     )}
@@ -282,72 +341,147 @@ export default function QuizPage() {
                     {quizState && current && (
                       <>
                         <div className="p-4">
-                          <h2 className="text-xl 2xl:text-2xl font-semibold text-gray-900">
-                            Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
-                          </h2>
+                          <div className="flex items-baseline justify-between gap-3 mb-1">
+                            <h2 className="text-2xl 2xl:text-3xl font-semibold text-gray-900">
+                              Question {(attempt?.answered_count ?? 0) + 1} — {current.stem}
+                            </h2>
+                            {attempt && (
+                              <span className="text-base text-gray-400 whitespace-nowrap">
+                                {attempt.answered_count + 1} of {attempt.total_questions}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {current.subtitle && (
-                            <div className="px-4 pb-4">
-                              <p className="text-lg 2xl:text-xl text-gray-600">{current.subtitle}</p>
+                          <div className="px-4 pb-4">
+                            <p className="text-xl 2xl:text-2xl text-gray-600">{current.subtitle}</p>
+                          </div>
+                        )}
+
+                        <hr className="border-gray-200" />
+
+                        <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
+                          <div
+                            data-research-region="answers" className={`space-y-3 transition ${
+                              !hasAskedChat
+                                ? "pointer-events-none opacity-40 blur-[1px]"
+                                : ""
+                            }`}
+                          >
+                            <QuestionBox
+                              choices={current.choices as Choice[]}
+                              value={selectedChoice}
+                              onChange={(choice) => { research?.emit("answer_selected", { choice_id: choice }); setSelectedChoice(choice); }}
+                              className="max-w-3xl 2xl:max-w-none mx-auto"
+                            />
+
+                            <div className="flex items-center justify-between gap-4 pt-2">
+                              <p className="text-base text-gray-600">
+                                Selected:{" "}
+                                <span className="font-semibold text-gray-900">
+                                  {selectedChoice?.toUpperCase() ?? "(none)"}
+                                </span>
+                              </p>
+
+                              <button
+                                onClick={onSubmit}
+                                data-research-region="submit"
+                                disabled={!selectedChoice || submitting || chatLoading}
+                                className="btn-primary disabled:opacity-60 shrink-0"
+                              >
+                                {submitting ? "Submitting…" : "Submit answer"}
+                              </button>
                             </div>
-                          )}
+                          </div>
 
-                          <hr className="border-gray-200" />
-
-                          <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
-                            <div
-                              className={`space-y-3 transition ${
-                                !hasAskedChat
-                                  ? "pointer-events-none opacity-40 blur-[1px]"
-                                  : ""
-                              }`}
-                            >
-                              <QuestionBox
-                                choices={current.choices as Choice[]}
-                                value={selectedChoice}
-                                onChange={setSelectedChoice}
-                                className="max-w-3xl 2xl:max-w-none mx-auto"
-                              />
-
-                              <div className="flex items-center justify-between text-sm text-gray-600 pt-1">
-                                <div>
-                                  Selected:{" "}
-                                  <span className="font-medium">
-                                    {selectedChoice?.toUpperCase() ?? "(none)"}
-                                  </span>
-                                </div>
-
+                          {!hasAskedChat && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
+                                <p className="text-sm text-gray-800 mb-3">
+                                  Before choosing an answer, send this question to
+                                  the assistant and read the explanation.
+                                </p>
                                 <button
-                                  onClick={onSubmit}
-                                  disabled={
-                                    !selectedChoice || submitting || chatLoading
-                                  }
-                                  className="rounded-lg px-4 py-2 bg-blue-600 text-white text-sm font-medium disabled:opacity-60"
+                                  type="button"
+                                  onClick={onAskAssistantAboutQuestion}
+                                  className="inline-flex items-center justify-center rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 transition"
                                 >
-                                  {submitting ? "Submitting…" : "Submit answer"}
+                                  Ask the assistant about this question
                                 </button>
                               </div>
                             </div>
+                          )}
+                        </div>
 
-                            {!hasAskedChat && (
-                              <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="rounded-xl bg-white/90 backdrop-blur shadow-md border px-6 py-4 text-center max-w-sm">
-                                  <p className="text-sm text-gray-800 mb-3">
-                                    Before choosing an answer, send this question to
-                                    the assistant and read the explanation.
-                                  </p>
-                                  <button
-                                    type="button"
-                                    onClick={onAskAssistantAboutQuestion}
-                                    className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition"
-                                  >
-                                    Ask the assistant about this question
-                                  </button>
-                                </div>
+                        {/* Report an issue */}
+                        <div className="border-t">
+                          {reportSuccess && !showReportForm && (
+                            <p className="px-4 py-3 text-sm text-green-700 bg-green-50">
+                              Report submitted — thank you!
+                            </p>
+                          )}
+                          {!reportSuccess && (
+                            <button
+                              type="button"
+                              onClick={() => setShowReportForm((v) => !v)}
+                              className="flex items-center gap-1.5 px-4 py-3 text-xs text-gray-400 hover:text-gray-600 transition w-full"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                              </svg>
+                              {showReportForm ? "Cancel" : "Report an issue"}
+                            </button>
+                          )}
+                          {showReportForm && (
+                            <form onSubmit={onSubmitReport} className="px-4 pb-4 flex flex-col gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
+                                <select
+                                  value={reportCategory}
+                                  onChange={(e) => setReportCategory(e.target.value as ReportCategory)}
+                                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-accent-400"
+                                >
+                                  <option value="bug">Bug</option>
+                                  <option value="unclear_question">Unclear question</option>
+                                  <option value="wrong_answer">Wrong answer</option>
+                                  <option value="technical">Technical issue</option>
+                                  <option value="other">Other</option>
+                                </select>
                               </div>
-                            )}
-                          </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+                                <textarea
+                                  value={reportDescription}
+                                  onChange={(e) => setReportDescription(e.target.value)}
+                                  placeholder="Describe the issue…"
+                                  rows={3}
+                                  required
+                                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-accent-400 resize-none"
+                                />
+                              </div>
+                              {reportError && (
+                                <p className="text-xs text-red-600">{reportError}</p>
+                              )}
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => { setShowReportForm(false); setReportError(null); }}
+                                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={!reportDescription.trim() || reportSubmitting}
+                                  className="rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50 transition"
+                                >
+                                  {reportSubmitting ? "Submitting…" : "Submit report"}
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                        </div>
                       </>
                     )}
                   </section>
@@ -356,7 +490,7 @@ export default function QuizPage() {
                 <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none [@media(max-height:700px)]:min-h-[420px] min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
-                      <ChatBox
+                      <ChatBox research={research}
                         quizId={quizId}
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}
@@ -366,6 +500,9 @@ export default function QuizPage() {
                         onAssistantMessage={() => setFirstChatResponded(true)}
                         questionCollapsed={questionCollapsed}
                         onToggleQuestion={() => setQuestionCollapsed((c: boolean) => !c)}
+                        answerIncorrectly={answerIncorrectly}
+                        answerChoices={current?.choices}
+                        questionId={current?.id}
                       />
                     </div>
                   )}

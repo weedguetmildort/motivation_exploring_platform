@@ -1,7 +1,8 @@
 # backend/app/api/quiz.py
+from datetime import datetime
 from fastapi import APIRouter, Depends, Request, HTTPException
 from ..schemas.user import UserPublic
-from .auth import build_user_public, get_current_user, get_current_user_doc
+from .auth import get_current_user
 from ..schemas.quiz import QuizStateResponse, SubmitAnswerRequest, QuizResultsResponse
 from ..services import study_flow
 from ..services.quiz import (
@@ -22,41 +23,64 @@ def require_admin(user: UserPublic = Depends(get_current_user)) -> UserPublic:
     return user
 
 
-def require_quiz_access(request: Request) -> UserPublic:
-    """Allow a quiz only when it is the participant's current step.
+def require_quiz_access(
+    request: Request, user: UserPublic = Depends(get_current_user)
+) -> UserPublic:
+    """Allow the current quiz and safe reads/retries of completed quizzes.
 
-    Enforced server-side, not just in the page, so a participant cannot skip
-    ahead in the flow (or redo a finished quiz) by typing a URL. Admins are
-    exempt so they can still exercise any variant from the playground.
+    Enforced server-side, not just by the page's redirects, so a participant
+    cannot skip ahead in the flow or change finished answers by typing a URL.
+
+    Two deliberate exemptions:
+      * admins, so the playground can still exercise any variant out of order;
+      * any quiz_id the main-study registry doesn't know — notably the Phase 13
+        quiz-2 ids (base2/followup2/...), which are gated by
+        followup_study_granted rather than by this flow. Those keep exactly the
+        access behaviour they have today.
     """
-    doc = get_current_user_doc(request)
     quiz_id = request.path_params["quiz_id"]
 
-    if doc.get("is_admin"):
-        return build_user_public(doc)
-
-    if not study_flow.is_known_quiz_id(quiz_id):
-        raise HTTPException(status_code=404, detail="Unknown quiz")
+    if user.is_admin or not study_flow.is_known_quiz_id(quiz_id):
+        return user
 
     step_id = study_flow.quiz_step_id(quiz_id)
 
-    if step_id not in (doc.get("step_order") or []):
+    if step_id not in user.step_order:
         raise HTTPException(status_code=403, detail="Quiz is not part of your study flow")
 
-    if not study_flow.is_step_unlocked(doc, step_id):
+    completed_retry = step_id in user.completed_steps and (
+        request.method == "GET" or request.url.path.endswith("/answer")
+    )
+    if completed_retry and not request.app.state.db["quiz_attempts"].find_one(
+        {"user_id": user.id, "quiz_id": quiz_id, "status": "completed"}, {"_id": 1}
+    ):
+        raise HTTPException(status_code=409, detail="Saved quiz answers are unavailable; contact the study team")
+    if not completed_retry and not study_flow.is_step_unlocked_for(user.step_order, user.completed_steps, step_id):
         raise HTTPException(status_code=403, detail="This quiz is not your current step")
 
-    return build_user_public(doc)
+    return user
 
 
 @router.get("/state", response_model=QuizStateResponse)
 def get_quiz_state(request: Request, user: UserPublic = Depends(require_quiz_access)):
     db = request.app.state.db
     quiz_id = request.path_params["quiz_id"]
-    attempt_doc = _load_or_create_attempt(db, user.id, user.email, quiz_id)
+    attempt_doc = _load_or_create_attempt(
+        db,
+        user.id,
+        user.email,
+        quiz_id,
+        quiz_sets=user.quiz_sets,
+        quiz_set=(user.quiz_set_assignment or {}).get(quiz_id),
+    )
 
     # If quiz is completed, just return state
     if attempt_doc["status"] == "completed":
+        if study_flow.quiz_step_id(quiz_id) not in user.completed_steps:
+            study_flow.mark_step_completed(
+                db, user.id, study_flow.quiz_step_id(quiz_id),
+                attempt_doc.get("completed_at") or datetime.utcnow(),
+            )
         return build_quiz_state_response(db, attempt_doc)
 
     # Otherwise, ensure we record "shown_at" for the current question
@@ -85,9 +109,15 @@ def submit_quiz_answer(
         quiz_id=quiz_id,
         question_id=data.question_id,
         choice_id=data.choice_id,
+        telemetry_page_id=data.telemetry_page_id,
+        telemetry_elapsed_ms=data.telemetry_elapsed_ms,
     )
 
-    return build_quiz_state_response(db, updated_doc)
+    state = build_quiz_state_response(db, updated_doc)
+    if state.current_question:
+        updated_doc = record_question_shown(db, updated_doc, state.current_question.id)
+        state = build_quiz_state_response(db, updated_doc)
+    return state
 
 # Admin endpoint to get quiz results for a given quiz attempt
 @router.get("/results", response_model=QuizResultsResponse)

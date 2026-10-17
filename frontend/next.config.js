@@ -16,15 +16,15 @@ const nextConfig = {
     return [
       {
         source: "/api/chat/:path*",
-        destination: `${backend}/chat/:path*`
+        destination: `${backend}/chat/:path*`,
       },
       {
-        source: "/auth/:path*", 
-        destination: `${backend}/auth/:path*`
+        source: "/auth/:path*",
+        destination: `${backend}/auth/:path*`,
       },
-      { 
+      {
         source: "/api/questions/:path*",
-        destination: `${backend}/questions/:path*` 
+        destination: `${backend}/questions/:path*`,
       },
       {
         source: "/api/quiz/:path*",
@@ -42,9 +42,39 @@ const nextConfig = {
         source: "/api/study/:path*",
         destination: `${backend}/study/:path*`,
       },
-        {
+      {
+        source: "/api/knowledge-links/:path*",
+        destination: `${backend}/knowledge-links/:path*`,
+      },
+      {
+        source: "/api/allowlist/:path*",
+        destination: `${backend}/allowlist/:path*`,
+      },
+      {
+        source: "/api/copy-events/:path*",
+        destination: `${backend}/copy-events/:path*`,
+      },
+      {
+        source: "/api/links/:path*",
+        destination: `${backend}/links/:path*`,
+      },
+      {
+        source: "/api/users/:path*",
+        destination: `${backend}/users/:path*`,
+      },
+      {
+        source: "/api/messages/:path*",
+        destination: `${backend}/messages/:path*`,
+      },
+      {
+        source: "/api/export/:path*",
+        destination: `${backend}/export/:path*`,
+      },
+      // Catch-all: strips the /api prefix so any backend route works without
+      // needing a dedicated rule above. Backend routes all live at root level.
+      {
         source: "/api/:path*",
-        destination: `${backend}/api/:path*`,
+        destination: `${backend}/:path*`,
       },
     ];
   },

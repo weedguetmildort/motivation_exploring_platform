@@ -1,14 +1,21 @@
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .message import AIMessageMetadata
+from .question import QuestionChoice
 
 
 # Sent by the client to any chat endpoint.
 class ChatRequest(BaseModel):
+    request_id: str | None = Field(default=None, min_length=1, max_length=100)
     message: str
-    conversation_id: str | None = None  # omit to start a new conversation
-    agents: list[str] = []             # e.g. ["agentA", "agentB"] for double-agent mode
+    conversation_id: str | None = None
+    agents: list[str] = Field(default_factory=list)
+    answer_incorrectly: bool = False
+    question_text: str | None = None
+    answer_choices: list[QuestionChoice] = Field(default_factory=list)
+    question_id: str | None = None
+    trigger: str | None = None  # "manual" | "followup_chip" | "auto_question"
 
 
 # Returned by non-streaming chat endpoints (e.g. legacy or search-based).
@@ -33,6 +40,8 @@ class FollowupResponse(BaseModel):
 # A single message entry used in the lightweight user-facing history view.
 # Content may be a plain string (user message) or a list of strings (multi-agent reply).
 class UserMessageData(BaseModel):
+    request_id: str | None = None
+    question_id: str | None = None
     role: str               # "user" or "assistant"
     content: str | list[str]
 

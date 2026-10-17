@@ -1,0 +1,79 @@
+name: Deploy shared studies
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/tests.yml
+
+  deploy:
+    needs: tests
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+      APP_BACKEND: ${{ secrets.HEROKU_APP_BACKEND }}
+      APP_FRONTEND: ${{ secrets.HEROKU_APP_FRONTEND }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check shared apps and database configuration
+        id: preflight
+        run: python backend/scripts/research_deployment.py shared-preflight
+      - uses: docker/setup-buildx-action@v4
+      - name: Login to Heroku Container Registry
+        run: printf '%s' "$HEROKU_API_KEY" | docker login --username=_ --password-stdin registry.heroku.com
+      - name: Build and push shared backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          tags: registry.heroku.com/${{ env.APP_BACKEND }}/web
+          outputs: type=image,oci-mediatypes=false,push=true
+          cache-from: type=gha,scope=shared-backend
+          cache-to: type=gha,mode=max,scope=shared-backend
+      - name: Build and push shared frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          build-args: |
+            BACKEND_URL=${{ steps.preflight.outputs.backend_url }}
+          tags: registry.heroku.com/${{ env.APP_FRONTEND }}/web
+          outputs: type=image,oci-mediatypes=false,push=true
+          cache-from: type=gha,scope=shared-frontend
+          cache-to: type=gha,mode=max,scope=shared-frontend
+      - name: Install Heroku CLI
+        run: curl --fail --silent --show-error https://cli-assets.heroku.com/install-ubuntu.sh | sh
+      - name: Release shared apps
+        run: |
+          python backend/scripts/research_deployment.py shared-preflight
+          heroku container:release web --app "$APP_BACKEND"
+          heroku container:release web --app "$APP_FRONTEND"
+          heroku ps:scale web=1 --app "$APP_BACKEND"
+          heroku ps:scale web=1 --app "$APP_FRONTEND"
+      - name: Verify health and study access routing
+        env:
+          BACKEND_URL: ${{ steps.preflight.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+        run: python backend/scripts/research_deployment.py shared-smoke
+      - name: Show shared study URL
+        env:
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+        run: printf 'Both studies:%s\n' "$FRONTEND_URL" >> "$GITHUB_STEP_SUMMARY"

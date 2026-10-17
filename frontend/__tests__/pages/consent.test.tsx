@@ -1,0 +1,259 @@
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import ConsentPage from "../../pages/consent";
+import {
+  getMe,
+  invalidateMeCache,
+  logout,
+  recordConsentAgreement,
+  recordConsentDecline,
+  recordConsentViewed,
+  sendConsentAbandonedBeacon,
+} from "../../lib/auth";
+
+const mockReplace = jest.fn();
+const mockPush = jest.fn();
+jest.mock("next/router", () => ({
+  useRouter: () => ({ replace: mockReplace, push: mockPush }),
+}));
+
+jest.mock("../../lib/auth", () => ({
+  getMe: jest.fn(),
+  logout: jest.fn(),
+  invalidateMeCache: jest.fn(),
+  recordConsentAgreement: jest.fn(),
+  recordConsentDecline: jest.fn(),
+  recordConsentViewed: jest.fn(),
+  sendConsentAbandonedBeacon: jest.fn(),
+}));
+
+const mockGetMe = getMe as jest.Mock;
+const mockLogout = logout as jest.Mock;
+const mockInvalidateMeCache = invalidateMeCache as jest.Mock;
+const mockRecordConsentAgreement = recordConsentAgreement as jest.Mock;
+const mockRecordConsentDecline = recordConsentDecline as jest.Mock;
+const mockRecordConsentViewed = recordConsentViewed as jest.Mock;
+const mockSendConsentAbandonedBeacon = sendConsentAbandonedBeacon as jest.Mock;
+
+const authedUser = { id: "1", email: "user@example.com", is_admin: false };
+
+describe("ConsentPage", () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockPush.mockClear();
+    mockGetMe.mockReset();
+    mockLogout.mockReset();
+    mockInvalidateMeCache.mockReset();
+    mockRecordConsentAgreement.mockReset();
+    mockRecordConsentAgreement.mockResolvedValue({ ok: true });
+    mockRecordConsentDecline.mockReset();
+    mockRecordConsentDecline.mockResolvedValue({ ok: true });
+    mockRecordConsentViewed.mockReset();
+    mockRecordConsentViewed.mockResolvedValue({ ok: true });
+    mockSendConsentAbandonedBeacon.mockReset();
+  });
+
+  it("shows a loading state before the session check resolves", () => {
+    mockGetMe.mockReturnValue(new Promise(() => {}));
+    render(<ConsentPage />);
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+  });
+
+  it("redirects to login when the session check fails", async () => {
+    mockGetMe.mockRejectedValue(new Error("not authenticated"));
+    render(<ConsentPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  it("renders the consent form once authenticated", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    expect(await screen.findByText("Research Consent Form")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Understanding Overreliance towards AI in Educational Settings/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Neha Rani \(Faculty in CISE\)/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "neharani@ufl.edu" })
+    ).toHaveAttribute("href", "mailto:neharani@ufl.edu");
+  });
+
+  it("renders all required information sections", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    await screen.findByText("Research Consent Form");
+
+    expect(screen.getByText("Purpose of the Study")).toBeInTheDocument();
+    expect(screen.getByText("What will you be asked to do")).toBeInTheDocument();
+    expect(screen.getByText("Time Required")).toBeInTheDocument();
+    expect(screen.getByText("Research Benefits")).toBeInTheDocument();
+    expect(screen.getByText("Research Risks")).toBeInTheDocument();
+    expect(screen.getByText("Statement of Confidentiality")).toBeInTheDocument();
+    expect(
+      screen.getByText("Who to contact if you have questions")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Voluntary Participation")).toBeInTheDocument();
+    expect(screen.getByText(/about 45 minutes/)).toBeInTheDocument();
+    expect(screen.getByText(/352-273-9600/)).toBeInTheDocument();
+  });
+
+  it("renders the agree and decline buttons", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    expect(await screen.findByRole("button", { name: "I agree to participate" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "I do not wish to participate" })).toBeInTheDocument();
+  });
+
+  it("saves the displayed consent text and navigates to the dashboard when the user agrees", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    const agreeButton = await screen.findByRole("button", { name: "I agree to participate" });
+    fireEvent.click(agreeButton);
+
+    await waitFor(() => expect(mockRecordConsentAgreement).toHaveBeenCalled());
+    const savedText = mockRecordConsentAgreement.mock.calls[0][0] as string;
+    expect(savedText).toContain("Research Consent Form");
+    expect(savedText).toContain("Purpose of the Study");
+    expect(savedText).toContain("Voluntary Participation");
+    // The instructions/buttons box itself should not be part of the saved snapshot.
+    expect(savedText).not.toContain("I agree to participate");
+
+    expect(mockInvalidateMeCache).toHaveBeenCalled();
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/dashboard"));
+    expect(mockLogout).not.toHaveBeenCalled();
+  });
+
+  it("shows an error and does not navigate when saving consent fails", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockRecordConsentAgreement.mockRejectedValue(new Error("network error"));
+    render(<ConsentPage />);
+
+    const agreeButton = await screen.findByRole("button", { name: "I agree to participate" });
+    fireEvent.click(agreeButton);
+
+    expect(
+      await screen.findByText("Failed to save your consent. Please try again.")
+    ).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalledWith("/dashboard");
+    expect(agreeButton).not.toBeDisabled();
+  });
+
+  it("saves the displayed consent text, then logs out and redirects to login when the user declines", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockLogout.mockResolvedValue(undefined);
+    render(<ConsentPage />);
+
+    const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(mockRecordConsentDecline).toHaveBeenCalled());
+    const savedText = mockRecordConsentDecline.mock.calls[0][0] as string;
+    expect(savedText).toContain("Research Consent Form");
+    expect(savedText).not.toContain("I do not wish to participate");
+
+    await waitFor(() => expect(mockLogout).toHaveBeenCalled());
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("redirects to login even if logout fails when the user declines", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockLogout.mockRejectedValue(new Error("network error"));
+    render(<ConsentPage />);
+
+    const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  it("still logs out and redirects even if saving the decline record fails", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockLogout.mockResolvedValue(undefined);
+    mockRecordConsentDecline.mockRejectedValue(new Error("network error"));
+    render(<ConsentPage />);
+
+    const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(mockLogout).toHaveBeenCalled());
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+  });
+
+  // ── Funnel telemetry (steps 5 and 6c) ─────────────────────────────────────
+
+  it("records that the consent page was viewed once authenticated (step 5)", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    await screen.findByText("Research Consent Form");
+    await waitFor(() => expect(mockRecordConsentViewed).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not record a view when the session check fails", async () => {
+    mockGetMe.mockRejectedValue(new Error("not authenticated"));
+    render(<ConsentPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"));
+    expect(mockRecordConsentViewed).not.toHaveBeenCalled();
+  });
+
+  it("renders even if recording the view fails (telemetry is best-effort)", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockRecordConsentViewed.mockRejectedValue(new Error("network error"));
+    render(<ConsentPage />);
+
+    // The form still appears despite the rejected telemetry write.
+    expect(await screen.findByText("Research Consent Form")).toBeInTheDocument();
+  });
+
+  it("beacons abandonment when the page is hidden before the user responds (step 6c)", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    await screen.findByText("Research Consent Form");
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not beacon abandonment before the session check resolves", () => {
+    mockGetMe.mockReturnValue(new Promise(() => {})); // never resolves
+    render(<ConsentPage />);
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).not.toHaveBeenCalled();
+  });
+
+  it("does not beacon abandonment after the user agrees", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    render(<ConsentPage />);
+
+    const agreeButton = await screen.findByRole("button", { name: "I agree to participate" });
+    fireEvent.click(agreeButton);
+    await waitFor(() => expect(mockRecordConsentAgreement).toHaveBeenCalled());
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).not.toHaveBeenCalled();
+  });
+
+  it("does not beacon abandonment after the user declines", async () => {
+    mockGetMe.mockResolvedValue({ user: authedUser });
+    mockLogout.mockResolvedValue(undefined);
+    render(<ConsentPage />);
+
+    const declineButton = await screen.findByRole("button", { name: "I do not wish to participate" });
+    fireEvent.click(declineButton);
+    await waitFor(() => expect(mockRecordConsentDecline).toHaveBeenCalled());
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(mockSendConsentAbandonedBeacon).not.toHaveBeenCalled();
+  });
+});

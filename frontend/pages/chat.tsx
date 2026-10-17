@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import ChatBox from "../components/ChatBox";
 import { getMe, logout, type User } from "../lib/auth";
+import PageHeader from "../components/PageHeader";
 
 // Simple client-side guard. For stronger security, also check auth on the backend per request.
 export default function ChatPage() {
@@ -18,14 +19,14 @@ export default function ChatPage() {
         if (!cancel) {
           if (!res.user.is_admin) {
             // Non-admin → block access and redirect
-            window.location.href = "/dashboard";
+            router.replace("/dashboard");
             return;
           }
           setUser(res.user);
         }
       } catch {
         // Not logged in → send to login
-        if (!cancel) window.location.href = "/login";
+        if (!cancel) router.replace("/login");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -52,28 +53,12 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="site-header">
-        <div className="site-header-inner">
-          <div>
-            <h1 className="page-title">Chat</h1>
-            <p className="page-subtitle">Ask questions and interact with AI chatbot</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push("/dashboard")}
-              className="btn-primary"
-            >
-              Back to Dashboard
-            </button>
-            <button
-              onClick={onLogout}
-              className="btn-secondary"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        title="Chat"
+        subtitle="Ask questions and interact with AI chatbot"
+        onDashboard={() => router.push("/dashboard")}
+        onLogout={onLogout}
+      />
 
       <div className="page-container">
         <ChatBox quizId="default" />

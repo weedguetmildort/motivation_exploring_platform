@@ -17,6 +17,7 @@ export type SurveyItem = {
   scale_max?: number;
   scale_left_label?: string | null;
   scale_right_label?: string | null;
+  scale?: { min: number; max: number; anchors?: string[] | null } | null;
   // for select types:
   options?: { id: string; label: string }[];
 };
@@ -43,7 +44,11 @@ export type SurveyStateResponse = {
 };
 
 export async function getSurveyState(stage: SurveyStage) {
-  return apiFetch<SurveyStateResponse>(`/api/surveys/${stage}/state`); // no /api here if you proxy
+  const state = await apiFetch<SurveyStateResponse>(`/api/surveys/${stage}/state`);
+  return { ...state, items: (state.items ?? []).map(item => item.scale ? { ...item,
+    scale_min: item.scale.min, scale_max: item.scale.max,
+    scale_left_label: item.scale.anchors?.[0], scale_right_label: item.scale.anchors?.[1],
+  } : item) };
 }
 
 export async function submitSurvey(stage: SurveyStage, answers: SurveyAnswer[]) {
