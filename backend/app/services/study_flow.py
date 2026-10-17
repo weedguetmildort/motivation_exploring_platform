@@ -728,6 +728,22 @@ def ensure_user_flow(db, doc: dict) -> dict:
     return doc
 
 
+def completed_result_steps(db, doc):
+    """Collect completed active results; legacy final responses belong to one step."""
+    uid = str(doc["_id"])
+    steps = set()
+    for response in db["survey_responses"].find({"user_id": uid, "status": "completed"}):
+        stage = response.get("stage")
+        if stage == LEGACY_POST_VARIANT_STAGE:
+            stage = post_variant_stage(doc.get("assigned_var") or AssignedVar.followup.value)
+        if stage:
+            steps.add(survey_step_id(stage))
+    for attempt in db["quiz_attempts"].find({"user_id": uid, "status": "completed"}):
+        if attempt.get("quiz_id"):
+            steps.add(quiz_step_id(attempt["quiz_id"]))
+    return steps
+
+
 def reconcile_saved_progress(db, doc: dict) -> dict:
     """Repair old progress snapshots from completed, live result records once.
 
@@ -738,21 +754,11 @@ def reconcile_saved_progress(db, doc: dict) -> dict:
     if doc.get("progress_reconciled_version", 0) >= 1:
         return doc
 
-    uid = str(doc["_id"])
     # Retry against a fresh snapshot if another request advances or resets a
     # step while migration is running. Never replace concurrent progress.
     while doc.get("progress_reconciled_version", 0) < 1:
         order = list(doc.get("step_order") or [])
-        saved_steps = set()
-        for response in db["survey_responses"].find({"user_id": uid, "status": "completed"}):
-            stage = response.get("stage")
-            if stage == SurveyStage.post_variant.value:
-                stage = post_variant_stage(doc.get("assigned_var") or AssignedVar.followup.value)
-            if stage:
-                saved_steps.add(survey_step_id(stage))
-        for attempt in db["quiz_attempts"].find({"user_id": uid, "status": "completed"}):
-            if attempt.get("quiz_id"):
-                saved_steps.add(quiz_step_id(attempt["quiz_id"]))
+        saved_steps = completed_result_steps(db, doc)
         previous = doc.get("completed_steps")
         completed = set(previous or []) | saved_steps
         patch = {

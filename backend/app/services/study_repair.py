@@ -50,13 +50,7 @@ def repair_study1_flow(db, doc):
         completed.update(flow._legacy_backfill_completed({**doc, "assigned_var": assigned}, order))
         if "survey:post_variant" in completed or doc.get("survey_post_variant_completed"):
             completed.add(flow.survey_step_id(flow.post_variant_stage(assigned)))
-        completed.update(flow.quiz_step_id(a["quiz_id"]) for a in db["quiz_attempts"].find({"user_id": uid, "status": "completed"}))
-        for response in db["survey_responses"].find({"user_id": uid, "status": "completed"}):
-            stage = response.get("stage")
-            if stage == "post_variant":
-                stage = flow.post_variant_stage(assigned)
-            if stage:
-                completed.add(flow.survey_step_id(stage))
+        completed.update(flow.completed_result_steps(db, {**doc, "assigned_var": assigned}))
         protocol = {**(doc.get("study_protocol") or {}), "mode": flow.MODE_SINGLE_VARIANT}
         patch = {"step_order": order, "completed_steps": [s for s in order if s in completed],
                  "variant_sequence": [assigned], "assigned_var": assigned, "study_flow_mode": flow.MODE_SINGLE_VARIANT,
