@@ -5,14 +5,16 @@ import { getStudyConfig, updateStudyConfig, type StudyConfig } from "../../lib/s
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
+const mockRouter = { replace: mockReplace, push: mockPush, query: {} };
 
 jest.mock("next/router", () => ({
-  useRouter: () => ({ replace: mockReplace, push: mockPush, query: {} }),
+  useRouter: () => mockRouter,
 }));
 
 jest.mock("../../lib/auth", () => ({
   getMe: jest.fn(),
   logout: jest.fn(),
+  invalidateMeCache: jest.fn(),
 }));
 
 jest.mock("../../lib/study", () => ({
@@ -78,6 +80,20 @@ describe("StudyFlowPanel — question sets", () => {
 
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
     expect(mockGetStudyConfig).not.toHaveBeenCalled();
+  });
+
+  it("saves all survey switches and admin names for future enrollments", async () => {
+    mockGetStudyConfig.mockResolvedValue(makeConfig({ study_id: "study-2" }));
+    mockUpdateStudyConfig.mockResolvedValue(makeConfig({ study_id: "study-2" }));
+    render(<StudyFlowPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable all" }));
+    fireEvent.change(screen.getByLabelText("Admin name for post_double"), { target: { value: "Verification after dual agents" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save flow" }));
+    await waitFor(() => expect(mockUpdateStudyConfig).toHaveBeenCalled());
+    const stages = mockUpdateStudyConfig.mock.calls[0][0].survey_stages;
+    expect(Object.values(stages).every((s: any) => s.enabled === false)).toBe(true);
+    expect(stages.post_double.name).toBe("Verification after dual agents");
+    expect(screen.getByLabelText(/Every variant/)).toBeDisabled();
   });
 
   it("renders one set selector per quiz", async () => {

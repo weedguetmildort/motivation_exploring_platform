@@ -15,6 +15,7 @@ describe("saveMyDemographics", () => {
       gender: "female",
       race_ethnicity: ["asian"],
       year: "junior",
+      academic_level: "undergraduate",
       age: "21",
     };
 

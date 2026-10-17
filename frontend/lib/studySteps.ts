@@ -186,7 +186,7 @@ export function buildStudySteps(user: User): StudyStep[] {
       kind,
       subtitle: isQuiz
         ? STEP_SUBTITLES.quiz_base
-        : surveyNumber === 1
+        : key === "pre_quiz"
           ? STEP_SUBTITLES.survey_pre
           : "You've completed that quiz. Please answer a few questions about it.",
       completed: completed.has(stepId),

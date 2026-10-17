@@ -51,7 +51,7 @@ export default function DashboardPage() {
   const steps = buildStudySteps(user);
   const nextStep = steps.find((s) => !s.completed && s.path);
   const allComplete = steps.every((s) => s.completed);
-  const actionVerb = user.survey_pre_base_completed ? "Continue" : "Start";
+  const actionVerb = steps.some(step => step.completed) ? "Continue" : "Start";
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -187,7 +187,7 @@ export default function DashboardPage() {
                 { href: "/quiz/followup", label: "Follow-Up Questions", theme: "followup" },
                 { href: "/quiz/double",   label: "Dual Agent",          theme: "double" },
                 { href: "/quiz/links",    label: "Embedded Links",      theme: "links" },
-              ] as const).map((q) => (
+              ] as const).filter(q => !user.step_order?.length || user.step_order.includes(`quiz:${q.href.split("/").pop()}`)).map((q) => (
                 <a key={q.href} href={studyPageUrl(q.href)} data-quiz-theme={q.theme}
                   className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-accent-400 hover:shadow-md transition-all"
                 >
@@ -206,11 +206,15 @@ export default function DashboardPage() {
 
             {/* Surveys */}
             <div className="grid gap-4 sm:grid-cols-3">
-              {([
+              {(user.step_order?.length ? steps.filter(step => step.kind === "survey").map(step => {
+                const key = new URLSearchParams(step.path.split("?")[1]).get("stage") ?? "";
+                const names = (user.study_protocol?.survey_stages ?? {}) as Record<string, { name?: string }>;
+                return { href: step.path, label: names[key]?.name ?? step.label, desc: step.subtitle };
+              }) : [
                 { href: "/survey?stage=pre_quiz",     label: "Pre-Quiz Survey", desc: "Before the base quiz · 5 min" },
                 { href: "/survey?stage=post_base",    label: "Mid Survey",      desc: "After the base quiz · 5 min" },
                 { href: "/survey?stage=post_variant", label: "Final Survey",    desc: "After the variant quiz · 5 min" },
-              ] as const).map((s) => (
+              ]).map((s) => (
                 <a key={s.href} href={studyPageUrl(s.href)}
                   className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
                 >

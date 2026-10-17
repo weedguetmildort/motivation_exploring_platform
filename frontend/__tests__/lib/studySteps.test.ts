@@ -17,6 +17,15 @@ function makeUser(overrides: Partial<User> = {}): User {
   };
 }
 
+test("disabled initial surveys do not turn the first post-quiz survey into a baseline survey", () => {
+  const user = makeUser({ step_order: ["quiz:base", "quiz:double", "survey:post_double"],
+    study_protocol: { survey_stages: { post_double: { name: "Admin-only descriptive name", enabled: true } } } });
+  const steps = buildStudySteps(user);
+  expect(steps.map(s => s.label)).toEqual(["Quiz Part 1", "Quiz Part 2", "Survey 1"]);
+  expect(steps[2].subtitle).toContain("completed that quiz");
+  expect(stageConfigFor(user, "post_double").submitLabel).toBe("Finish");
+});
+
 describe("isActiveSurveyStage", () => {
   it("returns true for the active survey stages", () => {
     expect(isActiveSurveyStage("pre_quiz")).toBe(true);

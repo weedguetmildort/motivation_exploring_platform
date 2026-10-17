@@ -1,3 +1,6 @@
+import SurveyTimeline from "../components/SurveyTimeline";
+import { DEFAULT_SURVEY_STAGES } from "../lib/surveyConfig";
+import type { SurveyStages } from "../lib/study";
 import { selectedStudy } from "../lib/studySelection";
 // frontend/pages/study_flow_panel.tsx
 //
@@ -10,7 +13,7 @@ import { selectedStudy } from "../lib/studySelection";
 // reorder cannot scramble a participant's run.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import { getMe, logout } from "../lib/auth";
+import { getMe, logout, invalidateMeCache } from "../lib/auth";
 import {
   getStudyConfig,
   updateStudyConfig,
@@ -32,6 +35,7 @@ export default function StudyFlowPanel() {
   // quiz_id -> set letter. "" means unmapped (draws from the whole pool).
   const [quizSetMap, setQuizSetMap] = useState<Record<string, string>>({});
 
+  const [surveys, setSurveys] = useState<SurveyStages>(DEFAULT_SURVEY_STAGES);
   const [questionCount, setQuestionCount] = useState(5);
   const [wrongCount, setWrongCount] = useState(3);
   const [wrongRate, setWrongRate] = useState("");
@@ -42,6 +46,7 @@ export default function StudyFlowPanel() {
 
   function applyConfig(c: StudyConfig) {
     setConfig(c);
+    setSurveys(c.survey_stages ?? DEFAULT_SURVEY_STAGES);
     setQuestionCount(c.questions_per_quiz ?? 5); setWrongCount(c.wrong_ai_count ?? 3);
     setWrongRate(c.wrong_ai_rate == null ? "" : String(c.wrong_ai_rate));
     setOrder(c.variant_order);
@@ -102,6 +107,7 @@ export default function StudyFlowPanel() {
     setError(null);
     try {
       const c = await updateStudyConfig({
+        survey_stages: surveys,
         questions_per_quiz: questionCount, wrong_ai_count: wrongCount,
         wrong_ai_rate: wrongRate === "" ? null : Number(wrongRate),
         mode,
@@ -111,6 +117,7 @@ export default function StudyFlowPanel() {
         ...(quizSetMode === "preset" ? { quiz_set_map: quizSetMap } : {}),
       });
       applyConfig(c);
+      invalidateMeCache();
       setSavedAt(new Date().toLocaleTimeString());
     } catch (e) {
       console.error(e);
@@ -136,7 +143,8 @@ export default function StudyFlowPanel() {
 
   const dirty =
     !!config &&
-    (questionCount !== (config.questions_per_quiz ?? 5) ||
+    (JSON.stringify(surveys) !== JSON.stringify(config.survey_stages ?? DEFAULT_SURVEY_STAGES) ||
+      questionCount !== (config.questions_per_quiz ?? 5) ||
       wrongCount !== (config.wrong_ai_count ?? 3) ||
       wrongRate !== (config.wrong_ai_rate == null ? "" : String(config.wrong_ai_rate)) ||
       mode !== config.mode ||
@@ -160,11 +168,10 @@ export default function StudyFlowPanel() {
   // survey, then each variant followed by its own survey.
   function previewSteps(sequence: string[]): string[] {
     const labels = config?.variant_labels ?? {};
-    const steps = ["Pre-Quiz Survey", "Base Quiz", "Post-Base Quiz Survey"];
-    for (const v of sequence) {
-      const label = labels[v] ?? v;
-      steps.push(`${label} Quiz`, `Post-${label} Survey`);
-    }
+    const steps: string[] = [];
+    function survey(key: string) { if (surveys[key]?.enabled !== false) steps.push(surveys[key]?.name ?? key); }
+    survey("pre_quiz"); steps.push("Base Quiz"); survey("post_base");
+    for (const v of sequence) { steps.push(`${labels[v] ?? v} Quiz`); survey(`post_${v}`); }
     return steps;
   }
 
@@ -230,6 +237,7 @@ export default function StudyFlowPanel() {
               type="radio"
               name="mode"
               className="mt-1"
+              disabled={!!config.study_id}
               checked={mode === "all_variants"}
               onChange={() => setMode("all_variants")}
             />
@@ -250,6 +258,7 @@ export default function StudyFlowPanel() {
               type="radio"
               name="mode"
               className="mt-1"
+              disabled={!!config.study_id}
               checked={mode === "single_variant"}
               onChange={() => setMode("single_variant")}
             />
@@ -258,18 +267,20 @@ export default function StudyFlowPanel() {
                 One variant per participant (between-subjects)
               </span>
               <span className="block text-sm text-gray-600">
-                The original behaviour, kept as a fallback: the base quiz plus a
+                The original Study 1 structure: the base quiz plus a
                 single round-robin-assigned variant.
               </span>
             </span>
           </label>
         </section>
 
+        <p className="my-4 text-sm font-medium text-blue-800">{(config.study_id ?? selectedStudy()) === "study-1" ? "Study 1 · Base + one assigned variant" : "Study 2 · Base + all variants"}. The quiz structure is fixed for each study.</p>
+        <SurveyTimeline stages={surveys} onChange={setSurveys} />
         {/* Order */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Variant order</h2>
           <p className="mt-1 text-sm text-gray-600">
-            The base quiz always runs first — it is the no-assistance baseline.
+            The base interaction quiz always runs first.
             This list controls the variants that follow it.
           </p>
 

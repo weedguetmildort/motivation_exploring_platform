@@ -197,6 +197,17 @@ describe("SurveyPage", () => {
     expect(screen.getByText("Strongly agree")).toBeInTheDocument();
   });
 
+  it("renders and submits single-select answers", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockQuery = { stage: "pre_quiz" };
+    mockGetSurveyState.mockResolvedValue(surveyState([{ id: "choice", stage: "pre_quiz", prompt: "Choose a response", type: "single_select", required: true, options: [{ id: "a", label: "Yes" }, { id: "b", label: "No" }] }]));
+    mockSubmitSurvey.mockResolvedValue({ ok: true });
+    render(<SurveyPage />);
+    fireEvent.click(await screen.findByRole("radio", { name: "Yes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz Part 1" }));
+    await waitFor(() => expect(mockSubmitSurvey).toHaveBeenCalledWith("pre_quiz", [{ item_id: "choice", value: "a" }]));
+  });
+
   it("renders an unsupported-type message for non-likert items", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser });
     mockQuery = { stage: "pre_quiz" };

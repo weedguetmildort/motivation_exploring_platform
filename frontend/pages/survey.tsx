@@ -368,6 +368,13 @@ export default function SurveyPage() {
                 {items.map((item) =>
                   item.type === "likert" ? (
                     <div key={item.id}>{renderLikertRow(item)}</div>
+                  ) : item.type === "single_select" ? (
+                    <fieldset key={item.id} className="space-y-3 rounded-xl border border-gray-200 bg-white p-5 sm:p-6">
+                      <legend className="px-2 text-base font-medium text-gray-900">{item.prompt}{item.required && " *"}</legend>
+                      {(item.options ?? []).map(option => <label key={option.id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3">
+                        <input type="radio" name={item.id} value={option.id} checked={values[item.id] === option.id} onChange={() => setValues(previous => ({ ...previous, [item.id]: option.id }))} />{option.label}
+                      </label>)}
+                    </fieldset>
                   ) : (
                     <div
                       key={item.id}

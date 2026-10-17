@@ -39,8 +39,12 @@ export type StudyFlowResponse = {
 
 /** How each quiz's question set is chosen. */
 export type QuizSetMode = "preset" | "random" | "balanced_random";
+export type SurveyStageSetting = { name: string; enabled: boolean };
+export type SurveyStages = Record<string, SurveyStageSetting>;
 
 export type StudyConfig = {
+  study_id?: string | null;
+  survey_stages?: SurveyStages;
   mode: "all_variants" | "single_variant";
   variant_order: string[];
   counterbalance: boolean;
@@ -66,6 +70,7 @@ export type StudyConfig = {
 };
 
 export type StudyConfigUpdate = {
+  survey_stages?: SurveyStages;
   questions_per_quiz?: number;
   wrong_ai_count?: number;
   wrong_ai_rate?: number | null;
