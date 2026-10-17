@@ -57,7 +57,7 @@ BASE_QUIZ_ID = "base"
 BASE_FIRST = True
 
 # Legacy response stage used by the old single-variant flow. Still recognised so
-# historical survey_responses docs remain readable, but never scheduled.
+# historical responses remain readable; also used for one final variant survey.
 LEGACY_POST_VARIANT_STAGE = SurveyStage.post_variant.value
 
 
@@ -157,7 +157,7 @@ def _build_registry() -> dict[str, Step]:
             variant=variant,
         )
 
-    # Legacy stage from the single-variant flow. Readable, never scheduled.
+    # Stable final stage, also compatible with legacy single-variant responses.
     steps[survey_step_id(LEGACY_POST_VARIANT_STAGE)] = Step(
         id=survey_step_id(LEGACY_POST_VARIANT_STAGE),
         kind="survey",
@@ -221,6 +221,7 @@ class StudyConfig:
     wrong_ai_rate: Optional[float] = None
     requires_study1_completion: bool = True
     survey_stages: tuple[tuple[str, str, bool], ...] = ()
+    variant_survey_mode: str = "per_variant"
 
     # Which question set each quiz draws from. Giving every quiz its own set is
     # what stops a participant seeing the same question twice across their four
@@ -242,6 +243,7 @@ class StudyConfig:
             "wrong_ai_rate": self.wrong_ai_rate,
             "requires_study1_completion": self.requires_study1_completion,
             "survey_stages": survey_stage_settings(self.survey_stages),
+            "variant_survey_mode": self.variant_survey_mode,
             "quiz_set_mode": self.quiz_set_mode,
             "quiz_set_map": dict(self.quiz_set_map),
         }
@@ -256,7 +258,7 @@ def survey_stage_settings(stored=None) -> dict:
     supplied = stored if isinstance(stored, dict) else {key: {"name": name, "enabled": enabled} for key, name, enabled in (stored or ())}
     return {step.key: {"name": (supplied.get(step.key, {}).get("name") or step.label).strip(),
                        "enabled": supplied.get(step.key, {}).get("enabled", True)}
-            for step in STEP_REGISTRY.values() if step.kind == "survey" and step.key != LEGACY_POST_VARIANT_STAGE}
+            for step in STEP_REGISTRY.values() if step.kind == "survey"}
 
 
 def _survey_stage_tuple(stored=None):
@@ -345,6 +347,7 @@ def load_study_config(db) -> StudyConfig:
         wrong_ai_rate=doc.get("wrong_ai_rate"),
         requires_study1_completion=bool(doc.get("requires_study1_completion", True)),
         survey_stages=_survey_stage_tuple(doc.get("survey_stages")),
+        variant_survey_mode=doc.get("variant_survey_mode", profile_for(db).get("variant_survey_mode", "per_variant")),
         quiz_set_mode=quiz_set_mode,
         quiz_set_map=_reconcile_quiz_set_map(doc.get("quiz_set_map")),
     )
@@ -364,6 +367,7 @@ def save_study_config(
     quiz_set_mode: Optional[str] = None,
     quiz_set_map: Optional[dict | Iterable[tuple[str, str]]] = None,
     survey_stages: Optional[dict] = None,
+    variant_survey_mode: Optional[str] = None,
 ) -> StudyConfig:
     """Persist an admin flow change and bump the flow version.
 
@@ -374,6 +378,9 @@ def save_study_config(
     if mode is not None and study_profile_mode(db) and mode != study_profile_mode(db):
         raise ValueError("The quiz structure is fixed for this study")
 
+    new_survey_mode = current.variant_survey_mode if variant_survey_mode is None else variant_survey_mode
+    if new_survey_mode not in ("per_variant", "end_only"):
+        raise ValueError("Unknown variant survey mode")
     new_mode = mode if mode in (MODE_ALL_VARIANTS, MODE_SINGLE_VARIANT) else current.mode
     new_order = _reconcile_variant_order(
         variant_order if variant_order is not None else current.variant_order
@@ -405,6 +412,7 @@ def save_study_config(
         or new_quiz_set_mode != current.quiz_set_mode
         or new_quiz_set_map != current.quiz_set_map
         or new_surveys != current.survey_stages
+        or new_survey_mode != current.variant_survey_mode
     )
 
     version = current.version + 1 if changed else current.version
@@ -421,6 +429,7 @@ def save_study_config(
                 "quiz_set_mode": new_quiz_set_mode,
                 "quiz_set_map": dict(new_quiz_set_map),
                 "survey_stages": survey_stage_settings(new_surveys),
+                "variant_survey_mode": new_survey_mode,
                 "updated_at": datetime.utcnow(),
             }
         },
@@ -436,6 +445,7 @@ def save_study_config(
         quiz_set_mode=new_quiz_set_mode,
         quiz_set_map=new_quiz_set_map,
         survey_stages=new_surveys,
+        variant_survey_mode=new_survey_mode,
     )
 
 
@@ -479,7 +489,7 @@ def variant_sequence_for_seq(seq: int, config: StudyConfig) -> list[str]:
     return [variants[(offset + i) % n] for i in range(n)]
 
 
-def build_step_order(variant_sequence: Iterable[str], survey_stages=None) -> list[str]:
+def build_step_order(variant_sequence: Iterable[str], survey_stages=None, variant_survey_mode="per_variant") -> list[str]:
     """Assemble the full step list: intro survey, base quiz, then each variant."""
     steps: list[str] = [survey_step_id(SurveyStage.pre_base.value)]
 
@@ -491,7 +501,10 @@ def build_step_order(variant_sequence: Iterable[str], survey_stages=None) -> lis
         if not is_known_quiz_id(variant):
             continue
         steps.append(quiz_step_id(variant))
-        steps.append(survey_step_id(post_variant_stage(variant)))
+        if variant_survey_mode == "per_variant":
+            steps.append(survey_step_id(post_variant_stage(variant)))
+    if variant_survey_mode == "end_only":
+        steps.append(survey_step_id(LEGACY_POST_VARIANT_STAGE))
 
     settings = survey_stage_settings(survey_stages)
     return [step for step in steps if not step.startswith("survey:") or settings.get(step.split(":", 1)[1], {}).get("enabled", True)]
@@ -602,7 +615,7 @@ def assign_flow(db, forced_first: Optional[str] = None) -> dict:
         # Legacy backup: one variant per participant, exactly as before.
         sequence = sequence[:1]
 
-    step_order = build_step_order(sequence, config.survey_stages)
+    step_order = build_step_order(sequence, config.survey_stages, config.variant_survey_mode)
 
     return {
         "step_order": step_order,
@@ -652,7 +665,7 @@ def _legacy_backfill_completed(doc: dict, step_order: list[str]) -> list[str]:
         # Marking the new per-variant step complete means they are never asked
         # again, and the original response document is left untouched for
         # analysis rather than migrated.
-        mark(survey_step_id(post_variant_stage(assigned)))
+        mark(survey_response_step({**doc, "step_order": step_order}, LEGACY_POST_VARIANT_STAGE))
 
     return completed
 
@@ -707,7 +720,7 @@ def ensure_user_flow(db, doc: dict) -> dict:
     if config.mode == MODE_SINGLE_VARIANT:
         sequence = sequence[:1]
 
-    step_order = build_step_order(sequence, (doc.get("study_protocol") or {}).get("survey_stages"))
+    step_order = build_step_order(sequence, (doc.get("study_protocol") or {}).get("survey_stages"), (doc.get("study_protocol") or {}).get("variant_survey_mode", "per_variant"))
     completed = _legacy_backfill_completed(doc, step_order)
 
     update = {
@@ -728,16 +741,20 @@ def ensure_user_flow(db, doc: dict) -> dict:
     return doc
 
 
+def survey_response_step(doc, stage):
+    if stage == LEGACY_POST_VARIANT_STAGE and survey_step_id(stage) not in (doc.get("step_order") or []):
+        stage = post_variant_stage(doc.get("assigned_var") or AssignedVar.followup.value)
+    return survey_step_id(stage)
+
+
 def completed_result_steps(db, doc):
     """Collect completed active results; legacy final responses belong to one step."""
     uid = str(doc["_id"])
     steps = set()
     for response in db["survey_responses"].find({"user_id": uid, "status": "completed"}):
         stage = response.get("stage")
-        if stage == LEGACY_POST_VARIANT_STAGE:
-            stage = post_variant_stage(doc.get("assigned_var") or AssignedVar.followup.value)
         if stage:
-            steps.add(survey_step_id(stage))
+            steps.add(survey_response_step(doc, stage))
     for attempt in db["quiz_attempts"].find({"user_id": uid, "status": "completed"}):
         if attempt.get("quiz_id"):
             steps.add(quiz_step_id(attempt["quiz_id"]))
@@ -893,7 +910,7 @@ def derive_legacy_flags(doc: dict) -> dict:
     variant_survey_steps = []
     for s in step_order:
         step = get_step(s)
-        if not step or not step.variant:
+        if not step or (not step.variant and step.key != LEGACY_POST_VARIANT_STAGE):
             continue
         if step.kind == "quiz":
             variant_quiz_steps.append(s)

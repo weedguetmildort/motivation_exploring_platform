@@ -46,6 +46,7 @@ class StudyFlowResponse(BaseModel):
 
 # Admin view of the active flow configuration.
 class StudyConfigPublic(BaseModel):
+    variant_survey_mode: Literal["per_variant", "end_only"] = "per_variant"
     mode: Literal["all_variants", "single_variant"]
     variant_order: List[str]
     counterbalance: bool
@@ -81,6 +82,7 @@ class StudyConfigPublic(BaseModel):
 
 # Admin payload for changing the flow. All fields optional - partial update.
 class StudyConfigUpdate(BaseModel):
+    variant_survey_mode: Optional[Literal["per_variant", "end_only"]] = None
     survey_stages: Optional[dict[str, SurveyStageSettings]] = None
     questions_per_quiz: Optional[int] = Field(None, ge=1, le=100)
     wrong_ai_count: Optional[int] = Field(None, ge=0, le=100)

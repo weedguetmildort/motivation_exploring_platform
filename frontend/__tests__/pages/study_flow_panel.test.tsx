@@ -82,6 +82,19 @@ describe("StudyFlowPanel — question sets", () => {
     expect(mockGetStudyConfig).not.toHaveBeenCalled();
   });
 
+  it("saves one final variant survey and exposes its independent switch", async () => {
+    mockUpdateStudyConfig.mockResolvedValue(makeConfig({ variant_survey_mode: "end_only" }));
+    render(<StudyFlowPanel />);
+    await screen.findByRole("button", { name: "Disable all" });
+    fireEvent.change(screen.getByLabelText("Variant survey schedule"), { target: { value: "end_only" } });
+    expect(screen.queryByLabelText("Enable post_double")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Enable post_variant"));
+    fireEvent.click(screen.getByRole("button", { name: "Save flow" }));
+    await waitFor(() => expect(mockUpdateStudyConfig).toHaveBeenCalledWith(expect.objectContaining({
+      variant_survey_mode: "end_only", survey_stages: expect.objectContaining({ post_variant: expect.objectContaining({ enabled: false }) }),
+    })));
+  });
+
   it("saves all survey switches and admin names for future enrollments", async () => {
     mockGetStudyConfig.mockResolvedValue(makeConfig({ study_id: "study-2" }));
     mockUpdateStudyConfig.mockResolvedValue(makeConfig({ study_id: "study-2" }));

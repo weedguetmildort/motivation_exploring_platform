@@ -112,6 +112,7 @@ def _config_public(config: study_flow.StudyConfig, study_id=None) -> StudyConfig
     return StudyConfigPublic(
         study_id=study_id,
         survey_stages=study_flow.survey_stage_settings(config.survey_stages),
+        variant_survey_mode=config.variant_survey_mode,
         mode=config.mode,
         variant_order=list(config.variant_order),
         counterbalance=config.counterbalance,
@@ -216,6 +217,7 @@ def update_config(
         counterbalance=data.counterbalance,
         quiz_set_mode=data.quiz_set_mode,
         quiz_set_map=data.quiz_set_map,
+        variant_survey_mode=data.variant_survey_mode,
         survey_stages={key: value.model_dump() for key, value in data.survey_stages.items()} if data.survey_stages is not None else None,
     )
     return _config_public(config, getattr(db, "study_id", None) if isinstance(getattr(db, "study_id", None), str) else None)

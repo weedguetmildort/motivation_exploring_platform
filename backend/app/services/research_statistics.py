@@ -128,8 +128,10 @@ def survey_associations(rows, participants, responses, items, seed=2026, repetit
             continue
         pid = response.get("user_id"); stage = response.get("stage", "")
         quiz = "base" if stage == "post_base" else people.get(pid, {}).get("assigned_var") if stage == "post_variant" else stage[5:] if stage.startswith("post_") else None
-        if not quiz:
+        covered = response.get("covered_quiz_ids") or ([quiz] if quiz else [])
+        if not covered:
             continue
+        quiz = covered[0] if len(covered) == 1 else "all_variants"
         saved_definitions = {item["id"]: item for item in response.get("item_snapshot", [])}
         for answer in response.get("answers", []):
             item = saved_definitions.get(answer.get("item_id")) or definitions.get(answer.get("item_id"))
@@ -147,7 +149,7 @@ def survey_associations(rows, participants, responses, items, seed=2026, repetit
             version = hashlib.sha256(json.dumps({key: item.get(key) for key in ("prompt", "type", "reverse_scored", "scale")}, sort_keys=True).encode()).hexdigest()[:16]
             versions[(answer["item_id"], version)] = item
             for metric in ("accuracy", "wrong_ai_agreement", "active_ms", "human_reasoning"):
-                measurements = outcomes.get((pid, quiz, metric))
+                measurements = [value for covered_quiz in covered for value in outcomes.get((pid, covered_quiz, metric), [])]
                 if measurements:
                     groups[(quiz, answer["item_id"], version, metric)][pid] = (value, mean(measurements))
     rng = random.Random(seed)
@@ -161,7 +163,7 @@ def survey_associations(rows, participants, responses, items, seed=2026, repetit
                         "participants": len(pairs), "spearman_rho": coefficient,
                         "participant_bootstrap_95_interval": [quantile(samples, .025), quantile(samples, .975)] if len(samples) >= repetitions * .8 else None})
     return {"analysis_status": "exploratory", "associations": results,
-            "limitations": "Post-quiz Likert items are associated with same-quiz behavior, one point per participant and item version. Saved survey definitions govern reverse scoring when available; legacy responses fall back to the current definitions. These associations are not causal and do not define a trust scale or validate a construct."}
+            "limitations": "Post-quiz Likert items are associated with same-quiz behavior, one point per participant and item version. Final surveys covering multiple variants use aggregate variant behavior and are labeled all_variants. Saved survey definitions govern reverse scoring when available; legacy responses fall back to the current definitions. These associations are not causal and do not define a trust scale or validate a construct."}
 
 
 def lexical_clusters(packets, threshold=.45, limit=500):

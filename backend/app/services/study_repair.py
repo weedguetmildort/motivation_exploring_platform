@@ -32,14 +32,15 @@ def repair_study1_flow(db, doc):
     # Preserve the historical survey schedule, not today's settings. The repair
     # only removes the mistakenly assigned variants.
     settings = (doc.get("study_protocol") or {}).get("survey_stages")
-    order = flow.build_step_order([assigned], settings)
+    survey_mode = "end_only" if "survey:post_variant" in (doc.get("step_order") or []) else "per_variant"
+    order = flow.build_step_order([assigned], settings, survey_mode)
     while True:
         completed = set(doc.get("completed_steps") or [])
         completed.update(flow._legacy_backfill_completed({**doc, "assigned_var": assigned}, order))
         if "survey:post_variant" in completed or doc.get("survey_post_variant_completed"):
-            completed.add(flow.survey_step_id(flow.post_variant_stage(assigned)))
+            completed.add(flow.survey_response_step({**doc, "step_order": order, "assigned_var": assigned}, "post_variant"))
         completed.update(flow.completed_result_steps(db, {**doc, "assigned_var": assigned}))
-        protocol = {**(doc.get("study_protocol") or {}), "mode": flow.MODE_SINGLE_VARIANT}
+        protocol = {**(doc.get("study_protocol") or {}), "mode": flow.MODE_SINGLE_VARIANT, "variant_survey_mode": survey_mode}
         patch = {"step_order": order, "completed_steps": [s for s in order if s in completed],
                  "variant_sequence": [assigned], "assigned_var": assigned, "study_flow_mode": flow.MODE_SINGLE_VARIANT,
                  "study_protocol": protocol, "study1_repair_version": 1, "progress_reconciled_version": 1}

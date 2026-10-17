@@ -6,6 +6,7 @@ export const DEFAULT_SURVEY_STAGES: SurveyStages = {
   post_followup: { name: "Post-Follow-up Questions Survey", enabled: true },
   post_double: { name: "Post-Dual Agent Survey", enabled: true },
   post_links: { name: "Post-Embedded Links Survey", enabled: true },
+  post_variant: { name: "Final Survey", enabled: true },
 };
 
 export type QuestionScope = "all_surveys" | "post_quiz" | "stages";

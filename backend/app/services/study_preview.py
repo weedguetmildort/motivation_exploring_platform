@@ -7,7 +7,7 @@ def admin_preview_fields(db, doc):
     sequence = list(config.variant_order)
     if config.mode == flow.MODE_SINGLE_VARIANT:
         sequence = [doc["assigned_var"]] if doc.get("assigned_var") in flow.all_variants() else sequence[:1]
-    order = flow.build_step_order(sequence, config.survey_stages)
+    order = flow.build_step_order(sequence, config.survey_stages, config.variant_survey_mode)
     patch = {"step_order": order, "study_protocol": config.as_dict(), "study_flow_version": config.version,
              "study_flow_mode": config.mode, "variant_sequence": sequence, "assigned_var": sequence[0],
              "completed_steps": [step for step in (doc.get("completed_steps") or []) if step in order],

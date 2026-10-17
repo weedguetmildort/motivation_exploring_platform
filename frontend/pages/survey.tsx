@@ -140,7 +140,6 @@ export default function SurveyPage() {
 
       try {
         // One request: the backend serves this stage's own saved answers while
-        // sourcing the question definitions from the post_base item bank
         // The survey service composes and freezes the applicable questions.
         const state = await getSurveyState(activeSurveyStage);
         if (cancel) return;

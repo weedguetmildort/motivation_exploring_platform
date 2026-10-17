@@ -1,6 +1,6 @@
 import SurveyTimeline from "../components/SurveyTimeline";
 import { DEFAULT_SURVEY_STAGES } from "../lib/surveyConfig";
-import type { SurveyStages } from "../lib/study";
+import type { SurveyStages, VariantSurveyMode } from "../lib/study";
 import { selectedStudy } from "../lib/studySelection";
 // frontend/pages/study_flow_panel.tsx
 //
@@ -35,6 +35,7 @@ export default function StudyFlowPanel() {
   // quiz_id -> set letter. "" means unmapped (draws from the whole pool).
   const [quizSetMap, setQuizSetMap] = useState<Record<string, string>>({});
 
+  const [surveyMode, setSurveyMode] = useState<VariantSurveyMode>("per_variant");
   const [surveys, setSurveys] = useState<SurveyStages>(DEFAULT_SURVEY_STAGES);
   const [questionCount, setQuestionCount] = useState(5);
   const [wrongCount, setWrongCount] = useState(3);
@@ -46,6 +47,7 @@ export default function StudyFlowPanel() {
 
   function applyConfig(c: StudyConfig) {
     setConfig(c);
+    setSurveyMode(c.variant_survey_mode ?? "per_variant");
     setSurveys(c.survey_stages ?? DEFAULT_SURVEY_STAGES);
     setQuestionCount(c.questions_per_quiz ?? 5); setWrongCount(c.wrong_ai_count ?? 3);
     setWrongRate(c.wrong_ai_rate == null ? "" : String(c.wrong_ai_rate));
@@ -108,6 +110,7 @@ export default function StudyFlowPanel() {
     try {
       const c = await updateStudyConfig({
         survey_stages: surveys,
+        variant_survey_mode: surveyMode,
         questions_per_quiz: questionCount, wrong_ai_count: wrongCount,
         wrong_ai_rate: wrongRate === "" ? null : Number(wrongRate),
         mode,
@@ -143,7 +146,8 @@ export default function StudyFlowPanel() {
 
   const dirty =
     !!config &&
-    (JSON.stringify(surveys) !== JSON.stringify(config.survey_stages ?? DEFAULT_SURVEY_STAGES) ||
+    (surveyMode !== (config.variant_survey_mode ?? "per_variant") ||
+      JSON.stringify(surveys) !== JSON.stringify(config.survey_stages ?? DEFAULT_SURVEY_STAGES) ||
       questionCount !== (config.questions_per_quiz ?? 5) ||
       wrongCount !== (config.wrong_ai_count ?? 3) ||
       wrongRate !== (config.wrong_ai_rate == null ? "" : String(config.wrong_ai_rate)) ||
@@ -171,7 +175,8 @@ export default function StudyFlowPanel() {
     const steps: string[] = [];
     function survey(key: string) { if (surveys[key]?.enabled !== false) steps.push(surveys[key]?.name ?? key); }
     survey("pre_quiz"); steps.push("Base Quiz"); survey("post_base");
-    for (const v of sequence) { steps.push(`${labels[v] ?? v} Quiz`); survey(`post_${v}`); }
+    for (const v of sequence) { steps.push(`${labels[v] ?? v} Quiz`); if (surveyMode === "per_variant") survey(`post_${v}`); }
+    if (surveyMode === "end_only") survey("post_variant");
     return steps;
   }
 
@@ -247,8 +252,7 @@ export default function StudyFlowPanel() {
               </span>
               <span className="block text-sm text-gray-600">
                 Each participant does the base quiz, then all{" "}
-                {config.known_variants.length} variants, with a survey after
-                each.
+                {config.known_variants.length} variants. Configure their surveys below.
               </span>
             </span>
           </label>
@@ -275,7 +279,7 @@ export default function StudyFlowPanel() {
         </section>
 
         <p className="my-4 text-sm font-medium text-blue-800">{(config.study_id ?? selectedStudy()) === "study-1" ? "Study 1 · Base + one assigned variant" : "Study 2 · Base + all variants"}. The quiz structure is fixed for each study.</p>
-        <SurveyTimeline stages={surveys} onChange={setSurveys} />
+        <SurveyTimeline stages={surveys} onChange={setSurveys} mode={surveyMode} onModeChange={setSurveyMode} />
         {/* Order */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Variant order</h2>

@@ -190,35 +190,41 @@ def item_applies(item, stage):
     return data.get("stage") == stage or (data.get("stage") == "post_base" and stage != "pre_quiz")
 
 
-def effective_survey_items(db, stage):
+def effective_survey_items(db, stage, variants=None):
     _validate_stage(stage)
-    return list({item.id: item for item in list_survey_items(db, active_only=True) if item_applies(item, stage)}.values())
+    targets = [stage]
+    if stage == study_flow.LEGACY_POST_VARIANT_STAGE:
+        targets += [study_flow.post_variant_stage(variant) for variant in (study_flow.all_variants() if variants is None else variants)]
+    return list({item.id: item for item in list_survey_items(db, active_only=True)
+                 if any(item_applies(item, target) for target in targets)}.values())
 
 
 def load_saved_response(db, user_id, stage):
     doc = get_survey_responses_collection(db).find_one({"user_id": user_id, "stage": stage})
     if doc is None and stage.startswith("post_") and stage not in ("post_base", "post_variant"):
         user = db["users"].find_one({"_id": ObjectId(user_id)})
-        if user and stage == study_flow.post_variant_stage(user.get("assigned_var") or ""):
+        if user and "survey:post_variant" not in (user.get("step_order") or []) and stage == study_flow.post_variant_stage(user.get("assigned_var") or ""):
             doc = get_survey_responses_collection(db).find_one({"user_id": user_id, "stage": "post_variant"})
     return doc
 
 
 def _snapshot_items(db, doc, stage, user_id):
     if "item_snapshot" not in doc:
-        items = effective_survey_items(db, stage)
+        user = db["users"].find_one({"_id": ObjectId(user_id)}) or {}
+        variants = [quiz for quiz in study_flow.quiz_ids_in_order(user.get("step_order") or []) if quiz in study_flow.all_variants()]
+        items = effective_survey_items(db, stage, variants)
+        covered = variants if stage == "post_variant" else [stage[5:]] if stage.startswith("post_") else []
         # A completed legacy response must not gain newly required questions.
         if doc.get("status") == "completed":
             answered = {a["item_id"] for a in doc.get("answers", [])}
             items = [item for item in items if item.id in answered]
         snapshot = [item.model_dump() for item in _seeded_shuffle(items, f"{user_id}:{stage}")]
-        user = db["users"].find_one({"_id": ObjectId(user_id)})
-        protocol = (user or {}).get("study_protocol") or {}
+        protocol = user.get("study_protocol") or {}
         settings = study_flow.survey_stage_settings(protocol.get("survey_stages"))
         name = settings.get(stage, {}).get("name") or "Final Survey"
         col = get_survey_responses_collection(db)
         col.update_one({"_id": doc["_id"], "item_snapshot": {"$exists": False}}, {"$set": {
-            "item_snapshot": snapshot, "survey_name": name, "study_flow_version": protocol.get("version"),
+            "item_snapshot": snapshot, "covered_quiz_ids": covered, "survey_name": name, "study_flow_version": protocol.get("version"),
         }})
         doc = col.find_one({"_id": doc["_id"]})
     return doc, [SurveyItemPublic(**item) for item in doc["item_snapshot"]]

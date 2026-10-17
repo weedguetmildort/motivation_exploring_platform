@@ -21,6 +21,7 @@ export default function EffectiveSurveyPreview({ settings, stage, onStageChange,
   return <section aria-label="Effective survey preview" className="mb-6 rounded-xl border bg-white p-6 shadow-sm">
     <h2 className="text-lg font-semibold">Effective survey preview</h2>
     <p className="mt-1 text-sm text-gray-600">Includes active shared questions and additions for this stage. Already opened surveys keep their saved questions.</p>
+    {stage === "post_variant" && <p className="mt-2 text-sm text-gray-600">This admin preview includes additions for every possible variant. Participants see additions only for the variants assigned to them.</p>}
     <label className="mt-3 block text-sm">Preview survey<select aria-label="Preview survey" value={stage} onChange={e => onStageChange(e.target.value)} className="ml-3 rounded border p-2">{Object.entries(settings).map(([key, item]) => <option key={key} value={key}>{item.name}{item.enabled ? "" : " (disabled for new enrollments)"}</option>)}</select></label>
     <p className="mt-3 text-sm">{settings[stage]?.enabled ? "Enabled" : "Disabled"}</p>
     <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="mt-3 rounded-lg border px-3 py-2 text-sm">{open ? "Hide preview" : "Preview effective survey"}</button>

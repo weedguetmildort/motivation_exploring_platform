@@ -161,6 +161,7 @@ def export_survey_responses(
                 "user_email": user_email,
                 "stage": stage,
                 "survey_name": doc.get("survey_name", ""),
+                "covered_quiz_ids": json.dumps(doc["covered_quiz_ids"]) if "covered_quiz_ids" in doc else "",
                 "archived": bool(doc.get("archived_at")),
                 "item_id": _fmt(answer.get("item_id")),
                 "response_value": _fmt(answer.get("value")),

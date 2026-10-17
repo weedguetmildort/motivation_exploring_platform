@@ -72,6 +72,15 @@ def test_clusters_are_deterministic_exploratory_and_exclude_auto_prompts():
     assert result == lexical_clusters(list(reversed(packets)))
 
 
+def test_combined_final_survey_is_associated_with_covered_variants_not_first_variant():
+    rows = [row(pid, quiz, correct) for pid, correct in [("a", False), ("b", False), ("c", True)] for quiz in ("followup", "double", "links")]
+    responses = [{"user_id": pid, "stage": "post_variant", "covered_quiz_ids": ["followup", "double", "links"],
+        "status": "completed", "answers": [{"item_id": "item", "value": score}]} for pid, score in [("a", 1), ("b", 3), ("c", 5)]]
+    result = survey_associations(rows, [], responses, [{"_id": "item", "type": "likert", "prompt": "Overall"}], repetitions=10)
+    assert {item["quiz_id"] for item in result["associations"]} == {"all_variants"}
+    assert result["associations"][0]["participants"] == 3
+
+
 def mixed_rows():
     rng = random.Random(12)
     rows = []
