@@ -41,6 +41,7 @@ export const LEGACY_STEP_IDS = [
 
 export type StudyStep = {
   id: StudyStepId;
+  key?: string;
   label: string;
   abbr: string;
   path: string;
@@ -179,6 +180,7 @@ export function buildStudySteps(user: User): StudyStep[] {
 
     return [{
       id: stepId,
+      key,
       label,
       abbr: label,
       path: routeForStep(kind, key),

@@ -207,7 +207,7 @@ export default function DashboardPage() {
             {/* Surveys */}
             <div className="grid gap-4 sm:grid-cols-3">
               {(user.step_order?.length ? steps.filter(step => step.kind === "survey").map(step => {
-                const key = new URLSearchParams(step.path.split("?")[1]).get("stage") ?? "";
+                const key = step.key ?? "";
                 const names = (user.study_protocol?.survey_stages ?? {}) as Record<string, { name?: string }>;
                 return { href: step.path, label: names[key]?.name ?? step.label, desc: step.subtitle };
               }) : [
