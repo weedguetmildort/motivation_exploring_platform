@@ -1,9 +1,14 @@
 from pydantic import BaseModel
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, get_args
 
 
 # The set a question belongs to. `null` = unassigned (backward-compatible default).
 SetId = Literal["a", "b", "c", "d"]
+
+# The set letters, derived from SetId so there is one source of truth. Adding a
+# set means editing SetId alone — study_flow's per-quiz set mapping and its
+# reconciliation both read this.
+ALL_SET_IDS: tuple[str, ...] = get_args(SetId)
 
 # AI/admin-estimated difficulty level.
 Difficulty = Literal["easy", "medium", "hard"]

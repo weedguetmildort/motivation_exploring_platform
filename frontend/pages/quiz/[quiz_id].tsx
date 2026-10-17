@@ -16,70 +16,20 @@ import QuizCompletionCard from "../../components/QuizCompletionCard";
 import PageHeader from "../../components/PageHeader";
 import {
   STEP_SUBTITLES,
-  isVariantQuizId,
-  type QuizId,
+  buildStudySteps,
+  quizPath,
+  quizStepId,
+  stepIndexForPath,
 } from "../../lib/studySteps";
+import { getNextStep } from "../../lib/study";
 import { createReport, type ReportCategory } from "../../lib/reports";
+import { ApiError } from "../../lib/fetcher";
+import { QuestionResearch } from "../../lib/research";
 
-function isValidQuizId(value: string, user?: User | null): boolean {
-  if (user?.is_admin) return true;
-  return value === "base" || isVariantQuizId(value);
-}
-
-function isUsersAssignedVariant(
-  quizId: string,
-  user?: User | null,
-): boolean {
-  return Boolean(user?.assigned_var && quizId === user.assigned_var);
-}
-
-function canAccessQuiz(quizId: QuizId, user: User): boolean {
-  if (user.is_admin) {
-    return true;
-  }
-
-  if (quizId === "base") {
-    return !!user.survey_pre_base_completed && !user.quiz_base_completed;
-  }
-
-  return (
-    isUsersAssignedVariant(quizId, user) &&
-    !!user.survey_post_base_completed &&
-    !user.quiz_variant_completed
-  );
-}
-
-function getBlockedQuizRedirect(quizId: QuizId, user: User): string {
-  const assignedVariantPath = user.assigned_var
-    ? `/quiz/${user.assigned_var}`
-    : "/dashboard";
-
-  if (quizId === "base") {
-    if (!user.survey_pre_base_completed) return "/survey";
-
-    if (!user.survey_post_base_completed) {
-      return "/survey";
-    }
-
-    if (!user.quiz_variant_completed) {
-      return assignedVariantPath;
-    }
-
-    if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-      return "/survey";
-    }
-
-    return "/dashboard";
-  }
-
-  if (!user.survey_post_base_completed) return "/survey";
-
-  if (user.quiz_variant_completed && !user.survey_post_variant_completed) {
-    return "/survey";
-  }
-
-  return "/dashboard";
-}
+// Access and post-completion routing are decided by the backend
+// (GET /study/next), which is also enforced server-side in api/quiz.py. The
+// four ladders that used to live here duplicated that logic and assumed a
+// single variant quiz per participant.
 
 export default function QuizPage() {
   const router = useRouter();
@@ -106,11 +56,28 @@ export default function QuizPage() {
   const [reportError, setReportError] = useState<string | null>(null);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const lastResetQuestionId = useRef<string | undefined>(undefined);
+  const researchRoot = useRef<HTMLDivElement>(null);
+  const [research, setResearch] = useState<QuestionResearch | undefined>();
 
-  const quizId =
-    rawQuizId && (rawQuizId === "base" || isVariantQuizId(rawQuizId))
-      ? (rawQuizId as QuizId)
-      : null;
+  const quizId = rawQuizId;
+
+  // Position and label come from the participant's own flow, which is no longer
+  // a fixed 5 steps with exactly two quizzes.
+  const allSteps = user ? buildStudySteps(user) : [];
+  const thisStepIndex = quizId
+    ? stepIndexForPath(allSteps, quizPath(quizId))
+    : -1;
+  const thisStep = thisStepIndex === -1 ? null : allSteps[thisStepIndex];
+
+  function handleFlowError(cause: unknown, message: string) {
+    console.error(cause);
+    if (cause instanceof ApiError && cause.status === 401) {
+      invalidateMeCache();
+      router.replace("/login");
+      return;
+    }
+    setError(cause instanceof ApiError ? `${message} (${cause.status}: ${cause.message})` : message);
+  }
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -125,31 +92,21 @@ export default function QuizPage() {
 
         const u = res.user as User;
 
-        if (!isValidQuizId(rawQuizId, u)) {
-          router.replace("/dashboard");
-          return;
-        }
-
+        // Admins may open any quiz to test it; a participant may only be on the
+        // step the backend says is current.
         if (!u.is_admin) {
-          if (rawQuizId !== "base" && !isUsersAssignedVariant(rawQuizId, u)) {
-            router.replace("/dashboard");
+          const next = await getNextStep();
+          if (cancel) return;
+
+          if (next.next_step?.id !== quizStepId(rawQuizId)) {
+            router.replace(next.next_route);
             return;
           }
         }
 
-        if (!quizId) {
-          router.replace("/dashboard");
-          return;
-        }
-
-        if (!canAccessQuiz(quizId, u)) {
-          router.replace(getBlockedQuizRedirect(quizId, u));
-          return;
-        }
-
         setUser(u);
-      } catch {
-        if (!cancel) router.replace("/login");
+      } catch (e) {
+        if (!cancel) handleFlowError(e, "Unable to load your study. Please reload or contact the study team.");
       } finally {
         if (!cancel) setChecking(false);
       }
@@ -181,8 +138,7 @@ export default function QuizPage() {
           setSelectedChoice(null);
         }
       } catch (e) {
-        console.error(e);
-        if (!cancel) setError("Failed to load quiz.");
+        if (!cancel) handleFlowError(e, "Failed to load quiz.");
       }
     })();
 
@@ -195,6 +151,12 @@ export default function QuizPage() {
   const attempt = quizState?.attempt;
   const conversationId = quizState?.conversation_id ?? null;
   const quizCompleted = attempt?.status === "completed";
+  useEffect(() => {
+    if (!user || !conversationId || !current || !researchRoot.current) { setResearch(undefined); return; }
+    const tracker = new QuestionResearch({ userId: user.id, conversationId, questionId: current.id });
+    setResearch(tracker);
+    return tracker.start(researchRoot.current);
+  }, [user?.id, conversationId, current?.id]);
   const answerIncorrectly = Boolean(
     current && attempt?.incorrect_question_ids?.includes(current.id),
   );
@@ -221,51 +183,15 @@ export default function QuizPage() {
     if (!quizId) return;
     try {
       invalidateMeCache();
-      const res = await getMe();
-      const refreshedUser = res.user as User;
-
-      if (quizId === "base") {
-        if (!refreshedUser.survey_post_base_completed) {
-          router.replace("/survey?stage=post_base");
-          return;
-        }
-
-        if (!refreshedUser.quiz_variant_completed) {
-          router.replace(
-            refreshedUser.assigned_var
-              ? `/quiz/${refreshedUser.assigned_var}`
-              : "/dashboard",
-          );
-          return;
-        }
-
-        if (
-          refreshedUser.quiz_variant_completed &&
-          !refreshedUser.survey_post_variant_completed
-        ) {
-          router.replace("/survey");
-          return;
-        }
-
-        router.replace("/dashboard");
-        return;
-      }
-
-      // Variant quiz completed
-      if (!refreshedUser.survey_post_variant_completed) {
-        router.replace("/survey?stage=post_variant");
-        return;
-      }
-
-      router.replace("/dashboard");
+      const next = await getNextStep();
+      router.replace(next.next_route);
     } catch (e) {
-      console.error(e);
-      router.replace("/survey");
+      handleFlowError(e, "Unable to open the next step. Please try Continue again.");
     }
   }
 
   useEffect(() => {
-    if (!quizCompleted || !user || !quizId) return;
+    if (!quizCompleted || !user?.is_admin || !quizId) return;
     let cancel = false;
     getQuizResults(quizId).then((r) => { if (!cancel) setQuizResults(r); }).catch(() => {});
     return () => { cancel = true; };
@@ -279,7 +205,7 @@ export default function QuizPage() {
     );
   }
 
-  if (!user) return null;
+  if (!user) return error ? <div className="p-8" role="alert">{error}</div> : null;
 
   async function onLogout() {
     try {
@@ -332,15 +258,16 @@ export default function QuizPage() {
     }
 
     setSubmitting(true);
+    research?.emit("answer_submit_clicked", { choice_id: selectedChoice });
     setError(null);
 
     try {
-      const state = await submitQuizAnswer(quizId, current.id, selectedChoice);
+      const state = await submitQuizAnswer(quizId, current.id, selectedChoice, research?.submissionContext());
       setQuizState(state);
       setSelectedChoice(null);
     } catch (e) {
-      console.error(e);
-      setError("Failed to submit answer.");
+      research?.emit("answer_submit_failed", { choice_id: selectedChoice });
+      handleFlowError(e, "Failed to submit answer.");
     } finally {
       setSubmitting(false);
     }
@@ -348,22 +275,24 @@ export default function QuizPage() {
 
   return (
       //Keep at page height on normal zoom levels but overflow and expand on very short viewports or when zoomed in, so the user can always access the whole quiz interface and see the quiz completion card without needing to scroll through the chat.
-    <div data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
+    <div ref={researchRoot} data-quiz-theme={quizId ?? "base"} className="flex h-[100dvh] flex-col overflow-hidden bg-gray-50 [@media(max-height:760px)]:h-auto [@media(max-height:760px)]:min-h-[100dvh] [@media(max-height:760px)]:overflow-visible">
       <PageHeader
         className="shrink-0"
         title={
           <>
-            {quizId === "base" ? "Quiz Part 1" : "Quiz Part 2"}
+            {thisStep?.label ?? "Quiz"}
             {quizCompleted ? (
               <span className="ml-3 text-base font-semibold text-green-700">(Done)</span>
             ) : (
-              <span className="ml-3 text-base font-normal text-gray-400">
-                Step {quizId === "base" ? 2 : 4} of 5
-              </span>
+              thisStepIndex !== -1 && (
+                <span className="ml-3 text-base font-normal text-gray-400">
+                  Step {thisStepIndex + 1} of {allSteps.length}
+                </span>
+              )
             )}
           </>
         }
-        subtitle={!quizCompleted ? STEP_SUBTITLES[quizId === "base" ? "quiz_base" : "quiz_variant"] : undefined}
+        subtitle={!quizCompleted ? STEP_SUBTITLES.quiz_base : undefined}
         onDashboard={() => router.replace("/dashboard")}
         onLogout={onLogout}
       />
@@ -398,7 +327,7 @@ export default function QuizPage() {
             ) : (
               <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none flex flex-col md:grid min-w-0 md:grid-cols-[1fr_1.618fr] gap-3 md:gap-6">
                 <div className="shrink-0 flex flex-col gap-3 md:gap-6">
-                  <section className="rounded-xl border bg-white shadow-sm">
+                  <section data-research-region="question" className="rounded-xl border bg-white shadow-sm">
                     {!quizState && (
                       <div className="p-4 text-sm text-gray-500">Loading quiz…</div>
                     )}
@@ -434,7 +363,7 @@ export default function QuizPage() {
 
                         <div className={`relative p-4${questionCollapsed ? " hidden md:block" : ""}`}>
                           <div
-                            className={`space-y-3 transition ${
+                            data-research-region="answers" className={`space-y-3 transition ${
                               !hasAskedChat
                                 ? "pointer-events-none opacity-40 blur-[1px]"
                                 : ""
@@ -443,7 +372,7 @@ export default function QuizPage() {
                             <QuestionBox
                               choices={current.choices as Choice[]}
                               value={selectedChoice}
-                              onChange={setSelectedChoice}
+                              onChange={(choice) => { research?.emit("answer_selected", { choice_id: choice }); setSelectedChoice(choice); }}
                               className="max-w-3xl 2xl:max-w-none mx-auto"
                             />
 
@@ -457,6 +386,7 @@ export default function QuizPage() {
 
                               <button
                                 onClick={onSubmit}
+                                data-research-region="submit"
                                 disabled={!selectedChoice || submitting || chatLoading}
                                 className="btn-primary disabled:opacity-60 shrink-0"
                               >
@@ -560,7 +490,7 @@ export default function QuizPage() {
                 <div className="flex-1 min-h-0 md:flex-none [@media(max-height:700px)]:flex-none [@media(max-height:700px)]:min-h-[420px] min-w-0 md:self-start md:sticky md:top-0 md:h-[min(calc(100vh-9rem),80vw)]">
                   {quizId && (
                     <div className="h-full min-w-0 rounded-2xl overflow-hidden">
-                      <ChatBox
+                      <ChatBox research={research}
                         quizId={quizId}
                         conversationId={conversationId}
                         externalQuestion={externalQuestion}

@@ -1,8 +1,18 @@
-import { apiFetch } from "../../lib/fetcher";
+import { apiFetch, ApiError } from "../../lib/fetcher";
 
 describe("apiFetch", () => {
   beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState({}, "", "/dashboard");
     global.fetch = jest.fn();
+  });
+
+  it("records the actual study-scoped URL on a 400 response", async () => {
+    window.history.replaceState({}, "", "/survey?study=study-2");
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 400, text: async () => JSON.stringify({ detail: "Invalid survey item_id" }) });
+    await expect(apiFetch("/api/surveys/pre_quiz/submit")).rejects.toMatchObject({
+      status: 400, url: "/api/studies/study-2/surveys/pre_quiz/submit", message: "Invalid survey item_id",
+    });
   });
 
   it("sends credentials and JSON content-type by default", async () => {
@@ -101,5 +111,15 @@ describe("apiFetch", () => {
     });
 
     await expect(apiFetch("/api/thing")).rejects.toThrow("503 Service Unavailable");
+  });
+
+  it.each([401, 404])("preserves HTTP %s and the request path for flow diagnostics", async (status) => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false, status, statusText: "Error",
+      text: async () => JSON.stringify({ detail: "Request failed" }),
+    });
+    const error = await apiFetch("/api/study/next").catch(e => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status, url: "/api/study/next", message: "Request failed" });
   });
 });

@@ -96,6 +96,57 @@ describe("MarkdownMessage", () => {
     expect(container.querySelector(".katex-display")).not.toBeNull();
   });
 
+  it("renders an indented \\[...\\] block inside a list item as display math", () => {
+    // Models routinely indent a display block to sit under its bullet. Emitting
+    // the opening fence indented (inside the list item) but the closing fence at
+    // column 0 (outside it) left the block unterminated, so every later $$ paired
+    // with the wrong partner.
+    const content = [
+      "- 2 men from 6: the combination formula:",
+      "  \\[",
+      "  \\binom{6}{2} = 15",
+      "  \\]",
+    ].join("\n");
+    const { container } = render(<MarkdownMessage content={content} />);
+
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(container.querySelector(".katex-error")).toBeNull();
+    // The bullet's own prose must stay prose, not get swallowed into math.
+    expect(container.querySelector("li")?.textContent).toContain(
+      "2 men from 6: the combination formula:",
+    );
+  });
+
+  it("keeps \\[...\\] blocks paired when indented and unindented ones are mixed", () => {
+    // The regression: with the fences mismatched, the text *between* two display
+    // blocks was parsed as math (rendering as run-together italics) while the
+    // formulas themselves fell out as literal source.
+    const content = [
+      "- first:",
+      "  \\[",
+      "  \\binom{6}{2} = 15",
+      "  \\]",
+      "",
+      "By the multiplication principle:",
+      "\\[",
+      "15 \\times 7 = 105",
+      "\\]",
+      "",
+      "**Therefore, the answer is A. 105.**",
+    ].join("\n");
+    const { container } = render(<MarkdownMessage content={content} />);
+
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(2);
+    expect(container.querySelector(".katex-error")).toBeNull();
+    // Prose keeps its spaces; math mode would have collapsed them.
+    expect(container.textContent).toContain("By the multiplication principle:");
+    expect(container.querySelector("strong")?.textContent).toBe(
+      "Therefore, the answer is A. 105.",
+    );
+    // The raw LaTeX must not survive as literal text anywhere.
+    expect(container.textContent).not.toContain("\\binom");
+  });
+
   it("collapses inline $...$ math that the model split across a newline", () => {
     // remark-math only parses single-line inline math; without the collapse this
     // would not render as math at all. Its presence proves the newline was folded.

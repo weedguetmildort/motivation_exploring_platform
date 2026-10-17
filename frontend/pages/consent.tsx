@@ -161,6 +161,14 @@ export default function ConsentPage() {
               problem-solving. You will be asked to fill out a post survey as
               well.
             </p>
+            <p className="mt-2">
+              During the quizzes, we record your answer selections, submitted answers,
+              chat messages, use of suggested questions and reference links, and interaction
+              timing. We also record which areas of the quiz screen your mouse pointer
+              visits, clicks and scrolling, and when the study page is visible or in focus.
+              This describes interaction with the study interface; it does not track your
+              eyes or activity on other websites.
+            </p>
           </section>
 
           <p>

@@ -1,3 +1,4 @@
+jest.mock("../../components/StudyShell", () => ({ __esModule: true, default: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 import { render, screen } from "@testing-library/react";
 import type { AppProps } from "next/app";
 import App from "../../pages/_app";

@@ -7,6 +7,7 @@ from pymongo import ReturnDocument
 
 from ..schemas.user import UserPublic, SurveyStage, AssignedVar
 from ..core.security import hash_password, verify_password
+from . import study_flow
 
 _HEARTBEAT_DEBOUNCE = timedelta(minutes=2)
 
@@ -28,9 +29,20 @@ def _normalize_stage(raw) -> SurveyStage:
     return SurveyStage.pre_base
 
 
-def _to_public(doc: dict) -> UserPublic:
+def user_to_public(doc: dict) -> UserPublic:
+    """The single doc -> UserPublic mapping. api/auth.build_user_public
+    delegates here; keep new UserPublic fields in this one place.
+    """
+    protocol = dict(doc.get("study_protocol") or {})
+    if not doc.get("is_admin") and "survey_stages" in protocol:
+        # Descriptive study names are admin metadata. Participant clients only
+        # need the schedule; keep the stored protocol intact for researchers.
+        protocol["survey_stages"] = {key: {"enabled": value.get("enabled", True)}
+                                     for key, value in protocol["survey_stages"].items()}
     return UserPublic(
         id=str(doc["_id"]),
+        study_id=doc.get("study_id", "study-1"),
+        study_protocol=protocol,
         email=doc["email"],
         first_name=doc.get("first_name"),
         last_name=doc.get("last_name"),
@@ -45,6 +57,11 @@ def _to_public(doc: dict) -> UserPublic:
         assigned_var=doc.get("assigned_var", AssignedVar.followup.value),
         is_admin=bool(doc.get("is_admin", False)),
         demographics_completed=doc.get("demographics_completed", False),
+        step_order=list(doc.get("step_order") or []),
+        completed_steps=list(doc.get("completed_steps") or []),
+        variant_sequence=list(doc.get("variant_sequence") or []),
+        study_flow_version=int(doc.get("study_flow_version", 1)),
+        quiz_set_assignment=dict(doc.get("quiz_set_assignment") or {}),
         survey_pre_base_completed=doc.get("survey_pre_base_completed", False),
         quiz_base_completed=doc.get("quiz_base_completed", False),
         survey_post_base_completed=doc.get("survey_post_base_completed", False),
@@ -54,6 +71,10 @@ def _to_public(doc: dict) -> UserPublic:
         quiz_sets=doc.get("quiz_sets"),
         followup_study_granted=doc.get("followup_study_granted", False),
     )
+
+
+# Back-compat alias for the previous private name.
+_to_public = user_to_public
 
 
 def get_users_collection(db) -> Collection:
@@ -215,6 +236,9 @@ def create_user(
         "survey_post_variant_completed": False,
         "survey_stage": SurveyStage.pre_base.value,
         "demographics": {},
+        "step_order": [],
+        "completed_steps": [],
+        "variant_sequence": [],
         # Stamp the current global default set restriction (None = unrestricted).
         "quiz_sets": get_quiz_default_sets(users),
     }
@@ -222,11 +246,13 @@ def create_user(
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    # A one-shot admin override (if set) wins over rotation; consuming it does
-    # not advance the round-robin counter, so rotation resumes cleanly after.
-    assigned_var = _consume_next_override(users) or _next_assigned_var(users)
-    users.update_one({"_id": doc["_id"]}, {"$set": {"assigned_var": assigned_var}})
-    doc["assigned_var"] = assigned_var
+    # Participants now work through every variant, so assignment resolves a whole
+    # counterbalanced *sequence* rather than a single condition. A one-shot admin
+    # override still wins: it pins the first variant and, as before, does not
+    # advance the round-robin counter, so rotation resumes cleanly after.
+    flow = study_flow.assign_flow(db=users.database, forced_first=_consume_next_override(users))
+    users.update_one({"_id": doc["_id"]}, {"$set": flow})
+    doc.update(flow)
 
     return _to_public(doc)
 

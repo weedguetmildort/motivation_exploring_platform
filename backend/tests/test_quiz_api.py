@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.quiz import router as quiz_router
 from app.api.auth import get_current_user
 from app.schemas.user import UserPublic
+from tests.conftest import participant_at, standard_step_order
 
 
 # ── Local app fixtures (do not touch conftest.py) ────────────────────────────
@@ -55,11 +56,14 @@ def quiz_client_oid(quiz_app_oid, admin_user_oid):
 
 
 @pytest.fixture
-def regular_quiz_app(regular_user, mock_db):
+def regular_quiz_app(mock_db):
+    # Positioned on quiz:base — the flow gate in api/quiz.py only admits a
+    # participant to the quiz that is their current step.
+    participant = participant_at("quiz:base")
     app = FastAPI()
     app.include_router(quiz_router)
     app.state.db = mock_db
-    app.dependency_overrides[get_current_user] = lambda: regular_user
+    app.dependency_overrides[get_current_user] = lambda: participant
     return app
 
 
@@ -258,7 +262,8 @@ class TestSubmitQuizAnswer:
         #                update_one (positional $set) -> matched_count=1
         #                find_one(updated attempt) -> updated_doc
         # build_quiz_state_response: qcol.find(...) -> existing ids; qcol.find_one(next q) -> next_question_doc
-        mock_col.find_one.side_effect = [attempt_doc, question_doc, updated_doc, next_question_doc]
+        next_shown_doc = {**updated_doc, "answers": [*updated_doc["answers"], {"question_id": str(qid2), "shown_at": datetime.utcnow(), "answered_at": None}]}
+        mock_col.find_one.side_effect = [attempt_doc, question_doc, updated_doc, next_question_doc, next_shown_doc, next_question_doc]
         mock_col.update_one.return_value = MagicMock(matched_count=1)
         mock_col.find.return_value = [{"_id": qid1}, {"_id": qid2}]
 
@@ -376,30 +381,46 @@ class TestGetQuizResultsEndpoint:
 
 # ── POST /quiz/{quiz_id}/reset (admin only) ──────────────────────────────────
 
-class TestResetQuiz:
-    def test_admin_can_reset(self, quiz_client_oid, mock_col):
-        resp = quiz_client_oid.post("/quiz/base/reset")
+@pytest.fixture
+def reset_store(quiz_client_oid):
+    import mongomock
+    db = mongomock.MongoClient().db
+    quiz_client_oid.app.state.db = db
+    order = standard_step_order()
+    db.users.insert_one({"_id": ObjectId(quiz_client_oid.admin_id), "step_order": order,
+        "completed_steps": order, "quiz_set_assignment": {}})
+    return db
 
-        assert resp.status_code == 200
-        assert resp.json() == {"ok": True}
-        mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "base"})
+
+class TestResetQuiz:
+    def test_admin_can_reset(self, quiz_client_oid, reset_store):
+        db = reset_store
+        attempt = {"user_id": quiz_client_oid.admin_id, "quiz_id": "base", "conversation_id": "chat", "answers": [{"choice_id": "a"}]}
+        oid = db.quiz_attempts.insert_one(attempt).inserted_id
+        resp = quiz_client_oid.post("/quiz/base/reset")
+        assert resp.status_code == 200 and resp.json() == {"ok": True}
+        assert db.quiz_attempts.count_documents({}) == 0
+        saved = db.quiz_attempt_archive.find_one({"_id": oid})
+        assert saved["answers"] == [{"choice_id": "a"}] and saved["conversation_id"] == "chat"
+        assert saved["archive_reason"] == "admin_reset"
 
     def test_non_admin_forbidden(self, regular_quiz_client, mock_col):
-        resp = regular_quiz_client.post("/quiz/base/reset")
-        assert resp.status_code == 403
+        assert regular_quiz_client.post("/quiz/base/reset").status_code == 403
         mock_col.delete_one.assert_not_called()
 
-    def test_reset_variant_quiz_updates_user_flags(self, quiz_client_oid, mock_col):
-        resp = quiz_client_oid.post("/quiz/followup/reset")
+    def test_reset_variant_quiz_updates_user_flags(self, quiz_client_oid, reset_store):
+        db = reset_store
+        db.quiz_attempts.insert_one({"user_id": quiz_client_oid.admin_id, "quiz_id": "followup"})
+        assert quiz_client_oid.post("/quiz/followup/reset").status_code == 200
+        saved = db.users.find_one({"_id": ObjectId(quiz_client_oid.admin_id)})
+        assert "quiz:followup" not in saved["completed_steps"]
+        assert saved["quiz_variant_completed"] is False
+        assert db.quiz_attempt_archive.count_documents({"quiz_id": "followup"}) == 1
 
-        assert resp.status_code == 200
-        mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "followup"})
-        update_call = mock_col.update_one.call_args
-        assert update_call[0][1]["$set"]["quiz_variant_completed"] is False
-
-    def test_reset_unknown_quiz_id_only_deletes(self, quiz_client_oid, mock_col):
-        resp = quiz_client_oid.post("/quiz/some-unknown-id/reset")
-
-        assert resp.status_code == 200
-        mock_col.delete_one.assert_called_once_with({"user_id": quiz_client_oid.admin_id, "quiz_id": "some-unknown-id"})
-        mock_col.update_one.assert_not_called()
+    def test_reset_unknown_quiz_id_only_deletes(self, quiz_client_oid, reset_store):
+        db = reset_store
+        before = db.users.find_one({})
+        db.quiz_attempts.insert_one({"user_id": quiz_client_oid.admin_id, "quiz_id": "some-unknown-id"})
+        assert quiz_client_oid.post("/quiz/some-unknown-id/reset").status_code == 200
+        assert db.quiz_attempts.count_documents({}) == 0
+        assert db.users.find_one({}) == before

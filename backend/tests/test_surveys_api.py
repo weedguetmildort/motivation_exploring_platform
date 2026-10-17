@@ -13,16 +13,23 @@ from fastapi.testclient import TestClient
 
 from app.api.surveys import router as surveys_router
 from app.api.auth import get_current_user
+from tests.conftest import participant_at, standard_step_order
+from tests.test_multi_study import setup, headers
+from app.services.surveys import create_survey_item
+from app.schemas.survey import SurveyItemCreate
 
 
 # ── local app fixtures ───────────────────────────────────────────────────────
 
 @pytest.fixture
-def survey_app(mock_db, regular_user):
+def survey_app(mock_db):
+    # Positioned on survey:pre_quiz — the flow gate in api/surveys.py only
+    # admits a participant to the survey that is their current step.
+    participant = participant_at("survey:pre_quiz")
     app = FastAPI()
     app.include_router(surveys_router)
     app.state.db = mock_db
-    app.dependency_overrides[get_current_user] = lambda: regular_user
+    app.dependency_overrides[get_current_user] = lambda: participant
     return app
 
 
@@ -228,47 +235,25 @@ class TestAdminDeleteItem:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestGetState:
-    def test_returns_state_for_new_user(self, survey_client, mock_col):
-        mock_col.find.return_value.sort.return_value = []  # no items
-        mock_col.find_one.return_value = None  # no existing response doc
-        mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
+    def test_returns_state_for_new_user(self, setup):
+        raw, db, user, admin, client = setup
+        response = client.get("/surveys/pre_quiz/state", headers=headers())
+        assert response.status_code == 200
+        assert response.json()["attempt"] == {"stage": "pre_quiz", "status": "in_progress", "answered_count": 0, "total_items": 0}
+        assert db["survey_responses"].find_one({"user_id": user.id})["item_snapshot"] == []
 
-        resp = survey_client.get("/surveys/pre_quiz/state")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["attempt"]["stage"] == "pre_quiz"
-        assert data["attempt"]["status"] == "in_progress"
-        assert data["attempt"]["answered_count"] == 0
-        assert data["attempt"]["total_items"] == 0
-        assert data["items"] == []
-        assert data["answers"] == []
-
-    def test_returns_state_with_items_and_answers(self, survey_client, mock_col):
-        item_oid = ObjectId()
-        item = make_item_doc(_id=item_oid)
-        mock_col.find.return_value.sort.return_value = [item]
-
-        now = datetime.now(timezone.utc)
-        response_doc = make_response_doc(answers=[
-            {"item_id": str(item_oid), "value": 4, "shown_at": now, "answered_at": now}
-        ])
-        mock_col.find_one.return_value = response_doc
-
-        resp = survey_client.get("/surveys/pre_quiz/state")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["attempt"]["total_items"] == 1
+    def test_returns_state_with_items_and_answers(self, setup):
+        raw, db, user, admin, client = setup
+        item = create_survey_item(db, SurveyItemCreate(stage="pre_quiz", prompt="Question"))
+        client.get("/surveys/pre_quiz/state", headers=headers())
+        db["survey_responses"].update_one({"user_id": user.id}, {"$set": {"answers": [{"item_id": item.id, "value": 4, "answered_at": datetime.now(timezone.utc)}]}})
+        data = client.get("/surveys/pre_quiz/state", headers=headers()).json()
         assert data["attempt"]["answered_count"] == 1
-        assert len(data["items"]) == 1
-        assert data["items"][0]["id"] == str(item_oid)
-        assert len(data["answers"]) == 1
-        assert data["answers"][0]["value"] == 4
+        assert data["items"][0]["id"] == item.id and data["answers"][0]["value"] == 4
 
-    def test_invalid_stage_returns_400(self, survey_client, mock_col):
-        resp = survey_client.get("/surveys/not_a_real_stage/state")
-        assert resp.status_code == 400
+    def test_invalid_stage_returns_400(self, setup):
+        assert setup[-1].get("/surveys/bogus_stage/state", headers=headers()).status_code == 400
+
 
 
 class TestRecordShown:
@@ -285,115 +270,35 @@ class TestRecordShown:
 
 
 class TestSubmit:
-    def test_invalid_stage_returns_400(self, survey_client, mock_col):
-        doc = make_response_doc()
-        mock_col.find_one.return_value = doc
+    def test_invalid_stage_returns_400(self, setup):
+        assert setup[-1].post("/surveys/bogus_stage/submit", json={"answers": []}, headers=headers()).status_code == 400
 
-        resp = survey_client.post("/surveys/bogus_stage/submit", json={"answers": []})
+    def test_already_completed_returns_saved_state(self, setup):
+        raw, db, user, admin, client = setup
+        item = create_survey_item(db, SurveyItemCreate(stage="pre_quiz", prompt="Question"))
+        response = client.post("/surveys/pre_quiz/submit", headers=headers(), json={"answers": [{"item_id": item.id, "value": 4}]})
+        assert response.status_code == 200
+        response = client.post("/surveys/pre_quiz/submit", headers=headers(), json={"answers": [{"item_id": item.id, "value": 1}]})
+        assert response.status_code == 200 and response.json()["answers"][0]["value"] == 4
 
-        assert resp.status_code == 400
+    def test_invalid_item_id_returns_400(self, setup):
+        response = setup[-1].post("/surveys/pre_quiz/submit", headers=headers(), json={"answers": [{"item_id": "bad", "value": 4}]})
+        assert response.status_code == 400 and "Invalid survey item_id" in response.json()["detail"]
 
-    def test_already_completed_returns_400(self, survey_client, mock_col):
-        doc = make_response_doc(status="completed")
-        mock_col.find_one.return_value = doc
+    def test_missing_answers_field_returns_422(self, setup):
+        assert setup[-1].post("/surveys/pre_quiz/submit", headers=headers(), json={}).status_code == 422
 
-        resp = survey_client.post("/surveys/pre_quiz/submit", json={"answers": []})
+    def test_partial_submit_keeps_in_progress(self, setup):
+        raw, db, user, admin, client = setup
+        one = create_survey_item(db, SurveyItemCreate(stage="pre_quiz", prompt="One"))
+        create_survey_item(db, SurveyItemCreate(stage="pre_quiz", prompt="Two"))
+        response = client.post("/surveys/pre_quiz/submit", headers=headers(), json={"answers": [{"item_id": one.id, "value": 4}]})
+        assert response.status_code == 200 and response.json()["attempt"]["status"] == "in_progress"
 
-        assert resp.status_code == 400
-        assert "already completed" in resp.json()["detail"].lower()
-
-    def test_invalid_item_id_returns_400(self, survey_client, mock_col):
-        doc = make_response_doc()
-        mock_col.find_one.return_value = doc
-        mock_col.find.return_value = []  # no valid item ids
-
-        resp = survey_client.post("/surveys/pre_quiz/submit", json={
-            "answers": [{"item_id": "not-a-real-item", "value": 4}]
-        })
-
-        assert resp.status_code == 400
-        assert "Invalid survey item_id" in resp.json()["detail"]
-
-    def test_missing_answers_field_returns_422(self, survey_client):
-        resp = survey_client.post("/surveys/pre_quiz/submit", json={})
-        assert resp.status_code == 422
-
-    def test_partial_submit_keeps_in_progress(self, survey_client, mock_col):
-        item1 = ObjectId()
-        item2 = ObjectId()
-        doc = make_response_doc(answers=[])
-
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 4, "shown_at": None, "answered_at": datetime.now(timezone.utc)},
-        ]
-
-        # find_one sequence: load_or_create, post-update read, build_survey_state's load
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
-        mock_col.update_one.return_value = MagicMock(matched_count=0)
-
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}, {"_id": item2}],  # valid_ids
-            [{"_id": item1}, {"_id": item2}],  # required_ids -> both required
-            final_find_result,  # build_survey_state's list_survey_items
-        ]
-
-        resp = survey_client.post("/surveys/pre_quiz/submit", json={
-            "answers": [{"item_id": str(item1), "value": 4}]
-        })
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["attempt"]["status"] == "in_progress"
-
-    def test_full_completion_returns_completed_state(self, survey_client, mock_col, regular_user):
-        item1 = ObjectId()
-        user_oid = ObjectId()
-        # Override regular_user's id to a valid ObjectId hex string for this test
-        # (the completion path calls ObjectId(user_id) on the users collection).
-        from app.api.auth import get_current_user
-        from app.schemas.user import UserPublic
-
-        completed_now = datetime.now(timezone.utc)
-        doc = make_response_doc(user_id=str(user_oid), answers=[])
-        updated_doc = dict(doc)
-        updated_doc["answers"] = [
-            {"item_id": str(item1), "value": 5, "shown_at": None, "answered_at": completed_now},
-        ]
-        updated_doc["status"] = "completed"
-
-        mock_col.find_one.side_effect = [doc, updated_doc, updated_doc]
-        mock_col.update_one.side_effect = [
-            MagicMock(matched_count=1),  # answer update
-            MagicMock(),  # completion status update
-            MagicMock(matched_count=1),  # user update
-        ]
-
-        final_find_result = MagicMock()
-        final_find_result.sort.return_value = []
-        mock_col.find.side_effect = [
-            [{"_id": item1}],  # valid_ids
-            [{"_id": item1}],  # required_ids
-            final_find_result,  # build_survey_state's list_survey_items
-        ]
-
-        # Override the current user to have a valid ObjectId-format id
-        survey_client.app.dependency_overrides[get_current_user] = lambda: UserPublic(
-            id=str(user_oid), email="student@test.edu", is_admin=False,
-        )
-
-        resp = survey_client.post("/surveys/pre_quiz/submit", json={
-            "answers": [{"item_id": str(item1), "value": 5}]
-        })
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["attempt"]["status"] == "completed"
-
-        # The user doc should have been updated with completion flags
-        user_update_call = mock_col.update_one.call_args_list[-1]
-        set_doc = user_update_call[0][1]["$set"]
-        assert set_doc["survey_pre_base_completed"] is True
-        assert set_doc["pre_quiz_survey"] == {str(item1): 5}
+    def test_full_completion_returns_completed_state(self, setup):
+        raw, db, user, admin, client = setup
+        item = create_survey_item(db, SurveyItemCreate(stage="pre_quiz", prompt="Question"))
+        response = client.post("/surveys/pre_quiz/submit", headers=headers(), json={"answers": [{"item_id": item.id, "value": 5}]})
+        assert response.status_code == 200 and response.json()["attempt"]["status"] == "completed"
+        saved = db["users"].find_one({"_id": ObjectId(user.id)})
+        assert saved["pre_quiz_survey"] == {item.id: 5} and saved["survey_pre_base_completed"] is True

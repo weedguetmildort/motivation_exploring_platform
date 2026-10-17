@@ -23,6 +23,8 @@ Object.defineProperty(window, "open", { value: mockWindowOpen, writable: true })
 
 describe("ExportPanelPage", () => {
   beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState({}, "", "/export_panel");
     mockReplace.mockClear();
     mockPush.mockClear();
     mockGetMe.mockReset();
@@ -53,7 +55,7 @@ describe("ExportPanelPage", () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/dashboard"));
   });
 
-  it("renders the panel with all 5 export cards for an admin", async () => {
+  it("renders the panel with all research and operational export cards for an admin", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     render(<ExportPanelPage />);
 
@@ -63,7 +65,7 @@ describe("ExportPanelPage", () => {
     expect(screen.getByText("Survey Responses")).toBeInTheDocument();
     expect(screen.getByText("Events (Copy + Links)")).toBeInTheDocument();
     expect(screen.getByText("Chat Messages")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(5);
+    expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(7);
   });
 
   it("calls window.open with the correct URL when a Download CSV button is clicked", async () => {
@@ -75,6 +77,24 @@ describe("ExportPanelPage", () => {
     fireEvent.click(buttons[0]); // Participants
 
     expect(mockWindowOpen).toHaveBeenCalledWith("/api/export/participants", "_blank");
+  });
+
+  it("keeps Study 2 selection in downloads opened in a new tab", async () => {
+    window.history.replaceState({}, "", "/export_panel?study=study-2");
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    render(<ExportPanelPage />);
+    await screen.findByText("Export Data");
+    fireEvent.click(screen.getAllByRole("button", { name: "Download CSV" })[0]);
+    expect(mockWindowOpen).toHaveBeenCalledWith("/api/studies/study-2/export/participants", "_blank");
+    fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
+    expect(mockWindowOpen).toHaveBeenCalledWith("/api/studies/study-2/export/research-bundle", "_blank");
+  });
+
+  it("downloads the versioned research snapshot as a ZIP", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    render(<ExportPanelPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Download ZIP" }));
+    expect(mockWindowOpen).toHaveBeenCalledWith("/api/export/research-bundle", "_blank");
   });
 
   it("disables the button and shows 'Opening…' immediately after clicking", async () => {
@@ -102,7 +122,7 @@ describe("ExportPanelPage", () => {
     act(() => { jest.advanceTimersByTime(2000); });
 
     await waitFor(() =>
-      expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(5)
+      expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(7)
     );
   });
 
@@ -118,13 +138,15 @@ describe("ExportPanelPage", () => {
       "/api/export/survey-responses",
       "/api/export/events",
       "/api/export/chat-messages",
+      "/api/export/research-questions",
+      "/api/export/research-variants",
     ];
 
     for (const url of expectedUrls) {
       // reset to all-enabled state before each click
       act(() => { jest.advanceTimersByTime(2000); });
       await waitFor(() =>
-        expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(5)
+        expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(7)
       );
       const buttons = screen.getAllByRole("button", { name: "Download CSV" });
       const idx = expectedUrls.indexOf(url);

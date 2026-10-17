@@ -1,70 +1,25 @@
+import SurveyItemFields from "../components/SurveyItemFields";
+import { surveyDraft, surveyItemPayload } from "../lib/surveyEditor";
+import type { SurveyItem } from "../lib/surveys";
+import EffectiveSurveyPreview from "../components/EffectiveSurveyPreview";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
+import { getStudyConfig, type SurveyStages } from "../lib/study";
+import { DEFAULT_SURVEY_STAGES, questionTarget, targetFields } from "../lib/surveyConfig";
+import { selectedStudy } from "../lib/studySelection";
 
 export default function SurveyPanelPage() {
-  type SurveyStage = "pre_quiz" | "post_base" | string;
-  type SurveyItemType = "likert" | "single_select";
-
-  type SurveyOption = { id: string; label: string };
-
-  type SurveyScale = {
-    min: number;
-    max: number;
-    anchors?: string[] | null; // [left, right]
-  };
-
-  type SurveyItem = {
-    id: string;
-    stage: SurveyStage;
-    prompt: string;
-    type: SurveyItemType;
-    required: boolean;
-    order: number;
-    active: boolean;
-
-    category?: string | null;
-    reverse_scored?: boolean;
-
-    // Likert
-    scale?: SurveyScale | null;
-
-    // single_select
-    options?: SurveyOption[] | null;
-
-    created_at?: string;
-    updated_at?: string;
-  };
-
   const router = useRouter();
 
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
 
   // Create form
-  const [stage, setStage] = useState<SurveyStage>("pre_quiz");
-  const [type, setType] = useState<SurveyItemType>("likert");
-  const [category, setCategory] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [required, setRequired] = useState(true);
-  const [reverseScored, setReverseScored] = useState(false);
-
-  // Likert inputs (UI state)
-  const [scaleMin, setScaleMin] = useState(1);
-  const [scaleMax, setScaleMax] = useState(5);
-  const [scaleLeftLabel, setScaleLeftLabel] = useState("Strongly disagree");
-  const [scaleRightLabel, setScaleRightLabel] = useState("Strongly agree");
-
-  // single_select options (UI state)
-  const [options, setOptions] = useState<SurveyOption[]>([
-    { id: "a", label: "" },
-    { id: "b", label: "" },
-    { id: "c", label: "" },
-    { id: "d", label: "" },
-    { id: "e", label: "" },
-  ]);
-
+  const [settings, setSettings] = useState<SurveyStages>(DEFAULT_SURVEY_STAGES);
+  const [previewStage, setPreviewStage] = useState("pre_quiz");
+  const [draft, setDraft] = useState(() => surveyDraft());
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -74,23 +29,25 @@ export default function SurveyPanelPage() {
   const [itemsError, setItemsError] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<Partial<SurveyItem>>({});
+  const [editDraft, setEditDraft] = useState(() => surveyDraft());
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const stages = useMemo(
-    () => [
-      { value: "pre_quiz", label: "Pre-Quiz" },
-      { value: "post_base", label: "Post-Quiz" },
-    ],
-    [],
-  );
-
-  function sanitizeOptions(opts: SurveyOption[]) {
-    return opts
-      .map((o) => ({ id: o.id, label: (o.label ?? "").trim() }))
-      .filter((o) => o.label.length > 0);
-  }
+  const stages = useMemo(() => [
+    { value: "all_surveys", label: "All surveys in this study" },
+    { value: "post_quiz", label: "All post-quiz surveys" },
+    ...Object.entries(settings).map(([value, item]) => ({ value, label: item.name })),
+  ], [settings]);
+  useEffect(() => {
+    const requested = [router.query?.stage].flat()[0];
+    if (requested && Object.keys(settings).includes(requested)) { setDraft(current => ({ ...current, ...targetFields(requested) })); setPreviewStage(requested); }
+  }, [router.query?.stage, settings]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    getStudyConfig().then(config => { if (!cancelled && config?.survey_stages) setSettings(config.survey_stages); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user]);
 
   // --- auth gate (admin only) ---
   useEffect(() => {
@@ -164,166 +121,32 @@ export default function SurveyPanelPage() {
   }
 
   async function onCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setMessage(null);
-
-    if (!prompt.trim()) {
-      setMessage("Prompt is required.");
-      return;
-    }
-
-    if (type === "likert") {
-      if (scaleMin >= scaleMax) {
-        setMessage("Likert scale min must be less than max.");
-        return;
-      }
-    } else {
-      const cleaned = sanitizeOptions(options);
-      if (cleaned.length < 2) {
-        setMessage("Single-select requires at least 2 options.");
-        return;
-      }
-    }
-
+    e.preventDefault(); setMessage(null);
+    let payload;
+    try { payload = surveyItemPayload(draft); }
+    catch (error) { setMessage((error as Error).message); return; }
     setSaving(true);
     try {
-      const payload: any = {
-        stage,
-        category: category.trim() || null,
-        prompt: prompt.trim(),
-        type,
-        required,
-        reverse_scored: reverseScored,
-        order: 0,
-        active: true,
-      };
-
-      if (type === "likert") {
-        payload.scale = {
-          min: scaleMin,
-          max: scaleMax,
-          anchors: [scaleLeftLabel || "Strongly disagree", scaleRightLabel || "Strongly agree"],
-        };
-      } else {
-        payload.options = sanitizeOptions(options);
-      }
-
-      const created = await apiFetch<SurveyItem>("/api/surveys/items", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-
-      setItems((prev) => [created, ...prev]);
-
-      // reset form
-      setPrompt("");
-      setCategory("");
-      setReverseScored(false);
-      setRequired(true);
-      setType("likert");
-      setScaleMin(1);
-      setScaleMax(5);
-      setScaleLeftLabel("Strongly disagree");
-      setScaleRightLabel("Strongly agree");
-      setOptions([
-        { id: "a", label: "" },
-        { id: "b", label: "" },
-        { id: "c", label: "" },
-        { id: "d", label: "" },
-        { id: "e", label: "" },
-      ]);
-
+      const created = await apiFetch<SurveyItem>("/api/surveys/items", { method: "POST", body: JSON.stringify(payload) });
+      setItems(previous => [created, ...previous]);
+      setDraft({ ...surveyDraft(), ...targetFields(questionTarget(draft), draft.stages) });
       setMessage("Survey item added.");
-    } catch (e) {
-      console.error(e);
-      setMessage("Failed to add survey item.");
-    } finally {
-      setSaving(false);
-    }
+    } catch { setMessage("Failed to add survey item."); }
+    finally { setSaving(false); }
   }
 
-  function beginEdit(it: SurveyItem) {
-    setEditingId(it.id);
-
-    // Make a safe editable copy
-    setEditDraft({
-      ...it,
-      category: it.category ?? "",
-      scale: it.scale ?? { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] },
-      options: it.options ?? [
-        { id: "a", label: "" },
-        { id: "b", label: "" },
-        { id: "c", label: "" },
-        { id: "d", label: "" },
-        { id: "e", label: "" },
-      ],
-    });
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditDraft({});
-  }
-
+  function beginEdit(item: SurveyItem) { setEditingId(item.id); setEditDraft(surveyDraft(item)); }
+  function cancelEdit() { setEditingId(null); setEditDraft(surveyDraft()); }
   async function saveEdit(id: string) {
+    let payload;
+    try { payload = surveyItemPayload(editDraft); }
+    catch (error) { alert((error as Error).message); return; }
     setSavingEdit(true);
     try {
-      const t = (editDraft.type ?? "likert") as SurveyItemType;
-
-      const payload: any = {
-        stage: editDraft.stage,
-        category: (editDraft.category as any)?.trim?.()
-          ? (editDraft.category as any).trim()
-          : null,
-        prompt: (editDraft.prompt ?? "").toString().trim(),
-        type: t,
-        required: !!editDraft.required,
-        reverse_scored: !!editDraft.reverse_scored,
-        active: editDraft.active ?? true,
-        order: editDraft.order ?? 0,
-      };
-
-      if (t === "likert") {
-        const sc = editDraft.scale ?? { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] };
-        const left = sc.anchors?.[0] ?? "Strongly disagree";
-        const right = sc.anchors?.[1] ?? "Strongly agree";
-
-        if ((sc.min ?? 1) >= (sc.max ?? 5)) {
-          alert("Likert scale min must be less than max.");
-          setSavingEdit(false);
-          return;
-        }
-
-        payload.scale = {
-          min: sc.min ?? 1,
-          max: sc.max ?? 5,
-          anchors: [left, right],
-        };
-        payload.options = null;
-      } else {
-        const cleaned = sanitizeOptions((editDraft.options ?? []) as SurveyOption[]);
-        if (cleaned.length < 2) {
-          alert("Single-select requires at least 2 options.");
-          setSavingEdit(false);
-          return;
-        }
-        payload.options = cleaned;
-        payload.scale = null;
-      }
-
-      const updated = await apiFetch<SurveyItem>(`/api/surveys/items/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
-
-      setItems((prev) => prev.map((x) => (x.id === id ? updated : x)));
-      cancelEdit();
-    } catch (e) {
-      console.error(e);
-      alert("Failed to update survey item.");
-    } finally {
-      setSavingEdit(false);
-    }
+      const updated = await apiFetch<SurveyItem>(`/api/surveys/items/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      setItems(previous => previous.map(item => item.id === id ? updated : item)); cancelEdit();
+    } catch { alert("Failed to update survey item."); }
+    finally { setSavingEdit(false); }
   }
 
   async function deleteItem(id: string) {
@@ -351,7 +174,7 @@ export default function SurveyPanelPage() {
               Survey Questions Panel
             </h1>
             <p className="page-subtitle">
-              Manage stage-based surveys (pre-quiz, mid-quiz, end-quiz, final).
+              {selectedStudy() === "study-1" ? "Study 1 · Base + one assigned variant" : "Study 2 · Base + all variants"}. Shared questions and stage-specific additions stay within this study.
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -373,160 +196,12 @@ export default function SurveyPanelPage() {
 
       {/* Create */}
       <div className="page-container">
+        <EffectiveSurveyPreview settings={settings} stage={previewStage} onStageChange={setPreviewStage} revision={items} />
         <div className="bg-white rounded-xl p-8 shadow-sm border">
           <h2 className="text-xl 2xl:text-2xl font-semibold mb-4">Add Survey Item</h2>
 
           <form onSubmit={onCreate} className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div>
-                <label className="block text-sm font-medium mb-1">Stage</label>
-                <select
-                  value={stage}
-                  onChange={(e) => setStage(e.target.value)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm"
-                >
-                  {stages.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Type</label>
-                <select
-                  value={type}
-                  onChange={(e) => setType(e.target.value as SurveyItemType)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm"
-                >
-                  <option value="likert">Likert (1–5)</option>
-                  <option value="single_select">Single select</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Category
-                </label>
-                <input
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm"
-                  placeholder="e.g., TRUST, NFC, AI Literacy"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Prompt</label>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                className="w-full rounded-lg border px-3 py-2 text-sm"
-                rows={3}
-                required
-              />
-            </div>
-
-            {/* Likert config */}
-            {type === "likert" && (
-              <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Left label
-                    </label>
-                    <input
-                      value={scaleLeftLabel}
-                      onChange={(e) => setScaleLeftLabel(e.target.value)}
-                      className="w-full rounded-lg border px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Right label
-                    </label>
-                    <input
-                      value={scaleRightLabel}
-                      onChange={(e) => setScaleRightLabel(e.target.value)}
-                      className="w-full rounded-lg border px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Min</label>
-                    <input
-                      type="number"
-                      value={scaleMin}
-                      onChange={(e) => setScaleMin(Number(e.target.value))}
-                      className="w-full rounded-lg border px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Max</label>
-                    <input
-                      type="number"
-                      value={scaleMax}
-                      onChange={(e) => setScaleMax(Number(e.target.value))}
-                      className="w-full rounded-lg border px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* Single select config */}
-            {type === "single_select" && (
-              <div className="rounded-lg border bg-gray-50 p-4">
-                <div className="text-sm font-medium text-gray-900 mb-2">
-                  Options (at least 2)
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {options.map((o, idx) => (
-                    <div key={o.id}>
-                      <label className="block text-xs font-medium mb-1">
-                        Option {o.id.toUpperCase()}
-                      </label>
-                      <input
-                        className="w-full rounded-lg border px-3 py-2 text-sm"
-                        value={o.label}
-                        onChange={(e) => {
-                          const copy = [...options];
-                          copy[idx] = { ...copy[idx], label: e.target.value };
-                          setOptions(copy);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  id="required"
-                  type="checkbox"
-                  checked={required}
-                  onChange={(e) => setRequired(e.target.checked)}
-                />
-                Required
-              </label>
-
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  id="reverse"
-                  type="checkbox"
-                  checked={reverseScored}
-                  onChange={(e) => setReverseScored(e.target.checked)}
-                />
-                Reverse-scored (R)
-              </label>
-            </div>
+            <SurveyItemFields value={draft} onChange={setDraft} settings={settings} />
 
             {message && (
               <div className="text-sm text-gray-700" role="status">
@@ -575,7 +250,7 @@ export default function SurveyPanelPage() {
                     <div className="flex justify-between items-start gap-4">
                       <div className="min-w-0">
                         <div className="text-xs text-gray-500">
-                          Stage: <span className="font-medium">{it.stage}</span>
+                          Stage: <span className="font-medium">{stages.find(target => target.value === questionTarget(it))?.label ?? it.stage}{it.scope === "stages" && (it.stages?.length ?? 0) > 1 ? ` (+${it.stages!.length - 1} more)` : ""}</span>
                           {it.category ? (
                             <>
                               {" "}
@@ -613,211 +288,9 @@ export default function SurveyPanelPage() {
                             )}
                           </>
                         ) : (
-                          <div className="mt-2 space-y-3 text-sm">
-                            <div className="grid gap-3 sm:grid-cols-3">
-                              <div>
-                                <label className="block text-xs font-medium mb-1">Stage</label>
-                                <input
-                                  value={(editDraft.stage as string) ?? ""}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, stage: e.target.value }))
-                                  }
-                                  className="w-full rounded border px-2 py-1 text-sm"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-medium mb-1">Type</label>
-                                <select
-                                  value={(editDraft.type as SurveyItemType) ?? "likert"}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({
-                                      ...d,
-                                      type: e.target.value as SurveyItemType,
-                                    }))
-                                  }
-                                  className="w-full rounded border px-2 py-1 text-sm"
-                                >
-                                  <option value="likert">likert</option>
-                                  <option value="single_select">single_select</option>
-                                </select>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-medium mb-1">Category</label>
-                                <input
-                                  value={(editDraft.category as any) ?? ""}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, category: e.target.value }))
-                                  }
-                                  className="w-full rounded border px-2 py-1 text-sm"
-                                />
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="block text-xs font-medium mb-1">Prompt</label>
-                              <textarea
-                                value={(editDraft.prompt as string) ?? ""}
-                                onChange={(e) =>
-                                  setEditDraft((d) => ({ ...d, prompt: e.target.value }))
-                                }
-                                className="w-full rounded border px-2 py-1 text-sm"
-                                rows={3}
-                              />
-                            </div>
-
-                            {(editDraft.type ?? "likert") === "likert" && (
-                              <>
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                  <div>
-                                    <label className="block text-xs font-medium mb-1">Min</label>
-                                    <input
-                                      type="number"
-                                      value={editDraft.scale?.min ?? 1}
-                                      onChange={(e) =>
-                                        setEditDraft((d) => ({
-                                          ...d,
-                                          scale: {
-                                            ...(d.scale ?? { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] }),
-                                            min: Number(e.target.value),
-                                          },
-                                        }))
-                                      }
-                                      className="w-full rounded border px-2 py-1 text-sm"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-xs font-medium mb-1">Max</label>
-                                    <input
-                                      type="number"
-                                      value={editDraft.scale?.max ?? 5}
-                                      onChange={(e) =>
-                                        setEditDraft((d) => ({
-                                          ...d,
-                                          scale: {
-                                            ...(d.scale ?? { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] }),
-                                            max: Number(e.target.value),
-                                          },
-                                        }))
-                                      }
-                                      className="w-full rounded border px-2 py-1 text-sm"
-                                    />
-                                  </div>
-                                </div>
-
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                  <div>
-                                    <label className="block text-xs font-medium mb-1">
-                                      Left label
-                                    </label>
-                                    <input
-                                      value={editDraft.scale?.anchors?.[0] ?? ""}
-                                      onChange={(e) =>
-                                        setEditDraft((d) => {
-                                          const anchors = (d.scale?.anchors ?? ["", ""]).slice(0, 2);
-                                          anchors[0] = e.target.value;
-                                          return {
-                                            ...d,
-                                            scale: {
-                                              ...(d.scale ?? { min: 1, max: 5 }),
-                                              anchors,
-                                            },
-                                          };
-                                        })
-                                      }
-                                      className="w-full rounded border px-2 py-1 text-sm"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-xs font-medium mb-1">
-                                      Right label
-                                    </label>
-                                    <input
-                                      value={editDraft.scale?.anchors?.[1] ?? ""}
-                                      onChange={(e) =>
-                                        setEditDraft((d) => {
-                                          const anchors = (d.scale?.anchors ?? ["", ""]).slice(0, 2);
-                                          anchors[1] = e.target.value;
-                                          return {
-                                            ...d,
-                                            scale: {
-                                              ...(d.scale ?? { min: 1, max: 5 }),
-                                              anchors,
-                                            },
-                                          };
-                                        })
-                                      }
-                                      className="w-full rounded border px-2 py-1 text-sm"
-                                    />
-                                  </div>
-                                </div>
-                              </>
-                            )}
-
-                            {(editDraft.type ?? "likert") === "single_select" && (
-                              <div className="rounded-lg border bg-white p-3">
-                                <div className="text-xs font-medium mb-2">Options (at least 2)</div>
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                  {(editDraft.options ?? []).map((o, idx) => (
-                                    <div key={o.id}>
-                                      <label className="block text-xs font-medium mb-1">
-                                        Option {o.id.toUpperCase()}
-                                      </label>
-                                      <input
-                                        className="w-full rounded border px-2 py-1 text-sm"
-                                        value={o.label}
-                                        onChange={(e) => {
-                                          const copy = [...((editDraft.options ?? []) as SurveyOption[])];
-                                          copy[idx] = { ...copy[idx], label: e.target.value };
-                                          setEditDraft((d) => ({ ...d, options: copy }));
-                                        }}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="flex items-center gap-4 text-sm">
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!editDraft.required}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, required: e.target.checked }))
-                                  }
-                                />
-                                Required
-                              </label>
-
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!editDraft.reverse_scored}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({
-                                      ...d,
-                                      reverse_scored: e.target.checked,
-                                    }))
-                                  }
-                                />
-                                Reverse-scored (R)
-                              </label>
-
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={editDraft.active ?? true}
-                                  onChange={(e) =>
-                                    setEditDraft((d) => ({ ...d, active: e.target.checked }))
-                                  }
-                                />
-                                Active
-                              </label>
-                            </div>
-                          </div>
+                          <SurveyItemFields value={editDraft} onChange={setEditDraft} settings={settings} editing />
                         )}
+
                       </div>
 
                       <div className="flex items-center gap-2 text-xs shrink-0">

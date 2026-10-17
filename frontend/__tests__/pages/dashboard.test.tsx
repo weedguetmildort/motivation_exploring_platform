@@ -2,6 +2,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import DashboardPage from "../../pages/dashboard";
 import { getMe, logout } from "../../lib/auth";
 
+jest.mock("../../components/DashboardStudyAccess", () => ({ __esModule: true, default: ({ user }: { user: { is_admin: boolean } }) => user.is_admin ? <section aria-label="Admin study workspace" /> : null }));
+
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
 jest.mock("next/router", () => ({
@@ -44,6 +46,13 @@ describe("DashboardPage", () => {
     mockPush.mockClear();
     mockGetMe.mockReset();
     mockLogout.mockReset();
+  });
+
+  it.each([{ consent: false }, { consent: true, consent_declined_at: "2026-10-15T12:00:00Z" }])("requires fresh Study 2 consent after a decline: %j", async consent => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, study_id: "study-2", consent_agreed_at: "2026-10-14T12:00:00Z", ...consent } });
+    render(<DashboardPage />);
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/consent"));
+    expect(screen.queryByText("Study Complete — thank you for participating!")).not.toBeInTheDocument();
   });
 
   it("shows a loading state before the session check resolves", () => {
@@ -122,18 +131,18 @@ describe("DashboardPage", () => {
 
     expect(await screen.findByText("Admin")).toBeInTheDocument();
 
-    expect(screen.getByRole("link", { name: /Chat/ })).toHaveAttribute("href", "/chat");
-    expect(screen.getByRole("link", { name: /Playground/ })).toHaveAttribute("href", "/playground");
-    expect(screen.getByRole("link", { name: /Admin Panel/ })).toHaveAttribute("href", "/admin");
+    expect(screen.getByRole("link", { name: /Chat/ })).toHaveAttribute("href", "/chat?study=study-1");
+    expect(screen.getByRole("link", { name: /Playground/ })).toHaveAttribute("href", "/playground?study=study-1");
+    expect(screen.getByRole("link", { name: /Admin Panel/ })).toHaveAttribute("href", "/admin?study=study-1");
 
-    expect(screen.getByRole("link", { name: /Base Quiz/ })).toHaveAttribute("href", "/quiz/base");
-    expect(screen.getByRole("link", { name: /Follow-Up Questions/ })).toHaveAttribute("href", "/quiz/followup");
-    expect(screen.getByRole("link", { name: /Dual Agent/ })).toHaveAttribute("href", "/quiz/double");
-    expect(screen.getByRole("link", { name: /Embedded Links/ })).toHaveAttribute("href", "/quiz/links");
+    expect(screen.getByRole("link", { name: /Base Quiz/ })).toHaveAttribute("href", "/quiz/base?study=study-1");
+    expect(screen.getByRole("link", { name: /Follow-Up Questions/ })).toHaveAttribute("href", "/quiz/followup?study=study-1");
+    expect(screen.getByRole("link", { name: /Dual Agent/ })).toHaveAttribute("href", "/quiz/double?study=study-1");
+    expect(screen.getByRole("link", { name: /Embedded Links/ })).toHaveAttribute("href", "/quiz/links?study=study-1");
 
-    expect(screen.getByRole("link", { name: /Pre-Quiz Survey/ })).toHaveAttribute("href", "/survey?stage=pre_quiz");
-    expect(screen.getByRole("link", { name: /Mid Survey/ })).toHaveAttribute("href", "/survey?stage=post_base");
-    expect(screen.getByRole("link", { name: /Final Survey/ })).toHaveAttribute("href", "/survey?stage=post_variant");
+    expect(screen.getByRole("link", { name: /Pre-Quiz Survey/ })).toHaveAttribute("href", "/survey?stage=pre_quiz&study=study-1");
+    expect(screen.getByRole("link", { name: /Mid Survey/ })).toHaveAttribute("href", "/survey?stage=post_base&study=study-1");
+    expect(screen.getByRole("link", { name: /Final Survey/ })).toHaveAttribute("href", "/survey?stage=post_variant&study=study-1");
   });
 
   it("navigates to the profile page when Profile is clicked", async () => {

@@ -67,6 +67,10 @@ useEffect(() => {
 
       <div className="page-container">
         <div className="grid gap-4 sm:grid-cols-2">
+          <Link href="/research_panel" className="rounded-2xl border p-5 shadow-sm hover:shadow transition">
+            <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Research Results</h2>
+            <p className="text-sm text-gray-600">Compare quiz and AI interaction averages, filter participant demographics, and inspect individual results</p>
+          </Link>
   
           {user?.is_admin && (
             <Link
@@ -85,6 +89,18 @@ useEffect(() => {
             >
               <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Survey Questions Panel</h2>
               <p className="text-sm text-gray-600">Manage stage-based surveys</p>
+            </Link>
+          )}
+
+          {user?.is_admin && (
+            <Link
+              href="/study_flow_panel"
+              className="rounded-2xl border p-5 shadow-sm hover:shadow transition"
+            >
+              <h2 className="mb-1 text-lg 2xl:text-xl font-semibold">Study Flow</h2>
+              <p className="text-sm text-gray-600">
+                Reorder quiz variants and set counterbalancing
+              </p>
             </Link>
           )}
 
