@@ -73,19 +73,20 @@ describe("SurveyPanelPage", () => {
 
   it("previews the union of shared and variant-specific active questions", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
-    mockApiFetch.mockResolvedValue([
+    const sharedItems = [
       { ...likertItem, id: "shared", stage: "post_base", scope: "post_quiz", prompt: "Common question" },
       { ...likertItem, id: "specific", stage: "post_double", scope: "stages", stages: ["post_double"], prompt: "Double question" },
-    ]);
+    ];
+    mockApiFetch.mockImplementation(url => Promise.resolve(url.endsWith("/post_links") ? sharedItems.slice(0, 1) : sharedItems));
     render(<SurveyPanelPage />);
     await screen.findByText("Common question");
     fireEvent.change(screen.getByLabelText("Preview survey"), { target: { value: "post_double" } });
     fireEvent.click(screen.getByRole("button", { name: "Preview effective survey" }));
     const preview = within(screen.getByRole("region", { name: "Effective survey preview" }));
-    expect(preview.getByText(/Common question/)).toBeInTheDocument();
+    expect(await preview.findByText(/Common question/)).toBeInTheDocument();
     expect(preview.getByText(/Double question/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Preview survey"), { target: { value: "post_links" } });
-    expect(preview.queryByText(/Double question/)).not.toBeInTheDocument();
+    await waitFor(() => expect(preview.queryByText(/Double question/)).not.toBeInTheDocument());
   });
 
   it("creates a question for all surveys without duplicating it into each stage", async () => {

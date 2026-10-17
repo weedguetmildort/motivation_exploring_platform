@@ -57,3 +57,7 @@ export async function submitSurvey(stage: SurveyStage, answers: SurveyAnswer[]) 
     body: JSON.stringify({ answers }),
   });
 }
+
+export function getSurveyPreview(stage: SurveyStage) {
+  return apiFetch<SurveyItem[]>(`/api/surveys/preview/${encodeURIComponent(stage)}`);
+}

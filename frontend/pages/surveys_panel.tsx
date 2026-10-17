@@ -1,9 +1,10 @@
+import EffectiveSurveyPreview from "../components/EffectiveSurveyPreview";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
 import { getStudyConfig, type SurveyStages } from "../lib/study";
-import { DEFAULT_SURVEY_STAGES, questionApplies, questionTarget, targetFields, type QuestionScope } from "../lib/surveyConfig";
+import { DEFAULT_SURVEY_STAGES, questionTarget, targetFields, type QuestionScope } from "../lib/surveyConfig";
 import { selectedStudy } from "../lib/studySelection";
 
 export default function SurveyPanelPage() {
@@ -51,7 +52,6 @@ export default function SurveyPanelPage() {
   const [settings, setSettings] = useState<SurveyStages>(DEFAULT_SURVEY_STAGES);
   const [extraStages, setExtraStages] = useState<string[]>([]);
   const [previewStage, setPreviewStage] = useState("pre_quiz");
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [stage, setStage] = useState<SurveyStage>("pre_quiz");
   const [type, setType] = useState<SurveyItemType>("likert");
   const [category, setCategory] = useState("");
@@ -390,14 +390,7 @@ export default function SurveyPanelPage() {
 
       {/* Create */}
       <div className="page-container">
-        <section aria-label="Effective survey preview" className="mb-6 rounded-xl border bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold">Effective survey preview</h2>
-          <p className="mt-1 text-sm text-gray-600">Includes active shared questions and additions for this stage. Already opened surveys keep their saved questions.</p>
-          <label className="mt-3 block text-sm">Preview survey<select value={previewStage} onChange={e => setPreviewStage(e.target.value)} className="ml-3 rounded border p-2">{Object.entries(settings).map(([key, item]) => <option key={key} value={key}>{item.name}{item.enabled ? "" : " (disabled for new enrollments)"}</option>)}</select></label>
-          <p className="mt-3 text-sm">{items.filter(item => questionApplies(item, previewStage)).length} active questions · {settings[previewStage]?.enabled ? "Enabled" : "Disabled"}</p>
-          <button type="button" onClick={() => setPreviewOpen(value => !value)} aria-expanded={previewOpen} className="mt-3 rounded-lg border px-3 py-2 text-sm">{previewOpen ? "Hide preview" : "Preview effective survey"}</button>
-          {previewOpen && <ol className="mt-3 list-inside list-decimal space-y-2">{items.filter(item => questionApplies(item, previewStage)).map(item => <li key={item.id}>{item.prompt}{item.required ? " (required)" : " (optional)"}</li>)}</ol>}
-        </section>
+        <EffectiveSurveyPreview settings={settings} stage={previewStage} onStageChange={setPreviewStage} revision={items} />
         <div className="bg-white rounded-xl p-8 shadow-sm border">
           <h2 className="text-xl 2xl:text-2xl font-semibold mb-4">Add Survey Item</h2>
 

@@ -10,17 +10,9 @@ export const DEFAULT_SURVEY_STAGES: SurveyStages = {
 
 export type QuestionScope = "all_surveys" | "post_quiz" | "stages";
 export type TargetedQuestion = { stage: string; scope?: QuestionScope | null; stages?: string[]; active?: boolean };
-export function questionApplies(item: TargetedQuestion, stage: string): boolean {
-  if (item.active === false) return false;
-  if (item.scope === "all_surveys") return true;
-  if (item.scope === "post_quiz") return stage !== "pre_quiz";
-  if (item.scope === "stages") return item.stages?.includes(stage) ?? false;
-  return item.stage === stage || (item.stage === "post_base" && stage !== "pre_quiz");
-}
-
 export function questionTarget(item: TargetedQuestion): string {
   return item.scope === "all_surveys" || item.scope === "post_quiz" ? item.scope :
-    item.scope === "stages" ? item.stages?.[0] ?? item.stage : item.stage === "post_base" || item.stage === "post_variant" ? "post_quiz" : item.stage;
+    item.scope === "stages" ? item.stages?.[0] ?? item.stage : item.stage === "post_base" ? "post_quiz" : item.stage;
 }
 
 export function targetFields(target: string, stages: string[] = []) {
