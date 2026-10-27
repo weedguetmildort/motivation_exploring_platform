@@ -6,7 +6,7 @@ export type StudyAccessPolicy = {
   requires_approval: boolean;
 };
 export const DEFAULT_ACCESS_POLICY: StudyAccessPolicy = {
-  mode: "sequential_approval", requires_study1_completion: true, requires_approval: true,
+  mode: "independent_approval", requires_study1_completion: false, requires_approval: true,
 };
 
 export function rememberStudy(study: StudyId) {

@@ -32,6 +32,12 @@ def setup():
     return raw, db, student, str(admin_id), client
 
 
+@pytest.fixture
+def sequential_mode(monkeypatch):
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "sequential_approval")
+
+
 def headers(email="student@example.com"):
     return {"Cookie": "session=" + create_access_token(email)}
 
@@ -51,7 +57,7 @@ def test_open_first_and_locked_second_every_endpoint(setup):
     assert raw.study_enrollments.count_documents({}) == 0
 
 
-def test_admin_only_approval_prerequisite_and_consent(setup):
+def test_admin_only_approval_prerequisite_and_consent(setup, sequential_mode):
     raw, db, student, admin, client = setup
     path = f"/studies/participants/{student.id}/study-2-access"
     assert client.patch(path, json={"approved": True}, headers=headers()).status_code == 403
@@ -141,6 +147,7 @@ def test_existing_config_and_drawn_size_are_preserved(setup):
 def test_environment_overrides_legacy_prerequisite_for_existing_enrollments(setup, monkeypatch):
     from app.core.config import get_settings
     raw, db, student, admin, client = setup
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "sequential_approval")
     approve_study2(raw, student.id, admin, True)
     assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 403
     monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent_approval")
@@ -217,7 +224,7 @@ def test_deprecated_api_prerequisite_cannot_override_environment(setup, monkeypa
 def test_access_mode_validation_and_default(monkeypatch):
     from app.core.config import Settings
     monkeypatch.delenv("STUDY_ACCESS_MODE", raising=False)
-    assert Settings().STUDY_ACCESS_MODE == "sequential_approval"
+    assert Settings().STUDY_ACCESS_MODE == "independent_approval"
     monkeypatch.setenv("STUDY_ACCESS_MODE", " Independent ")
     assert Settings().STUDY_ACCESS_MODE == "independent"
     monkeypatch.setenv("STUDY_ACCESS_MODE", "invalid")
@@ -369,7 +376,7 @@ def test_one_code_unlocks_many_participants_until_rotated(setup, code_mode):
     assert enrollment["enrollment_source"] == "access_code" and enrollment["step_order"]
 
 
-def test_access_code_keeps_study1_rule_in_sequential_mode(setup):
+def test_access_code_keeps_study1_rule_in_sequential_mode(setup, sequential_mode):
     raw, db, student, admin, client = setup
     code = rotate(client)["code"]
     status = client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).json()

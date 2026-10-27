@@ -354,7 +354,7 @@ export default function StudyFlowPanel() {
           <label className="block">Questions per quiz<input type="number" min={1} max={100} value={questionCount} onChange={e => setQuestionCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
           <label className="block">Questions assigned wrong AI advice<input type="number" min={0} max={100} value={wrongCount} onChange={e => setWrongCount(Number(e.target.value))} className="ml-3 rounded border p-2" /></label>
           <label className="block">Wrong AI advice rate (optional, 0–1)<input type="number" min={0} max={1} step={.05} value={wrongRate} onChange={e => setWrongRate(e.target.value)} className="ml-3 rounded border p-2" /></label>
-          {selectedStudy() === "study-2" && <p className="text-sm text-gray-600">Study access is controlled by the backend STUDY_ACCESS_MODE setting ({config.study_access_mode ?? "sequential_approval"}). Study 1 completion: {config.requires_study1_completion ? "required" : "optional"}. Administrator approval: {config.requires_study2_approval !== false ? "required" : "optional"}.</p>}
+          {selectedStudy() === "study-2" && <p className="text-sm text-gray-600">Study access is controlled by the backend STUDY_ACCESS_MODE setting ({config.study_access_mode ?? "independent_approval"}). Study 1 completion: {config.requires_study1_completion ? "required" : "optional"}. Administrator approval: {config.requires_study2_approval !== false ? "required" : "optional"}.</p>}
         </section>
         {/* Question sets */}
         <section className="mt-6 rounded-xl border bg-white p-5 shadow-sm">

@@ -10,7 +10,7 @@ STUDY_ACCESS_MODES = {
 
 class Settings:
     def __init__(self):
-        self.STUDY_ACCESS_MODE = os.getenv("STUDY_ACCESS_MODE", "sequential_approval").strip().lower()
+        self.STUDY_ACCESS_MODE = os.getenv("STUDY_ACCESS_MODE", "independent_approval").strip().lower()
         if self.STUDY_ACCESS_MODE not in STUDY_ACCESS_MODES:
             raise ValueError("STUDY_ACCESS_MODE must be one of: " + ", ".join(STUDY_ACCESS_MODES))
 

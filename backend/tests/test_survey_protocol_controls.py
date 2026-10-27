@@ -132,9 +132,11 @@ def test_choice_values_validate_against_original_options_after_an_edit(setup):
 
 
 @pytest.mark.parametrize("retained_complete", [False, True])
-def test_study2_prerequisite_uses_repaired_retained_steps(setup, retained_complete):
+def test_study2_prerequisite_uses_repaired_retained_steps(setup, retained_complete, monkeypatch):
+    from app.core.config import get_settings
     from app.services.studies import approve_study2
     raw, db, student, admin, client = setup
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "sequential_approval")
     approve_study2(raw, student.id, admin, True)
     retained = flow.build_step_order(["double"])
     raw.users.update_one({"_id": ObjectId(student.id)}, {"$set": {

@@ -54,9 +54,9 @@ class StudyConfigPublic(BaseModel):
     questions_per_quiz: int = 5
     wrong_ai_count: int = 3
     wrong_ai_rate: Optional[float] = None
-    requires_study1_completion: bool = True
+    requires_study1_completion: bool = False
     requires_study2_approval: bool = True
-    study_access_mode: str = "sequential_approval"
+    study_access_mode: str = "independent_approval"
     study_id: Optional[str] = None
     survey_stages: dict[str, SurveyStageSettings] = Field(default_factory=dict)
     # Every variant the code currently declares, so the admin UI can render the

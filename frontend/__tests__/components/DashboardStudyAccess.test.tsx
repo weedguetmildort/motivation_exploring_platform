@@ -9,10 +9,12 @@ const push = jest.fn();
 jest.mock("next/router", () => ({ useRouter: () => ({ push }) }));
 const first = { study_id: "study-1", label: "Study 1", available: true, completed_steps: 4, total_steps: 9, consent_required: false };
 const second = { study_id: "study-2", label: "Study 2", available: true, completed_steps: 0, total_steps: 9, consent_required: true };
+// Invitation tests exercise the sequential flow; the default mode is independent_approval.
+const access_policy = { mode: "sequential_approval", requires_study1_completion: true, requires_approval: true };
 const user = { id: "synthetic", study_id: "study-1", is_admin: false } as User;
 beforeEach(() => {
   jest.clearAllMocks(); sessionStorage.clear(); window.history.replaceState({}, "", "/dashboard");
-  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, second] });
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, second], access_policy });
   push.mockResolvedValue(true);
 });
 
@@ -71,7 +73,7 @@ test("a rejected start keeps the user on the dashboard and displays the error", 
 });
 
 test("approval received during an interview appears on window focus", async () => {
-  (apiFetch as jest.Mock).mockResolvedValueOnce({ studies: [first, { ...second, available: false }] });
+  (apiFetch as jest.Mock).mockResolvedValueOnce({ studies: [first, { ...second, available: false }], access_policy });
   render(<DashboardStudyAccess user={user} />);
   await act(async () => {});
   expect(screen.queryByText("Your interview is available")).not.toBeInTheDocument();
