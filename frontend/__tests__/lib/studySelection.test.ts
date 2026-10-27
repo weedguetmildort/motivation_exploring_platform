@@ -16,5 +16,6 @@ test("Study 2 requests use explicit routes while login and approvals stay global
   expect(studyApiPath("/auth/consent", "study-2")).toBe("/api/studies/study-2/auth/consent");
   expect(studyApiPath("/auth/login", "study-2")).toBe("/auth/login");
   expect(studyApiPath("/api/studies/participants?search=test", "study-2")).toBe("/api/studies/participants?search=test");
+  expect(studyApiPath("/api/studies/access-code/redeem", "study-2")).toBe("/api/studies/access-code/redeem");
   expect(studyApiPath("/api/studies/study-2/chat/double", "study-2")).toBe("/api/studies/study-2/chat/double");
 });

@@ -23,7 +23,7 @@ export function selectedStudy(): StudyId {
 
 export function studyApiPath(input: RequestInfo | URL, study: StudyId = selectedStudy()): RequestInfo | URL {
   if (typeof input !== "string" || study === "study-1") return input;
-  if (input.startsWith("/api/studies/study-") || input.startsWith("/api/studies/catalog") || input.startsWith("/api/studies/participants")) return input;
+  if (input.startsWith("/api/studies/study-") || input.startsWith("/api/studies/catalog") || input.startsWith("/api/studies/participants") || input.startsWith("/api/studies/access-code")) return input;
   if (["/auth/login", "/auth/signup", "/auth/logout", "/auth/change-password"].includes(input)) return input;
   if (input.startsWith("/api/")) return `/api/studies/${study}/${input.slice(5)}`;
   if (input.startsWith("/auth/")) return `/api/studies/${study}${input}`;

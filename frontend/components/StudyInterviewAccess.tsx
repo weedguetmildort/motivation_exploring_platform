@@ -5,7 +5,7 @@ import type { StudyAccessPolicy } from "../lib/studySelection";
 type Participant = { id: string; name: string; email: string; approved: boolean; available: boolean;
   reason: string | null; status: string; completed_steps: number; total_steps: number;
   approved_at: string | null; interview_at: string | null; notes: string;
-  access_history: { approved: boolean; admin_id: string; at: string; notes: string }[] };
+  access_history: { approved: boolean; admin_id: string | null; via?: string; code_version?: number; at: string; notes?: string }[] };
 
 export default function StudyInterviewAccess() {
   const [search, setSearch] = useState("");
@@ -40,7 +40,7 @@ export default function StudyInterviewAccess() {
   }
   return <section aria-label="Study 2 interview approval" className="rounded-xl border bg-white p-4 space-y-3">
     <h2 className="text-lg font-semibold">{requiresApproval ? "Study 2 interview access" : "Study 2 access"}</h2>
-    <p className="text-sm text-gray-600">Study 1 is open to registered participants. {requiresApproval ? "Approve Study 2 when arranging or starting the interview." : "Study 2 approval is optional in the current mode; removing approval does not block access."} Study 1 completion is {data?.access_policy?.requires_study1_completion === false ? "optional" : "required"}. Approval preserves progress and never grants admin access. Access rules are controlled by STUDY_ACCESS_MODE.</p>
+    <p className="text-sm text-gray-600">Study 1 is open to registered participants. {requiresApproval ? "Participants unlock Study 2 with the access code above, or approve them here. A revoked participant cannot re-enter with a code." : "Study 2 approval is optional in the current mode; removing approval does not block access."} Study 1 completion is {data?.access_policy?.requires_study1_completion === false ? "optional" : "required"}. Approval preserves progress and never grants admin access. Access rules are controlled by STUDY_ACCESS_MODE.</p>
     <label className="block text-sm">Find participant for Study 2<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Name, email, or account ID" className="block mt-1 w-full rounded border p-2" /></label>
     <button type="button" onClick={() => setRefresh(value => value + 1)} className="rounded border px-3 py-2 text-sm">Refresh interview access</button>
     {error && <p role="alert" className="text-red-700">{error}</p>}{notice && <p role="status">{notice}</p>}
@@ -51,7 +51,7 @@ export default function StudyInterviewAccess() {
         <td className="p-2"><details><summary className="cursor-pointer">Date, notes, and approval history</summary>
           <label className="block">Interview date/time (UTC)<input type="datetime-local" aria-label={`Interview time for ${person.email}`} value={draft(person).interview} onChange={e => setDrafts(previous => ({ ...previous, [person.id]: { ...draft(person), interview: e.target.value } }))} className="block rounded border p-2" /></label>
           <label className="block mt-2">Interviewer notes<textarea aria-label={`Interview notes for ${person.email}`} maxLength={4000} value={draft(person).notes} onChange={e => setDrafts(previous => ({ ...previous, [person.id]: { ...draft(person), notes: e.target.value } }))} className="block rounded border p-2" /></label>
-          {person.access_history?.map((entry, i) => <p key={i} className="text-xs mt-2">{entry.approved ? "Approved" : "Revoked"} · {new Date(entry.at).toLocaleString()} · Admin {entry.admin_id}{entry.notes ? ` · ${entry.notes}` : ""}</p>)}
+          {person.access_history?.map((entry, i) => <p key={i} className="text-xs mt-2">{entry.approved ? "Approved" : "Revoked"} · {new Date(entry.at).toLocaleString()} · {entry.via === "access_code" ? `Access code v${entry.code_version}` : `Admin ${entry.admin_id}`}{entry.notes ? ` · ${entry.notes}` : ""}</p>)}
         </details></td>
         <td className="p-2"><button disabled={!!busy} onClick={() => save(person, true)} className="rounded border px-3 py-2">{person.approved ? "Save approval details" : "Approve Study 2 access"}</button>{person.approved && <button disabled={!!busy} onClick={() => save(person, false)} className="ml-2 rounded border px-3 py-2">{requiresApproval ? "Revoke access" : "Remove approval"}</button>}</td>
       </tr>)}</tbody></table></div>

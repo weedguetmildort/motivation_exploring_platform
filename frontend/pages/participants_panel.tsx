@@ -1,4 +1,5 @@
 import StudyInterviewAccess from "../components/StudyInterviewAccess";
+import StudyAccessCodeAdmin from "../components/StudyAccessCodeAdmin";
 // frontend/pages/participants_panel.tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
@@ -453,7 +454,7 @@ export default function ParticipantsPanelPage() {
         onDashboard={() => router.push("/dashboard")}
         onLogout={onLogout}
       />
-      <div className="page-container"><StudyInterviewAccess /></div>
+      <div className="page-container space-y-4"><StudyAccessCodeAdmin /><StudyInterviewAccess /></div>
 
 
       <div className="page-container">

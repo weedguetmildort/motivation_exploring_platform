@@ -137,3 +137,54 @@ test("sequential mode hides Study 2 until the prerequisite is satisfied", async 
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
   expect(screen.queryByText("Study 2 is ready")).not.toBeInTheDocument();
 });
+
+const locked = { ...second, available: false, approved: false, reason: "Enter the access code from your interviewer" };
+
+test("participants unlock Study 2 with the interview access code", async () => {
+  const unlocked = { ...second, approved: true };
+  (apiFetch as jest.Mock).mockImplementation((url: string) => Promise.resolve(
+    url === "/api/studies/access-code/redeem" ? unlocked : url === "/api/studies/catalog" ? { studies: [first, locked] } : {}));
+  render(<DashboardStudyAccess user={user} />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "Study 2 access code" }), { target: { value: " abcd-efgh " } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Study 2" }));
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/consent?study=study-2"));
+  const redeem = (apiFetch as jest.Mock).mock.calls.find(([url]) => url === "/api/studies/access-code/redeem");
+  expect(JSON.parse(redeem[1].body)).toEqual({ code: "abcd-efgh" });
+  expect(apiFetch).toHaveBeenCalledWith("/api/studies/study-2/studies/start", { method: "POST" });
+});
+
+test("an invalid access code shows the server message and stays retryable", async () => {
+  (apiFetch as jest.Mock).mockImplementation((url: string) => url === "/api/studies/access-code/redeem"
+    ? Promise.reject(new Error("That access code is not valid. Check it with your interviewer."))
+    : Promise.resolve({ studies: [first, locked] }));
+  render(<DashboardStudyAccess user={user} />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "Study 2 access code" }), { target: { value: "WRONG" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Study 2" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("not valid");
+  expect(screen.getByRole("button", { name: "Unlock Study 2" })).toBeEnabled();
+  expect(push).not.toHaveBeenCalled();
+});
+
+test("a code that approves but still needs Study 1 does not navigate", async () => {
+  const pending = { ...locked, approved: true, reason: "Complete Study 1 first" };
+  (apiFetch as jest.Mock).mockImplementation((url: string) => Promise.resolve(
+    url === "/api/studies/access-code/redeem" ? pending : { studies: [first, locked] }));
+  render(<DashboardStudyAccess user={user} />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "Study 2 access code" }), { target: { value: "ABCD-EFGH" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Study 2" }));
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument());
+  expect(push).not.toHaveBeenCalled();
+});
+
+test("the code form is hidden for admins and when approval is not required", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, locked] });
+  const { unmount } = render(<DashboardStudyAccess user={{ ...user, is_admin: true }} />);
+  await screen.findByRole("heading", { name: "Study workspace" });
+  expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
+  unmount();
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, locked], access_policy: { mode: "independent", requires_study1_completion: false, requires_approval: false } });
+  render(<DashboardStudyAccess user={user} />);
+  await waitFor(() => expect(apiFetch).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
+});
