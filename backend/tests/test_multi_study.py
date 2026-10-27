@@ -323,3 +323,103 @@ def test_interview_search_accepts_a_full_name_and_is_admin_only(setup):
     response = client.get("/studies/participants?search=Test%20Student", headers=headers("admin@example.com"))
     assert response.status_code == 200
     assert [p["id"] for p in response.json()["participants"]] == [student.id]
+
+
+@pytest.fixture
+def code_mode(monkeypatch):
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent_approval")
+
+
+def rotate(client):
+    return client.post("/studies/access-code/rotate", headers=headers("admin@example.com")).json()
+
+
+def test_access_code_admin_only_and_rotation(setup):
+    raw, db, student, admin, client = setup
+    assert client.get("/studies/access-code", headers=headers()).status_code == 403
+    assert client.post("/studies/access-code/rotate", headers=headers()).status_code == 403
+    assert client.get("/studies/access-code", headers=headers("admin@example.com")).json()["code"] is None
+    first = rotate(client)
+    assert first["version"] == 1 and len(first["code"]) == 9 and first["rotated_by"] == admin
+    assert client.get("/studies/access-code", headers=headers("admin@example.com")).json()["code"] == first["code"]
+    second = rotate(client)
+    assert second["version"] == 2 and second["code"] != first["code"]
+
+
+def test_one_code_unlocks_many_participants_until_rotated(setup, code_mode):
+    raw, db, student, admin, client = setup
+    others = [create_user(db["users"], f"s{i}@example.com", "password", "S", str(i), True) for i in range(3)]
+    code = rotate(client)["code"]
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 403
+    for email in ("student@example.com", "s0@example.com", "s1@example.com"):
+        # Lowercase and missing dash are accepted; Study 1 is not required in this mode.
+        status = client.post("/studies/access-code/redeem", json={"code": code.lower().replace("-", "")},
+                             headers=headers(email))
+        assert status.status_code == 200 and status.json()["available"] is True
+        assert client.get("/studies/study-2/study/next", headers=headers(email)).status_code == 200
+    new_code = rotate(client)["code"]
+    assert client.post("/studies/access-code/redeem", json={"code": code}, headers=headers("s2@example.com")).status_code == 403
+    assert client.post("/studies/access-code/redeem", json={"code": new_code}, headers=headers("s2@example.com")).status_code == 200
+    # Rotation never revokes earlier redemptions.
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+    enrollment = raw.study_enrollments.find_one({"_id": ObjectId(others[2].id)})
+    assert enrollment["access_history"][-1] == {**enrollment["access_history"][-1], "via": "access_code",
+                                                "code_version": 2, "admin_id": None}
+    assert enrollment["enrollment_source"] == "access_code" and enrollment["step_order"]
+
+
+def test_access_code_keeps_study1_rule_in_sequential_mode(setup):
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    status = client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).json()
+    assert status["approved"] is True and status["available"] is False and status["reason"] == "Complete Study 1 first"
+    finish_first(raw, student)
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+
+
+def test_access_code_is_unneeded_when_approval_is_optional(setup, monkeypatch):
+    from app.core.config import get_settings
+    raw, db, student, admin, client = setup
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent")
+    response = client.post("/studies/access-code/redeem", json={"code": "anything"}, headers=headers())
+    assert response.status_code == 200 and response.json()["available"] is True
+    assert raw.study_enrollments.count_documents({}) == 0
+
+
+def test_redeeming_twice_keeps_frozen_protocol_and_single_audit(setup, code_mode):
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
+    before = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).status_code == 200
+    after = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert after["step_order"] == before["step_order"] and len(after["access_history"]) == 1
+
+
+def test_access_code_cannot_bypass_admin_revocation(setup, code_mode):
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
+    approve_study2(raw, student.id, admin, False)
+    assert client.get("/studies/catalog", headers=headers()).json()["studies"][1]["reason"] == "Study 2 access was revoked"
+    response = client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
+    assert response.status_code == 403 and "revoked" in response.json()["detail"]
+    approve_study2(raw, student.id, admin, True)
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+
+
+def test_access_code_rejects_without_active_code_and_limits_guesses(setup, code_mode):
+    raw, db, student, admin, client = setup
+    assert client.post("/studies/access-code/redeem", json={"code": "ABCD-EFGH"}, headers=headers()).status_code == 403
+    code = rotate(client)["code"]
+    for _ in range(9):
+        assert client.post("/studies/access-code/redeem", json={"code": "WRONG123"}, headers=headers()).status_code == 403
+    # The correct code is refused once the failure limit is reached.
+    assert client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).status_code == 429
+    assert raw.study_enrollments.count_documents({}) == 0
+    raw.study_access_attempts.update_one({"_id": ObjectId(student.id)},
+        {"$set": {"window_start": datetime(2000, 1, 1, tzinfo=timezone.utc)}})
+    assert client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).status_code == 200
+    assert raw.study_access_attempts.count_documents({}) == 0
+    assert client.post("/studies/access-code/redeem", json={"code": ""}, headers=headers()).status_code == 422

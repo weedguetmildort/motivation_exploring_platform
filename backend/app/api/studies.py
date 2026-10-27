@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from .auth import get_current_user
 from ..schemas.user import UserPublic
 from ..services.studies import (STUDY_IDS, StudyDatabase, raw_database, enrollment_status,
-                               check_access, approve_study2, access_policy)
+                               check_access, approve_study2, access_policy,
+                               access_code_status, rotate_access_code, redeem_access_code)
 
 router = APIRouter(prefix="/studies", tags=["studies"])
 
@@ -84,3 +85,24 @@ def participants(request: Request, search: str = Query("", max_length=200),
 def access(user_id: str, data: AccessUpdate, request: Request, user: UserPublic = Depends(admin)):
     return approve_study2(raw_database(request.app.state.db), user_id, user.id, data.approved,
                           data.interview_at, data.notes)
+
+
+class CodeRedemption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(..., min_length=1, max_length=64)
+
+
+@router.get("/access-code")
+def current_access_code(request: Request, _: UserPublic = Depends(admin)):
+    return access_code_status(raw_database(request.app.state.db))
+
+
+@router.post("/access-code/rotate")
+def rotate_code(request: Request, user: UserPublic = Depends(admin)):
+    return rotate_access_code(raw_database(request.app.state.db), user.id)
+
+
+@router.post("/access-code/redeem")
+def redeem_code(data: CodeRedemption, request: Request, user: UserPublic = Depends(get_current_user)):
+    raw = raw_database(request.app.state.db)
+    return redeem_access_code(raw, raw["users"].find_one({"_id": ObjectId(user.id)}), data.code)

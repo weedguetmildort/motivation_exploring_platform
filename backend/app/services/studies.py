@@ -7,7 +7,9 @@ attempt retains its immutable question snapshot. Survey definitions are copied
 once, then edited independently per study. Collection.database is scoped
 as well, so service helpers cannot accidentally use another study's counters.
 """
-from datetime import datetime, timezone
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from bson import ObjectId
 from fastapi import HTTPException
@@ -248,7 +250,7 @@ def enrollment_status(raw, user, study_id):
     eligible, reason = True, None
     if study_id == "study-2" and policy["requires_approval"] and not approved:
         eligible = False
-        reason = "Available during your interview"
+        reason = "Study 2 access was revoked" if enrollment.get("revoked_at") else "Enter the access code from your interviewer"
     elif study_id == "study-2" and not user.get("is_admin") and policy["requires_study1_completion"] and not study1_complete(raw, user):
         eligible, reason = False, "Complete Study 1 first"
     return {"study_id": study_id, "label": "Study 1" if study_id == "study-1" else "Study 2",
@@ -319,4 +321,73 @@ def approve_study2(raw, user_id, admin_id, approved, interview_at=None, notes=""
         "$push": {"access_history": change},
         "$setOnInsert": {"user_id": user_id, "study_id": "study-2", "created_at": now},
     }, upsert=True)
+    return enrollment_status(raw, user, "study-2")
+
+
+# Study 2 access code. One shared code is active at a time; any participant
+# may redeem it until an administrator rotates it. Rotation never revokes
+# participants who already redeemed an earlier code.
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I lookalikes
+CODE_LENGTH = 8
+MAX_CODE_FAILURES = 10
+CODE_FAILURE_WINDOW = timedelta(minutes=15)
+
+
+def normalize_code(code):
+    return "".join(ch for ch in (code or "").upper() if ch.isalnum())
+
+
+def access_code_status(raw):
+    doc = raw["study_access_codes"].find_one({"_id": "study-2"})
+    if not doc:
+        return {"code": None, "version": 0, "rotated_at": None, "rotated_by": None}
+    code = doc["code"]
+    return {"code": f"{code[:4]}-{code[4:]}", "version": doc["version"],
+            "rotated_at": doc["rotated_at"], "rotated_by": doc["rotated_by"]}
+
+
+def rotate_access_code(raw, admin_id):
+    code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+    raw["study_access_codes"].update_one({"_id": "study-2"}, {
+        "$set": {"code": code, "rotated_at": datetime.now(timezone.utc), "rotated_by": admin_id},
+        "$inc": {"version": 1},
+    }, upsert=True)
+    return access_code_status(raw)
+
+
+def _naive_utc(value):
+    # Mongo returns naive UTC datetimes; mongomock may keep them aware.
+    return value.replace(tzinfo=None) if value.tzinfo else value
+
+
+def redeem_access_code(raw, user, code):
+    """Grant Study 2 approval with the active code. Study 1 rules still apply."""
+    if user.get("is_admin") or not access_policy()["requires_approval"]:
+        return enrollment_status(raw, user, "study-2")
+    now = datetime.now(timezone.utc)
+    attempts = raw["study_access_attempts"]
+    record = attempts.find_one({"_id": user["_id"]})
+    if record and _naive_utc(record["window_start"]) <= _naive_utc(now - CODE_FAILURE_WINDOW):
+        attempts.delete_one({"_id": user["_id"]})
+        record = None
+    if record and record["failures"] >= MAX_CODE_FAILURES:
+        raise HTTPException(429, "Too many incorrect codes. Try again in 15 minutes.")
+    enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]}) or {}
+    if enrollment.get("approved"):
+        return enrollment_status(raw, user, "study-2")
+    if enrollment.get("revoked_at"):
+        raise HTTPException(403, "Study 2 access was revoked. Ask the interviewer to restore it.")
+    active = raw["study_access_codes"].find_one({"_id": "study-2"})
+    if not active or not hmac.compare_digest(normalize_code(code).encode(), active["code"].encode()):
+        attempts.update_one({"_id": user["_id"]}, {"$inc": {"failures": 1}, "$setOnInsert": {"window_start": now}},
+                            upsert=True)
+        raise HTTPException(403, "That access code is not valid. Check it with your interviewer.")
+    attempts.delete_one({"_id": user["_id"]})
+    ensure_study2_enrollment(raw, user, source="access_code")
+    change = {"approved": True, "admin_id": None, "via": "access_code", "code_version": active["version"], "at": now}
+    raw["study_enrollments"].update_one({"_id": user["_id"], "approved": {"$ne": True}}, {
+        "$set": {"approved": True, "approved_at": now, "approved_by": "access_code",
+                 "access_code_version": active["version"]},
+        "$push": {"access_history": change},
+    })
     return enrollment_status(raw, user, "study-2")

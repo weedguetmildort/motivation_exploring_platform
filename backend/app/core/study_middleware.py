@@ -13,7 +13,7 @@ class StudyMiddleware:
             return await self.app(scope, receive, send)
         path = scope["path"]
         parts = path.split("/", 3)
-        if len(parts) < 3 or parts[1] != "studies" or parts[2] in ("catalog", "participants"):
+        if len(parts) < 3 or parts[1] != "studies" or parts[2] in ("catalog", "participants", "access-code"):
             return await self.app(scope, receive, send)
         sid = parts[2]
         if sid not in STUDY_IDS:
