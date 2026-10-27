@@ -2,13 +2,14 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { hydrateRoot } from "react-dom/client";
 import { useEffect } from "react";
 import StudyShell from "../../components/StudyShell";
+import { invalidateStudyCatalog } from "../../lib/studyCatalog";
 import { apiFetch, ApiError } from "../../lib/fetcher";
 const { renderToString } = require("react-dom/server.node");
 jest.mock("../../lib/fetcher", () => ({ ...jest.requireActual("../../lib/fetcher"), apiFetch: jest.fn() }));
 const mockPush = jest.fn(), mockReplace = jest.fn();
 const router = { pathname: "/dashboard", asPath: "/dashboard", isReady: true, push: mockPush, replace: mockReplace };
 jest.mock("next/router", () => ({ useRouter: () => router }));
-beforeEach(() => { jest.clearAllMocks(); sessionStorage.clear(); window.history.replaceState({}, "", "/dashboard"); router.pathname = "/dashboard"; router.asPath = "/dashboard"; router.isReady = true; });
+beforeEach(() => { invalidateStudyCatalog(); jest.clearAllMocks(); sessionStorage.clear(); window.history.replaceState({}, "", "/dashboard"); router.pathname = "/dashboard"; router.asPath = "/dashboard"; router.isReady = true; });
 const first = { study_id: "study-1", label: "Study 1", approved: true, available: true, finished: false, total_steps: 5, completed_steps: 2 };
 const second = { study_id: "study-2", label: "Study 2", approved: false, available: false, reason: "Available during your interview", finished: false, total_steps: 0, completed_steps: 0 };
 

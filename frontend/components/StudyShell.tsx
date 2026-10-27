@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/router";
-import { apiFetch, ApiError } from "../lib/fetcher";
+import { ApiError } from "../lib/fetcher";
+import { fetchStudyCatalog } from "../lib/studyCatalog";
 import { selectedStudy, rememberStudy, type StudyId, studyPageUrl } from "../lib/studySelection";
 
 export type Enrollment = { study_id: StudyId; label: string; approved: boolean; available: boolean;
@@ -19,7 +20,7 @@ export default function StudyShell({ children }: { children: ReactNode }) {
     async function load() {
       if (study === "study-1") { setContext({ path: router.asPath, study }); return; }
       try {
-        const result = await apiFetch<{ studies: Enrollment[] }>("/api/studies/catalog");
+        const result = await fetchStudyCatalog();
         const enrollment = result.studies.find(s => s.study_id === study);
         if (!cancelled) setContext({ path: router.asPath, study, enrollment,
           error: enrollment ? undefined : "Unable to check study access. Please try again." });

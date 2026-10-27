@@ -4,6 +4,7 @@ import { apiFetch } from "../../lib/fetcher";
 import { invalidateMeCache, type User } from "../../lib/auth";
 
 jest.mock("../../lib/fetcher", () => ({ apiFetch: jest.fn() }));
+import { invalidateStudyCatalog } from "../../lib/studyCatalog";
 jest.mock("../../lib/auth", () => ({ invalidateMeCache: jest.fn() }));
 const push = jest.fn();
 jest.mock("next/router", () => ({ useRouter: () => ({ push }) }));
@@ -13,7 +14,7 @@ const second = { study_id: "study-2", label: "Study 2", available: true, complet
 const access_policy = { mode: "sequential_approval", requires_study1_completion: true, requires_approval: true };
 const user = { id: "synthetic", study_id: "study-1", is_admin: false } as User;
 beforeEach(() => {
-  jest.clearAllMocks(); sessionStorage.clear(); window.history.replaceState({}, "", "/dashboard");
+  invalidateStudyCatalog(); jest.clearAllMocks(); sessionStorage.clear(); window.history.replaceState({}, "", "/dashboard");
   (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, second], access_policy });
   push.mockResolvedValue(true);
 });
@@ -183,10 +184,22 @@ test("the code form is hidden for admins and when approval is not required", asy
   const { unmount } = render(<DashboardStudyAccess user={{ ...user, is_admin: true }} />);
   await screen.findByRole("heading", { name: "Study workspace" });
   expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
-  unmount();
+  unmount(); invalidateStudyCatalog();
   (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, locked], access_policy: { mode: "independent", requires_study1_completion: false, requires_approval: false } });
   render(<DashboardStudyAccess user={user} />);
   await waitFor(() => expect(apiFetch).toHaveBeenCalled());
   await act(async () => {});
   expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
+});
+
+test("a background refresh does not clear the error from the last action", async () => {
+  (apiFetch as jest.Mock).mockImplementation((url: string) => url === "/api/studies/access-code/redeem"
+    ? Promise.reject(new Error("That access code is not valid. Check it with your interviewer."))
+    : Promise.resolve({ studies: [first, locked] }));
+  render(<DashboardStudyAccess user={user} />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "Study 2 access code" }), { target: { value: "WRONG" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Study 2" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("not valid");
+  await act(async () => { fireEvent(window, new Event("focus")); });
+  expect(screen.getByRole("alert")).toHaveTextContent("not valid");
 });

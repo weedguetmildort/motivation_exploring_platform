@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/router";
 import { apiFetch } from "../lib/fetcher";
+import { fetchStudyCatalog, invalidateStudyCatalog } from "../lib/studyCatalog";
 import { invalidateMeCache, type User } from "../lib/auth";
 import { rememberStudy, studyApiPath, studyPageUrl, DEFAULT_ACCESS_POLICY, type StudyAccessPolicy } from "../lib/studySelection";
 import type { Enrollment } from "./StudyShell";
@@ -10,6 +11,8 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
   const router = useRouter();
   const [studies, setStudies] = useState<Enrollment[] | null>(null);
   const [policy, setPolicy] = useState<StudyAccessPolicy>(DEFAULT_ACCESS_POLICY);
+  // Background refreshes must not clear an error from the participant's last action.
+  const [loadError, setLoadError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState("");
@@ -18,14 +21,16 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
     let cancelled = false;
     async function refresh() {
       try {
-        const result = await apiFetch<{ studies: Enrollment[]; access_policy?: StudyAccessPolicy }>("/api/studies/catalog");
-        if (!cancelled) { setStudies(result.studies); setPolicy(result.access_policy ?? DEFAULT_ACCESS_POLICY); setError(""); }
-      } catch { if (!cancelled) setError("Study access could not be loaded. Refresh to try again."); }
+        const result = await fetchStudyCatalog();
+        if (!cancelled) { setStudies(result.studies); setPolicy(result.access_policy ?? DEFAULT_ACCESS_POLICY); setLoadError(""); }
+      } catch { if (!cancelled) setLoadError("Study access could not be loaded. Refresh to try again."); }
     }
     void refresh();
     const timer = setInterval(refresh, 15000);
-    window.addEventListener("focus", refresh);
-    return () => { cancelled = true; clearInterval(timer); window.removeEventListener("focus", refresh); };
+    // Returning to the tab is an explicit "check now" (e.g. approval during an interview).
+    const onFocus = () => { invalidateStudyCatalog(); void refresh(); };
+    window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; clearInterval(timer); window.removeEventListener("focus", onFocus); };
   }, [user.id, user.is_admin]);
 
   async function enter(study: Enrollment) {
@@ -33,7 +38,7 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
     setBusy(true); setError("");
     try {
       if (study.study_id === "study-2") await apiFetch(studyApiPath("/api/studies/start", "study-2"), { method: "POST" });
-      invalidateMeCache();
+      invalidateMeCache(); invalidateStudyCatalog();
       const navigated = await router.push(studyPageUrl(study.consent_required ? "/consent" : "/dashboard", study.study_id));
       if (navigated) rememberStudy(study.study_id);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to continue. Please try again."); }
@@ -46,6 +51,7 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
     setBusy(true); setError("");
     try {
       const study = await apiFetch<Enrollment>("/api/studies/access-code/redeem", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+      invalidateStudyCatalog();
       setStudies(previous => previous?.map(s => s.study_id === study.study_id ? study : s) ?? previous);
       setCode(""); setBusy(false);
       if (study.available) await enter(study);
@@ -71,6 +77,6 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
         <button type="submit" disabled={busy || !code.trim()} className="rounded-xl bg-blue-600 px-5 py-2 font-semibold text-white hover:bg-blue-700 disabled:opacity-50">{busy ? "Checking…" : "Unlock Study 2"}</button>
       </div>
     </form>}
-    {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+    {(error || loadError) && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || loadError}</p>}
   </>;
 }
