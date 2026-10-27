@@ -177,3 +177,21 @@ def test_survey_switches_follow_stable_stage_identity(setup, disabled):
         else:
             assert "survey:" + disabled not in assigned["step_order"]
             assert len(assigned["step_order"]) == 8
+
+
+def test_empty_survey_bank_is_not_frozen_into_the_attempt(setup):
+    _, db, student, _, _ = setup
+    assert build_survey_state(db, student.id, student.email, "pre_quiz").items == []
+    added = item(db, "Added after the participant opened the survey", scope="all_surveys")
+    state = build_survey_state(db, student.id, student.email, "pre_quiz")
+    assert [i.id for i in state.items] == [added.id]
+    saved = submit_survey(db, student.id, student.email, "pre_quiz", SurveySubmitRequest(answers=[{"item_id": added.id, "value": 3}]))
+    assert saved.attempt.status == "completed"
+
+
+def test_attempt_that_already_froze_an_empty_bank_recovers(setup):
+    _, db, student, _, _ = setup
+    build_survey_state(db, student.id, student.email, "pre_quiz")
+    db["survey_responses"].update_one({"user_id": student.id, "stage": "pre_quiz"}, {"$set": {"item_snapshot": []}})
+    added = item(db, "Added later", scope="all_surveys")
+    assert [i.id for i in build_survey_state(db, student.id, student.email, "pre_quiz").items] == [added.id]

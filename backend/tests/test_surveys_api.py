@@ -240,7 +240,8 @@ class TestGetState:
         response = client.get("/surveys/pre_quiz/state", headers=headers())
         assert response.status_code == 200
         assert response.json()["attempt"] == {"stage": "pre_quiz", "status": "in_progress", "answered_count": 0, "total_items": 0}
-        assert db["survey_responses"].find_one({"user_id": user.id})["item_snapshot"] == []
+        # An empty bank is not frozen, so items added later still reach this attempt.
+        assert "item_snapshot" not in db["survey_responses"].find_one({"user_id": user.id})
 
     def test_returns_state_with_items_and_answers(self, setup):
         raw, db, user, admin, client = setup

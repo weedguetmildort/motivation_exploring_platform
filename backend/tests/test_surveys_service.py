@@ -432,7 +432,7 @@ class TestBuildSurveyState:
         state = build_survey_state(db, uid, email, "pre_quiz")
         assert state.attempt.status == "in_progress" and state.attempt.total_items == 0
         assert db.survey_responses.count_documents({"user_id": uid, "stage": "pre_quiz"}) == 1
-        assert db.survey_responses.find_one({})["item_snapshot"] == []
+        assert "item_snapshot" not in db.survey_responses.find_one({})
 
     def test_returns_existing_response_doc_with_items_and_answers(self, survey_store):
         db, uid, email = survey_store

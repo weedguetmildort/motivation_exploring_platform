@@ -209,7 +209,9 @@ def load_saved_response(db, user_id, stage):
 
 
 def _snapshot_items(db, doc, stage, user_id):
-    if "item_snapshot" not in doc:
+    # Older attempts may have frozen an empty bank; re-snapshot those while open.
+    unfrozen = "item_snapshot" not in doc or (doc["item_snapshot"] == [] and doc.get("status") != "completed")
+    if unfrozen:
         user = db["users"].find_one({"_id": ObjectId(user_id)}) or {}
         variants = [quiz for quiz in study_flow.quiz_ids_in_order(user.get("step_order") or []) if quiz in study_flow.all_variants()]
         items = effective_survey_items(db, stage, variants)
@@ -219,11 +221,15 @@ def _snapshot_items(db, doc, stage, user_id):
             answered = {a["item_id"] for a in doc.get("answers", [])}
             items = [item for item in items if item.id in answered]
         snapshot = [item.model_dump() for item in _seeded_shuffle(items, f"{user_id}:{stage}")]
+        if not snapshot and doc.get("status") != "completed":
+            # An empty bank is a setup gap, not a protocol. Freezing it would
+            # leave the participant on a survey that can never be submitted.
+            return doc, []
         protocol = user.get("study_protocol") or {}
         settings = study_flow.survey_stage_settings(protocol.get("survey_stages"))
         name = settings.get(stage, {}).get("name") or "Final Survey"
         col = get_survey_responses_collection(db)
-        col.update_one({"_id": doc["_id"], "item_snapshot": {"$exists": False}}, {"$set": {
+        col.update_one({"_id": doc["_id"], "$or": [{"item_snapshot": {"$exists": False}}, {"item_snapshot": []}]}, {"$set": {
             "item_snapshot": snapshot, "covered_quiz_ids": covered, "survey_name": name, "study_flow_version": protocol.get("version"),
         }})
         doc = col.find_one({"_id": doc["_id"]})
