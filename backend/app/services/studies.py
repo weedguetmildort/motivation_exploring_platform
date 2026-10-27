@@ -24,6 +24,11 @@ SHARED_COLLECTIONS = {"questions", "knowledge_links", "allowlist"}
 
 
 
+def as_utc(value):
+    """pymongo returns naive UTC datetimes; label them so clients do not read local time."""
+    return value.replace(tzinfo=value.tzinfo or timezone.utc) if isinstance(value, datetime) else value
+
+
 def access_policy():
     mode = get_settings().STUDY_ACCESS_MODE
     requires_first, requires_approval = STUDY_ACCESS_MODES[mode]
@@ -259,8 +264,8 @@ def enrollment_status(raw, user, study_id):
         "completed_steps": completed, "total_steps": len(order), "finished": finished,
         "consent_required": study_id == "study-2" and not user.get("is_admin") and (
             not (doc or {}).get("consent_agreed_at") or bool((doc or {}).get("consent_declined_at")) or (doc or {}).get("consent") is False),
-        "approved_at": enrollment.get("approved_at") if study_id == "study-2" else None,
-        "interview_at": enrollment.get("interview_at") if study_id == "study-2" else None}
+        "approved_at": as_utc(enrollment.get("approved_at")) if study_id == "study-2" else None,
+        "interview_at": as_utc(enrollment.get("interview_at")) if study_id == "study-2" else None}
 
 
 def ensure_study2_enrollment(raw, user, source="self_enrollment"):
@@ -343,7 +348,7 @@ def access_code_status(raw):
         return {"code": None, "version": 0, "rotated_at": None, "rotated_by": None}
     code = doc["code"]
     return {"code": f"{code[:4]}-{code[4:]}", "version": doc["version"],
-            "rotated_at": doc["rotated_at"], "rotated_by": doc["rotated_by"]}
+            "rotated_at": as_utc(doc["rotated_at"]), "rotated_by": doc["rotated_by"]}
 
 
 def rotate_access_code(raw, admin_id):
@@ -355,11 +360,6 @@ def rotate_access_code(raw, admin_id):
     return access_code_status(raw)
 
 
-def _naive_utc(value):
-    # Mongo returns naive UTC datetimes; mongomock may keep them aware.
-    return value.replace(tzinfo=None) if value.tzinfo else value
-
-
 def redeem_access_code(raw, user, code):
     """Grant Study 2 approval with the active code. Study 1 rules still apply."""
     if user.get("is_admin") or not access_policy()["requires_approval"]:
@@ -367,7 +367,7 @@ def redeem_access_code(raw, user, code):
     now = datetime.now(timezone.utc)
     attempts = raw["study_access_attempts"]
     record = attempts.find_one({"_id": user["_id"]})
-    if record and _naive_utc(record["window_start"]) <= _naive_utc(now - CODE_FAILURE_WINDOW):
+    if record and as_utc(record["window_start"]) <= now - CODE_FAILURE_WINDOW:
         attempts.delete_one({"_id": user["_id"]})
         record = None
     if record and record["failures"] >= MAX_CODE_FAILURES:

@@ -6,7 +6,7 @@ from .auth import get_current_user
 from ..schemas.user import UserPublic
 from ..services.studies import (STUDY_IDS, StudyDatabase, raw_database, enrollment_status,
                                check_access, approve_study2, access_policy,
-                               access_code_status, rotate_access_code, redeem_access_code)
+                               access_code_status, rotate_access_code, redeem_access_code, as_utc)
 
 router = APIRouter(prefix="/studies", tags=["studies"])
 
@@ -77,7 +77,8 @@ def participants(request: Request, search: str = Query("", max_length=200),
             "name": " ".join(user.get(k) or "" for k in ("first_name", "last_name")).strip(),
             **enrollment_status(raw, user, "study-2"),
             "notes": enrollment.get("interviewer_notes", ""),
-            "access_history": [{**h, "at": h["at"].isoformat()} for h in enrollment.get("access_history", [])]})
+            "access_history": [{**h, "at": as_utc(h["at"]).isoformat(), "interview_at": as_utc(h.get("interview_at"))}
+                               for h in enrollment.get("access_history", [])]})
     return {"participants": result, "page": page, "total": raw["users"].count_documents(query), "access_policy": access_policy()}
 
 

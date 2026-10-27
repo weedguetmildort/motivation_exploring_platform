@@ -430,3 +430,15 @@ def test_access_code_rejects_without_active_code_and_limits_guesses(setup, code_
     assert client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).status_code == 200
     assert raw.study_access_attempts.count_documents({}) == 0
     assert client.post("/studies/access-code/redeem", json={"code": ""}, headers=headers()).status_code == 422
+
+
+def test_access_timestamps_are_labelled_utc(setup, code_mode):
+    raw, db, student, admin, client = setup
+    assert rotate(client)["rotated_at"].endswith("+00:00")
+    assert client.get("/studies/access-code", headers=headers("admin@example.com")).json()["rotated_at"].endswith("+00:00")
+    approve_study2(raw, student.id, admin, True, interview_at=datetime(2026, 11, 2, 15, tzinfo=timezone.utc))
+    person = client.get("/studies/participants", headers=headers("admin@example.com")).json()["participants"][0]
+    # Naive strings are parsed as local time by browsers, shifting saved interview times.
+    assert person["interview_at"] == "2026-11-02T15:00:00+00:00"
+    assert person["approved_at"].endswith("+00:00") and person["access_history"][0]["at"].endswith("+00:00")
+
