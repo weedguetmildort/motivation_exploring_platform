@@ -442,3 +442,12 @@ def test_access_timestamps_are_labelled_utc(setup, code_mode):
     assert person["interview_at"] == "2026-11-02T15:00:00+00:00"
     assert person["approved_at"].endswith("+00:00") and person["access_history"][0]["at"].endswith("+00:00")
 
+
+def test_study2_survey_bank_created_first_is_not_merged_with_study1(setup):
+    raw, db, student, admin, client = setup
+    from app.services.surveys import create_survey_item
+    from app.schemas.survey import SurveyItemCreate
+    second = StudyDatabase(raw, "study-2")
+    own = create_survey_item(second, SurveyItemCreate(stage="pre_quiz", type="likert", prompt="Study 2 only", required=True, order=0))
+    create_survey_item(db, SurveyItemCreate(stage="pre_quiz", type="likert", prompt="Study 1 only", required=True, order=0))
+    assert [i["_id"] for i in second["survey_items"].find({})] == [ObjectId(own.id)]

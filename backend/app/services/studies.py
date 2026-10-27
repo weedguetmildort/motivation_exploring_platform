@@ -216,6 +216,10 @@ def initialize_survey_bank(raw):
     config = raw["study2__study_config"]
     if config.find_one(marker) or not raw["survey_items"].count_documents({}):
         return
+    # Study 2 already has its own items: never merge Study 1's bank into it later.
+    if raw["study2__survey_items"].count_documents({}):
+        config.update_one(marker, {"$setOnInsert": {"initialized_at": datetime.now(timezone.utc)}}, upsert=True)
+        return
     for item in raw["survey_items"].find({}):
         raw["study2__survey_items"].update_one({"_id": item["_id"]}, {"$setOnInsert": {
             **item, "study_id": "study-2"}}, upsert=True)
