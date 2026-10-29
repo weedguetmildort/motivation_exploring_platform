@@ -203,3 +203,65 @@ test("a background refresh does not clear the error from the last action", async
   await act(async () => { fireEvent(window, new Event("focus")); });
   expect(screen.getByRole("alert")).toHaveTextContent("not valid");
 });
+
+const pending = { ...locked, approved: true, reason: "Complete Study 1 first" };
+const revoked = { ...locked, revoked: true, reason: "Study 2 access was revoked. Contact the research team." };
+
+test("an accepted code that still needs Study 1 says so when no selector is shown", async () => {
+  (apiFetch as jest.Mock).mockImplementation((url: string) => Promise.resolve(
+    url === "/api/studies/access-code/redeem" ? pending : { studies: [first, locked], access_policy }));
+  render(<DashboardStudyAccess user={user} />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "Study 2 access code" }), { target: { value: "ABCD-EFGH" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Study 2" }));
+  expect(await screen.findByRole("heading", { name: "Study 2 is unlocked" })).toBeInTheDocument();
+  expect(screen.getByText("Complete Study 1 first. Study 2 opens here once you have finished.")).toBeInTheDocument();
+  expect(push).not.toHaveBeenCalled();
+});
+
+test("a returning participant whose code was accepted still sees why Study 2 is closed", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, pending], access_policy });
+  render(<DashboardStudyAccess user={user} />);
+  expect(await screen.findByRole("heading", { name: "Study 2 is unlocked" })).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
+});
+
+test.each([
+  ["sequential_approval", true],
+  ["independent_approval", false],
+])("a revoked participant in %s mode gets the reason and no code form", async (mode, sequential) => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, revoked],
+    access_policy: { mode, requires_study1_completion: sequential, requires_approval: true } });
+  render(<DashboardStudyAccess user={user} />);
+  expect(await screen.findByText("Study 2 access was revoked. Contact the research team.")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Study 2 is unlocked" })).not.toBeInTheDocument();
+});
+
+test("a participant who still needs the code sees the form, not a duplicate notice", async () => {
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, locked], access_policy });
+  render(<DashboardStudyAccess user={user} />);
+  expect(await screen.findByRole("textbox", { name: "Study 2 access code" })).toBeInTheDocument();
+  expect(screen.queryByText("Enter the access code from your interviewer")).not.toBeInTheDocument();
+});
+
+test("a catalog poll sent before the code was redeemed cannot bring the form back", async () => {
+  let catalogCalls = 0;
+  let releaseStalePoll!: (value: unknown) => void;
+  (apiFetch as jest.Mock).mockImplementation((url: string) => {
+    if (url === "/api/studies/access-code/redeem") return Promise.resolve(pending);
+    catalogCalls += 1;
+    if (catalogCalls === 1) return Promise.resolve({ studies: [first, locked], access_policy });
+    if (catalogCalls === 2) return new Promise(resolve => { releaseStalePoll = resolve; });
+    return Promise.resolve({ studies: [first, pending], access_policy });
+  });
+  render(<DashboardStudyAccess user={user} />);
+  const input = await screen.findByRole("textbox", { name: "Study 2 access code" });
+  await act(async () => { fireEvent(window, new Event("focus")); }); // poll now in flight
+  fireEvent.change(input, { target: { value: "ABCD-EFGH" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Study 2" }));
+  expect(await screen.findByRole("heading", { name: "Study 2 is unlocked" })).toBeInTheDocument();
+  await act(async () => { releaseStalePoll({ studies: [first, locked], access_policy }); });
+  await waitFor(() => expect(catalogCalls).toBe(3));
+  expect(screen.queryByRole("textbox", { name: "Study 2 access code" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Study 2 is unlocked" })).toBeInTheDocument();
+});

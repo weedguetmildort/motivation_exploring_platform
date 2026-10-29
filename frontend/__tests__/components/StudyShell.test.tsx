@@ -30,6 +30,25 @@ test("an unapproved interview URL never mounts the study page", async () => {
   expect(screen.getByRole("link", { name: "Return to dashboard" })).toHaveAttribute("href", "/dashboard?study=study-1");
 });
 
+test("a participant who needs the access code is sent to where they can enter it", async () => {
+  window.history.replaceState({}, "", "/dashboard?study=study-2");
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, { ...second, code_required: true,
+    reason: "Enter the access code from your interviewer" }] });
+  render(<StudyShell><p>Protected quiz</p></StudyShell>);
+  expect(await screen.findByText("Enter the access code from your interviewer")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Enter your access code on the dashboard" })).toHaveAttribute("href", "/dashboard?study=study-1");
+});
+
+test("a revoked participant is not told to enter a code", async () => {
+  window.history.replaceState({}, "", "/dashboard?study=study-2");
+  (apiFetch as jest.Mock).mockResolvedValue({ studies: [first, { ...second, revoked: true, code_required: false,
+    reason: "Study 2 access was revoked. Contact the research team." }] });
+  render(<StudyShell><p>Protected quiz</p></StudyShell>);
+  expect(await screen.findByText("Study 2 access was revoked. Contact the research team.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Return to dashboard" })).toBeInTheDocument();
+  expect(screen.queryByText(/access code on the dashboard/)).not.toBeInTheDocument();
+});
+
 test("an explicit Study 1 URL replaces stale tab selection before page effects run", async () => {
   sessionStorage.setItem("mep.selectedStudy", "study-2");
   window.history.replaceState({}, "", "/dashboard?study=study-1");

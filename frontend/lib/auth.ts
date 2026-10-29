@@ -1,7 +1,8 @@
-import { selectedStudy, studyApiPath } from "./studySelection";
+import { forgetStudy, selectedStudy, studyApiPath } from "./studySelection";
 // frontend/lib/auth.ts
 
 import { apiFetch } from "./fetcher";
+import { invalidateStudyCatalog } from "./studyCatalog";
 
 type SignupPayload = {
   firstName: string;
@@ -46,7 +47,7 @@ export type User = {
 };
 
 export async function signup(data: SignupPayload) {
-  invalidateMeCache();
+  resetAccountState();
   const result = await apiFetch<{ user: User }>("/auth/signup", {
     method: "POST",
     body: JSON.stringify({
@@ -57,17 +58,17 @@ export async function signup(data: SignupPayload) {
       consent: data.consent,
     }),
   });
-  invalidateMeCache();
+  resetAccountState();
   return result;
 }
 
 export async function login(email: string, password: string) {
-  invalidateMeCache();
+  resetAccountState();
   const result = await apiFetch<{ user: User }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  invalidateMeCache();
+  resetAccountState();
   return result;
 }
 
@@ -117,10 +118,18 @@ export async function getMe() {
   return _mePending;
 }
 
+// A different account may sign in on this tab next: drop the previous
+// person's study selection and cached study access along with their profile.
+function resetAccountState() {
+  invalidateMeCache();
+  invalidateStudyCatalog();
+  forgetStudy();
+}
+
 export async function logout() {
-  invalidateMeCache();
+  resetAccountState();
   const result = await apiFetch<void>("/auth/logout", { method: "POST" });
-  invalidateMeCache();
+  resetAccountState();
   return result;
 }
 

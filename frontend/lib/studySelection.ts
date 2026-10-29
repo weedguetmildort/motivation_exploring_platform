@@ -13,6 +13,10 @@ export function rememberStudy(study: StudyId) {
   try { sessionStorage.setItem("mep.selectedStudy", study); } catch { /* Explicit URLs still work without storage. */ }
 }
 
+export function forgetStudy() {
+  try { sessionStorage.removeItem("mep.selectedStudy"); } catch { /* Nothing was stored. */ }
+}
+
 export function selectedStudy(): StudyId {
   if (typeof window === "undefined") return "study-1";
   const requested = new URLSearchParams(window.location.search).get("study");

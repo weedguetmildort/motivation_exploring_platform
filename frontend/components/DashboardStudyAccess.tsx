@@ -59,14 +59,22 @@ export default function DashboardStudyAccess({ user }: { user: User }) {
   }
 
   const interview = studies?.find(study => study.study_id === "study-2");
-  const needsCode = !user.is_admin && policy.requires_approval && !!interview && !interview.available && !interview.approved;
+  // A revoked participant cannot use the code; only the research team can restore access.
+  const needsCode = !user.is_admin && policy.requires_approval && !!interview && !interview.available && !interview.approved && !interview.revoked;
   const showSelector = user.is_admin || !policy.requires_study1_completion;
+  // Without the selector, a locked Study 2 still needs to say why (e.g. a code
+  // was accepted but Study 1 comes first, or access was revoked).
+  const lockedNotice = !showSelector && current === "study-1" && !!interview && !interview.available && !needsCode && interview.reason;
   return <>
     {showSelector && studies && <AdminStudySelector studies={studies} current={current} busy={busy} onSelect={enter} isAdmin={user.is_admin} policy={policy} />}
     {!showSelector && current === "study-1" && interview?.available && <section aria-labelledby="interview-invitation-title" className="flex flex-col gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-6 sm:flex-row sm:items-center sm:justify-between">
       <div><h2 id="interview-invitation-title" className="text-lg font-semibold text-blue-900">{policy.requires_approval ? "Your interview is available" : "Study 2 is ready"}</h2>
         <p className="mt-1 text-sm text-blue-800">{policy.requires_approval ? "Continue when your researcher asks you to begin. Your saved progress is kept." : "Continue to the next study. Your Study 1 progress is saved."}</p></div>
       <button type="button" disabled={busy} onClick={() => enter(interview)} className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:opacity-50">{policy.requires_approval ? "Continue to interview" : "Continue to Study 2"}</button>
+    </section>}
+    {lockedNotice && <section aria-labelledby="interview-locked-title" className="rounded-2xl border border-blue-200 bg-blue-50 p-6">
+      <h2 id="interview-locked-title" className="text-lg font-semibold text-blue-900">{interview?.approved ? "Study 2 is unlocked" : "Study 2"}</h2>
+      <p className="mt-1 text-sm text-blue-800">{interview?.approved ? `${lockedNotice}. Study 2 opens here once you have finished.` : lockedNotice}</p>
     </section>}
     {needsCode && <form onSubmit={redeem} aria-labelledby="access-code-title" className="flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-6">
       <h2 id="access-code-title" className="text-lg font-semibold text-blue-900">Have a Study 2 access code?</h2>

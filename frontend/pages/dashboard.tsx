@@ -187,7 +187,7 @@ export default function DashboardPage() {
                 { href: "/quiz/followup", label: "Follow-Up Questions", theme: "followup" },
                 { href: "/quiz/double",   label: "Dual Agent",          theme: "double" },
                 { href: "/quiz/links",    label: "Embedded Links",      theme: "links" },
-              ] as const).filter(q => !user.step_order?.length || user.step_order.includes(`quiz:${q.href.split("/").pop()}`)).map((q) => (
+              ] as const).map((q) => (
                 <a key={q.href} href={studyPageUrl(q.href)} data-quiz-theme={q.theme}
                   className="group flex items-center gap-4 rounded-2xl border bg-white p-5 shadow-sm hover:border-accent-400 hover:shadow-md transition-all"
                 >

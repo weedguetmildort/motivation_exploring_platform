@@ -34,3 +34,35 @@ test("shows load errors", async () => {
   render(<StudyAccessCodeAdmin />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Admin access required");
 });
+
+test("a failed load can be retried without reloading the page", async () => {
+  (apiFetch as jest.Mock).mockRejectedValueOnce(new Error("Network unavailable")).mockResolvedValueOnce(stored);
+  render(<StudyAccessCodeAdmin />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Network unavailable");
+  expect(screen.getByRole("button", { name: "Generate access code" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByLabelText("Current access code")).toHaveTextContent("ABCD-EFGH");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  expect(apiFetch).toHaveBeenCalledTimes(2);
+});
+
+test("a retry that finds no code yet offers to generate one", async () => {
+  (apiFetch as jest.Mock).mockRejectedValueOnce(new Error("Network unavailable"))
+    .mockResolvedValueOnce({ code: null, version: 0, rotated_at: null, rotated_by: null });
+  render(<StudyAccessCodeAdmin />);
+  fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+  expect(await screen.findByText(/No access code yet/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Generate access code" })).toBeEnabled();
+});
+
+test("a failed rotation is not offered as a reload", async () => {
+  (apiFetch as jest.Mock).mockImplementation((url: string) => url.endsWith("/rotate")
+    ? Promise.reject(new Error("Rotation failed")) : Promise.resolve(stored));
+  render(<StudyAccessCodeAdmin />);
+  fireEvent.click(await screen.findByRole("button", { name: "Rotate access code" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm rotation" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Rotation failed");
+  expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Current access code")).toHaveTextContent("ABCD-EFGH");
+});

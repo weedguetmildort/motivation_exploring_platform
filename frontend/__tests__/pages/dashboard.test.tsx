@@ -145,6 +145,18 @@ describe("DashboardPage", () => {
     expect(screen.getByRole("link", { name: /Final Survey/ })).toHaveAttribute("href", "/survey?stage=post_variant&study=study-1");
   });
 
+  it("shows admins every variant quiz even when their own Study 1 preview has one variant", async () => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, is_admin: true, assigned_var: "double",
+      step_order: ["survey:pre_quiz", "quiz:base", "survey:post_base", "quiz:double", "survey:post_variant"], completed_steps: [] } });
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("Admin")).toBeInTheDocument();
+    for (const [name, href] of [[/Base Quiz/, "/quiz/base"], [/Follow-Up Questions/, "/quiz/followup"],
+      [/Dual Agent/, "/quiz/double"], [/Embedded Links/, "/quiz/links"]] as const) {
+      expect(screen.getByRole("link", { name })).toHaveAttribute("href", `${href}?study=study-1`);
+    }
+  });
+
   it("navigates to the profile page when Profile is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser });
     render(<DashboardPage />);

@@ -95,8 +95,14 @@ export default function SurveyPage() {
 
   // Resolve which survey step is current. A stale `?stage=` link (e.g. an old
   // post_variant bookmark) is redirected to the survey the participant owes.
+  // Admins may open any stage directly; the backend exempts them from gating.
   useEffect(() => {
     if (!user) return;
+
+    if (user.is_admin && stage) {
+      setActiveSurveyStage(stage);
+      return;
+    }
 
     let cancel = false;
 

@@ -5,7 +5,7 @@ import { fetchStudyCatalog } from "../lib/studyCatalog";
 import { selectedStudy, rememberStudy, type StudyId, studyPageUrl } from "../lib/studySelection";
 
 export type Enrollment = { study_id: StudyId; label: string; approved: boolean; available: boolean;
-  reason: string | null; status: string; completed_steps: number; total_steps: number; finished: boolean; consent_required: boolean };
+  reason: string | null; revoked?: boolean; code_required?: boolean; status: string; completed_steps: number; total_steps: number; finished: boolean; consent_required: boolean };
 
 // Browser-only selection is resolved after hydration, before pages fetch data.
 export default function StudyShell({ children }: { children: ReactNode }) {
@@ -59,7 +59,8 @@ export default function StudyShell({ children }: { children: ReactNode }) {
   if (context.enrollment && !context.enrollment.available) return <main className="p-6">
     <h1 className="text-xl font-semibold">Study access unavailable</h1>
     <p>{context.enrollment.reason}</p><p>Your saved progress is preserved.</p>
-    <a className="mt-4 inline-block text-blue-700 underline" href={studyPageUrl("/dashboard", "study-1")}>Return to dashboard</a>
+    {/* The code form lives on the Study 1 dashboard. */}
+    <a className="mt-4 inline-block text-blue-700 underline" href={studyPageUrl("/dashboard", "study-1")}>{context.enrollment.code_required ? "Enter your access code on the dashboard" : "Return to dashboard"}</a>
   </main>;
   return <div key={context.study} className="contents">{children}</div>;
 }

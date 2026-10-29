@@ -68,6 +68,77 @@ test("a failed delivery retries the same event IDs", async () => {
   stop(); await tracker.flush();
 });
 
+describe("a batch the server rejects as invalid", () => {
+  // The server validates whole batches: one malformed event rejects the rest.
+  function rejecting(status: number, isBad = (event: { event_type: string }) => event.event_type === "bad") {
+    global.fetch = jest.fn((_: unknown, init: { body: string }) => {
+      const events = JSON.parse(init.body).events;
+      return Promise.resolve(events.some(isBad) ? { ok: false, status } : { ok: true, status: 200 });
+    }) as jest.Mock;
+  }
+  function tracker() {
+    return new QuestionResearch({ userId: `student-${++student}`, questionId: "q", conversationId: "c" });
+  }
+  const batches = () => (global.fetch as jest.Mock).mock.calls.map(([, init]) => JSON.parse(init.body).events);
+
+  test.each([400, 413, 422])("a %i drops only the malformed event and delivers the rest", async status => {
+    rejecting(status);
+    const research = tracker();
+    research.emit("first"); research.emit("bad"); research.emit("last");
+    await research.flush();
+    const accepted = batches().filter(events => !events.some((event: { event_type: string }) => event.event_type === "bad"));
+    expect(accepted.flat().map((event: { event_type: string }) => event.event_type)).toEqual(["first", "last"]);
+    (global.fetch as jest.Mock).mockClear();
+    await research.flush();
+    expect(global.fetch).not.toHaveBeenCalled(); // nothing is left to resend
+    expect(Object.keys(localStorage).filter(key => key.startsWith("mep.research"))).toEqual([]);
+  });
+
+  test("later events are not blocked behind the malformed one", async () => {
+    rejecting(422);
+    const research = tracker();
+    research.emit("bad");
+    for (let index = 0; index < 60; index++) research.emit(`good-${index}`);
+    await research.flush();
+    const sent = batches();
+    // One rejected batch of 50, its 50 events singly, then the other 11 batched again.
+    expect(sent.map(events => events.length)).toEqual([50, ...Array(50).fill(1), 11]);
+    expect(sent.slice(1).flat().filter((event: { event_type: string }) => event.event_type !== "bad")).toHaveLength(60);
+  });
+
+  test.each([401, 403, 429, 500, 503])("a %i keeps every event for a later retry", async status => {
+    rejecting(status, () => true);
+    const research = tracker();
+    research.emit("first"); research.emit("second");
+    await research.flush();
+    await research.flush();
+    const sent = batches();
+    expect(sent).toHaveLength(2);
+    expect(sent[1].map((event: { event_id: string }) => event.event_id)).toEqual(sent[0].map((event: { event_id: string }) => event.event_id));
+    expect(sent[0]).toHaveLength(2);
+  });
+
+  test("a network failure while isolating keeps the remaining events", async () => {
+    let calls = 0;
+    global.fetch = jest.fn((_: unknown, init: { body: string }) => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve({ ok: false, status: 422 });
+      if (calls === 2) return Promise.reject(new TypeError("offline"));
+      return Promise.resolve({ ok: true, status: 200 });
+    }) as jest.Mock;
+    const research = tracker();
+    research.emit("first"); research.emit("second");
+    await research.flush();
+    expect(batches()[1]).toHaveLength(1); // isolation had started when the network dropped
+    await research.flush();
+    // After reconnecting, a fresh flush batches normally and delivers both.
+    expect(batches()[2].map((event: { event_type: string }) => event.event_type)).toEqual(["first", "second"]);
+    (global.fetch as jest.Mock).mockClear();
+    await research.flush();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
 test("hidden and unfocused intervals do not count as pointer or active engagement", async () => {
   const { root, tracker, stop } = setup();
   const pointer = new MouseEvent("pointermove", { bubbles: true });

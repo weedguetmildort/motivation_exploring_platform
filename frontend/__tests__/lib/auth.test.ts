@@ -10,6 +10,7 @@ import {
   recordConsentViewed,
   sendConsentAbandonedBeacon,
 } from "../../lib/auth";
+import { fetchStudyCatalog, invalidateStudyCatalog } from "../../lib/studyCatalog";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
   (global.fetch as jest.Mock).mockResolvedValueOnce({
@@ -75,6 +76,41 @@ describe("auth lib", () => {
       "/auth/logout",
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  describe("switching accounts on one tab", () => {
+    const signupPayload = { firstName: "Next", lastName: "Person", email: "next@example.com", password: "password", consent: true };
+    const switches: [string, () => Promise<unknown>][] = [
+      ["logout", () => logout()],
+      ["login", () => login("next@example.com", "password")],
+      ["signup", () => signup(signupPayload)],
+    ];
+
+    beforeEach(() => { sessionStorage.clear(); invalidateStudyCatalog(); });
+
+    it.each(switches)("%s forgets the previous person's study selection", async (_, change) => {
+      sessionStorage.setItem("mep.selectedStudy", "study-2");
+      mockFetchOnce({ user: { id: "next" } });
+      await change();
+      expect(sessionStorage.getItem("mep.selectedStudy")).toBeNull();
+    });
+
+    it.each(switches)("%s drops the previous person's cached study access", async (_, change) => {
+      mockFetchOnce({ studies: ["previous person"] });
+      expect((await fetchStudyCatalog()).studies).toEqual(["previous person"]);
+      mockFetchOnce({ user: { id: "next" } });
+      await change();
+      mockFetchOnce({ studies: ["next person"] });
+      // Still inside the reuse window, so only an invalidation forces this read.
+      expect((await fetchStudyCatalog()).studies).toEqual(["next person"]);
+    });
+
+    it("a failed logout still forgets the selection", async () => {
+      sessionStorage.setItem("mep.selectedStudy", "study-2");
+      mockFetchOnce({ detail: "offline" }, false, 503);
+      await expect(logout()).rejects.toThrow();
+      expect(sessionStorage.getItem("mep.selectedStudy")).toBeNull();
+    });
   });
 
   it("recordConsentAgreement posts consent_text to /auth/consent", async () => {

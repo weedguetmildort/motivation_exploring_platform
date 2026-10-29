@@ -1,6 +1,27 @@
-import { selectedStudy, studyApiPath, studyPageUrl } from "../../lib/studySelection";
+import { forgetStudy, rememberStudy, selectedStudy, studyApiPath, studyPageUrl } from "../../lib/studySelection";
 
 beforeEach(() => { sessionStorage.clear(); window.history.replaceState({}, "", "/dashboard"); });
+
+test("forgetting the selection returns the tab to Study 1", () => {
+  rememberStudy("study-2");
+  expect(selectedStudy()).toBe("study-2");
+  forgetStudy();
+  expect(sessionStorage.getItem("mep.selectedStudy")).toBeNull();
+  expect(selectedStudy()).toBe("study-1");
+});
+
+test("forgetting the selection still honours an explicit URL", () => {
+  rememberStudy("study-2");
+  forgetStudy();
+  window.history.replaceState({}, "", "/dashboard?study=study-2");
+  expect(selectedStudy()).toBe("study-2");
+});
+
+test("forgetting the selection tolerates blocked storage", () => {
+  const removeItem = jest.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("blocked"); });
+  expect(() => forgetStudy()).not.toThrow();
+  removeItem.mockRestore();
+});
 
 test("explicit URLs override tab-local selection without changing another tab's state", () => {
   sessionStorage.setItem("mep.selectedStudy", "study-2");

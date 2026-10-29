@@ -46,13 +46,27 @@ class EventQueue {
     if (this.events.length > 2000) this.events.splice(0, this.events.length - 2000);
     this.persist();
   }
+  private remove(ids: Set<string>) {
+    this.events = this.events.filter(event => !ids.has(event.event_id));
+    for (const key of this.recoveredKeys) {
+      try {
+        const remaining = (JSON.parse(localStorage.getItem(key) || "[]") as Event[]).filter(event => !ids.has(event.event_id));
+        if (remaining.length) localStorage.setItem(key, JSON.stringify(remaining));
+        else localStorage.removeItem(key);
+      } catch { /* recovery is best effort */ }
+    }
+    this.persist();
+  }
   async flush() {
     if (this.sending || !this.events.length) return;
     this.sending = true;
+    // Events at the head of the queue to send one at a time, after a batch
+    // containing them was rejected as invalid.
+    let isolate = 0;
     try {
       while (this.events.length) {
         const batch: Event[] = [];
-        for (const event of this.events.slice(0, 50)) {
+        for (const event of this.events.slice(0, isolate > 0 ? 1 : 50)) {
           if (batch.length && new Blob([JSON.stringify({ events: [...batch, event] })]).size > 48000) break;
           batch.push(event);
         }
@@ -60,17 +74,16 @@ class EventQueue {
           method: "POST", credentials: "include", keepalive: true,
           headers: { "Content-Type": "application/json" }, body: JSON.stringify({ events: batch }),
         });
-        if (!response.ok) break; // Preserve the same IDs for a later retry, including expired sessions.
-        const ids = new Set(batch.map(event => event.event_id));
-        this.events = this.events.filter(event => !ids.has(event.event_id));
-        for (const key of this.recoveredKeys) {
-          try {
-            const remaining = (JSON.parse(localStorage.getItem(key) || "[]") as Event[]).filter(event => !ids.has(event.event_id));
-            if (remaining.length) localStorage.setItem(key, JSON.stringify(remaining));
-            else localStorage.removeItem(key);
-          } catch { /* recovery is best effort */ }
+        if (!response.ok) {
+          // The server validates a whole batch at once, so one malformed event
+          // rejects every event with it. Find it by resending singly and drop
+          // only what the server can never accept. Any other failure (expired
+          // session, server error) keeps the same IDs for a later retry.
+          if (![400, 413, 422].includes(response.status)) break;
+          if (batch.length > 1) { isolate = batch.length; continue; }
         }
-        this.persist();
+        this.remove(new Set(batch.map(event => event.event_id)));
+        isolate = Math.max(0, isolate - batch.length);
       }
     } catch { /* offline: retry on next interval or next study page */ }
     finally { this.sending = false; }

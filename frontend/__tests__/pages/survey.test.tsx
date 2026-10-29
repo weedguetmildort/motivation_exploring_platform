@@ -176,6 +176,52 @@ describe("SurveyPage", () => {
     );
   });
 
+  it("lets an admin open any survey stage directly", async () => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, is_admin: true } });
+    mockQuery = { stage: "post_double" };
+    mockGetSurveyState.mockResolvedValue({ stage: "post_double", status: "not_started", items: [likertItem], answers: [] });
+
+    render(<SurveyPage />);
+
+    expect(await screen.findByText(likertItem.prompt)).toBeInTheDocument();
+    expect(mockGetSurveyState).toHaveBeenCalledWith("post_double");
+    expect(mockGetNextStep).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("lets an admin open a stage after finishing their own preview flow", async () => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, is_admin: true, completed_steps: FLOW_ORDER } });
+    mockQuery = { stage: "pre_quiz" };
+    mockGetNextStep.mockResolvedValue({ next_step: null, next_route: "/dashboard", completed_count: 9, total_steps: 9, finished: true });
+    mockGetSurveyState.mockResolvedValue({ stage: "pre_quiz", status: "not_started", items: [likertItem], answers: [] });
+
+    render(<SurveyPage />);
+
+    expect(await screen.findByText(likertItem.prompt)).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("sends an admin without a stage to their own next survey", async () => {
+    mockGetMe.mockResolvedValue({ user: { ...baseUser, is_admin: true } });
+    mockGetSurveyState.mockResolvedValue({ stage: "pre_quiz", status: "not_started", items: [likertItem], answers: [] });
+
+    render(<SurveyPage />);
+
+    expect(await screen.findByText(likertItem.prompt)).toBeInTheDocument();
+    expect(mockGetNextStep).toHaveBeenCalled();
+    expect(mockGetSurveyState).toHaveBeenCalledWith("pre_quiz");
+  });
+
+  it("still redirects a participant's ?stage= link to the survey they owe", async () => {
+    mockGetMe.mockResolvedValue({ user: baseUser });
+    mockQuery = { stage: "post_double" };
+
+    render(<SurveyPage />);
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/survey?stage=pre_quiz"));
+    expect(mockGetSurveyState).not.toHaveBeenCalledWith("post_double");
+  });
+
   it("loads and renders likert survey items for the pre-quiz stage", async () => {
     mockGetMe.mockResolvedValue({ user: baseUser });
     mockQuery = { stage: "pre_quiz" };

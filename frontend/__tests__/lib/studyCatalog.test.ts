@@ -30,6 +30,47 @@ test("invalidation forces a fresh read after an access change", async () => {
   expect((await fetchStudyCatalog()).studies).toEqual(["unlocked"]);
 });
 
+test("a request sent before an access change answers with a fresh read", async () => {
+  let resolveOld!: (value: unknown) => void;
+  (apiFetch as jest.Mock).mockReset()
+    .mockReturnValueOnce(new Promise(r => { resolveOld = r; }))
+    .mockResolvedValueOnce({ studies: ["unlocked"] });
+  const poll = fetchStudyCatalog(); // e.g. the 15 s poll, still waiting
+  invalidateStudyCatalog();         // e.g. a code was just redeemed
+  resolveOld({ studies: ["locked"] });
+  expect((await poll).studies).toEqual(["unlocked"]);
+  expect(apiFetch).toHaveBeenCalledTimes(2);
+});
+
+test("a stale answer is never cached for later callers", async () => {
+  let resolveOld!: (value: unknown) => void;
+  (apiFetch as jest.Mock).mockReset()
+    .mockReturnValueOnce(new Promise(r => { resolveOld = r; }))
+    .mockResolvedValueOnce({ studies: ["unlocked"] });
+  const poll = fetchStudyCatalog();
+  invalidateStudyCatalog();
+  resolveOld({ studies: ["locked"] });
+  await poll;
+  expect((await fetchStudyCatalog()).studies).toEqual(["unlocked"]);
+  expect(apiFetch).toHaveBeenCalledTimes(2);
+});
+
+test("callers after an invalidation share the fresh request", async () => {
+  let resolveOld!: (value: unknown) => void;
+  let resolveNew!: (value: unknown) => void;
+  (apiFetch as jest.Mock).mockReset()
+    .mockReturnValueOnce(new Promise(r => { resolveOld = r; }))
+    .mockReturnValueOnce(new Promise(r => { resolveNew = r; }));
+  const stale = fetchStudyCatalog();
+  invalidateStudyCatalog();
+  const fresh = fetchStudyCatalog();
+  resolveOld({ studies: ["locked"] });
+  resolveNew({ studies: ["unlocked"] });
+  expect((await stale).studies).toEqual(["unlocked"]);
+  expect((await fresh).studies).toEqual(["unlocked"]);
+  expect(apiFetch).toHaveBeenCalledTimes(2);
+});
+
 test("a failed request is not cached", async () => {
   (apiFetch as jest.Mock).mockReset().mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ studies: [] });
   await expect(fetchStudyCatalog()).rejects.toThrow("offline");
