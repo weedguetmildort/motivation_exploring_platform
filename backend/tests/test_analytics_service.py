@@ -51,7 +51,7 @@ class TestGetQuestionAccuracy:
         # Verify the query passed to find() includes the quiz_id filter
         called_query, called_projection = mock_col.find.call_args[0]
         assert called_query == {"answers.question_id": "q1", "quiz_id": "followup"}
-        assert called_projection == {"answers": 1, "quiz_id": 1}
+        assert called_projection == {"answers": 1, "quiz_id": 1, "question_snapshots": 1}
 
         assert result["quiz_id"] == "followup"
         assert result["total"] == 0
@@ -128,14 +128,14 @@ class TestGetUserQuizAccuracy:
 
         called_query, called_projection = mock_col.find_one.call_args[0]
         assert called_query == {"user_id": "user-1", "quiz_id": "base", "status": "completed"}
-        assert called_projection == {"answers": 1, "quiz_id": 1}
+        assert called_projection == {"answers": 1, "quiz_id": 1, "question_snapshots": 1}
 
     def test_variant_quiz_type_uses_in_filter(self, mock_col, mock_db):
-        mock_col.find_one.return_value = None
+        mock_col.find.return_value = []
 
         get_user_quiz_accuracy(mock_db, "user-1", "variant")
 
-        called_query, _ = mock_col.find_one.call_args[0]
+        called_query, _ = mock_col.find.call_args[0]
         assert called_query["quiz_id"] == {"$in": _VARIANT_QUIZ_IDS}
 
     def test_no_attempt_found_returns_zeroed_result(self, mock_col, mock_db):
@@ -150,6 +150,7 @@ class TestGetUserQuizAccuracy:
             "total": 0,
             "correct": 0,
             "accuracy": None,
+            "answers_missing_grade": 0,
         }
 
     def test_attempt_found_computes_accuracy(self, mock_col, mock_db):
@@ -173,12 +174,12 @@ class TestGetUserQuizAccuracy:
         assert result["accuracy"] == 0.5
 
     def test_attempt_found_but_no_answered_entries(self, mock_col, mock_db):
-        mock_col.find_one.return_value = {
+        mock_col.find.return_value = [{
             "quiz_id": "followup",
             "answers": [
                 {"answered_at": None, "marked_correct": True},
             ],
-        }
+        }]
 
         result = get_user_quiz_accuracy(mock_db, "user-1", "variant")
 
@@ -188,7 +189,7 @@ class TestGetUserQuizAccuracy:
         assert result["accuracy"] is None
 
     def test_attempt_found_with_no_answers_key(self, mock_col, mock_db):
-        mock_col.find_one.return_value = {"quiz_id": "double"}
+        mock_col.find.return_value = [{"quiz_id": "double"}]
 
         result = get_user_quiz_accuracy(mock_db, "user-1", "variant")
 
@@ -225,7 +226,7 @@ class TestGetQuizAccuracy:
 
         called_query, called_projection = mock_col.find.call_args[0]
         assert called_query == {"quiz_id": "base", "status": "completed"}
-        assert called_projection == {"answers": 1}
+        assert called_projection == {"answers": 1, "question_snapshots": 1}
 
     def test_no_attempts_returns_none_accuracy(self, mock_col, mock_db):
         mock_col.find.return_value = []

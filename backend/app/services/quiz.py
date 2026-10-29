@@ -1,14 +1,19 @@
 # backend/app/services/quiz.py
+import random
 import uuid
+import hashlib
+import json
 from datetime import datetime
 from typing import Optional
 from bson.objectid import ObjectId
 from pymongo.collection import Collection
+from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException
 
 from .questions import get_questions_collection
+from . import study_flow
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload, QuizResultItem, QuizResultsResponse
-from ..schemas.user import SurveyStage, AssignedVar
+from ..schemas.user import AssignedVar
 
 _VARIANT_QUIZ_IDS = {v.value for v in AssignedVar}
 
@@ -22,7 +27,7 @@ QUIZ2_BASE_ID = "base2"
 QUIZ2_VARIANT_QUIZ_IDS = {"followup2", "double2", "links2"}
 QUIZ2_QUIZ_IDS = {QUIZ2_BASE_ID, *QUIZ2_VARIANT_QUIZ_IDS}
 
-MAX_QUIZ_QUESTIONS = 10
+MAX_QUIZ_QUESTIONS = 5
 
 
 def get_users_collection(db) -> Collection:
@@ -40,8 +45,35 @@ def _ensure_unique_index(col: Collection) -> None:
     )
 
 
+def _build_pool_query(quiz_set: Optional[str], quiz_sets: Optional[list]) -> dict:
+    """The question-pool filter for one attempt, in precedence order.
+
+    1. ``quiz_set`` — the set this specific quiz was assigned
+       (study_flow.resolve_quiz_set_assignment). Giving each quiz its own set is
+       what makes a participant's four quizzes disjoint: no question can appear
+       in two of them, because no question belongs to two sets.
+    2. ``quiz_sets`` — the Phase 11 per-participant restriction, which still
+       governs any quiz the map does not cover.
+    3. Neither — the whole bank, including unassigned (``set: null``) questions.
+
+    Note that two *unmapped* quizzes still draw from the same pool and can
+    therefore overlap; mapping every quiz to its own set is what removes that.
+    """
+    if quiz_set:
+        return {"set": quiz_set}
+    if quiz_sets:
+        # A non-empty list filters to those sets; null-set questions excluded.
+        return {"set": {"$in": quiz_sets}}
+    return {}
+
+
 def _load_or_create_attempt(
-    db, user_id: str, user_email: str, quiz_id: str, quiz_sets: Optional[list] = None
+    db,
+    user_id: str,
+    user_email: str,
+    quiz_id: str,
+    quiz_sets: Optional[list] = None,
+    quiz_set: Optional[str] = None,
 ) -> dict:
     col = get_quiz_attempts_collection(db)
     _ensure_unique_index(col)
@@ -50,26 +82,44 @@ def _load_or_create_attempt(
     if doc:
         return doc
 
+    if quiz_set is None:
+        # The participant's stored assignment does not cover this quiz — which
+        # is every participant assigned before the map was configured, since it
+        # starts empty. Fall back to the current preset map rather than leaving
+        # them on the whole pool forever. Only read here, on the rare path where
+        # an attempt is actually created.
+        quiz_set = study_flow.preset_quiz_set(db, quiz_id)
+
     qcol = get_questions_collection(db)
+    pool_query = _build_pool_query(quiz_set, quiz_sets)
 
-    # Phase 11: restrict the pool to the participant's allowed set(s). A non-empty
-    # `quiz_sets` filters to those sets (null-set questions excluded); None/empty
-    # means no restriction (draw from all questions — the historical behavior).
-    pool_query = {"set": {"$in": quiz_sets}} if quiz_sets else {}
-
-    questions = list(qcol.find(pool_query, {"_id": 1}))
+    questions = list(qcol.find(pool_query))
     if not questions:
         raise HTTPException(status_code=400, detail="No questions available for quiz")
 
     ids = [str(q["_id"]) for q in questions]
-
-    import random
     random.shuffle(ids)
 
-    ids = ids[:MAX_QUIZ_QUESTIONS]
-    incorrect_question_ids = random.sample(ids, min(3, len(ids)))
+    user_doc = db["users"].find_one({"_id": ObjectId(user_id)}) if ObjectId.is_valid(user_id) else None
+    user_doc = user_doc or {}
+    protocol = user_doc.get("study_protocol") or study_flow.load_study_config(db).as_dict()
+    question_count = protocol.get("questions_per_quiz", MAX_QUIZ_QUESTIONS)
+    ids = ids[:question_count]
+    rate = protocol.get("wrong_ai_rate")
+    wrong_count = int(len(ids) * rate + 0.5) if rate is not None else protocol.get("wrong_ai_count", 3)
+    incorrect_question_ids = random.sample(ids, min(wrong_count, len(ids)))
 
     now = datetime.utcnow()
+    user_doc = db["users"].find_one({"_id": ObjectId(user_id)}) if ObjectId.is_valid(user_id) else None
+    user_doc = user_doc or {}
+    snapshots = {}
+    for question in questions:
+        qid = str(question["_id"])
+        if qid in ids and question.get("stem") is not None and isinstance(question.get("choices"), list):
+            snapshot = {key: question.get(key) for key in ("stem", "subtitle", "choices", "correct_choice_id", "set")}
+            snapshot["version"] = hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()
+            snapshots[qid] = snapshot
+    quiz_order = study_flow.quiz_ids_in_order(user_doc.get("step_order", []))
     doc = {
         "user_id": user_id,
         "user_email": user_email,
@@ -77,12 +127,31 @@ def _load_or_create_attempt(
         "conversation_id": str(uuid.uuid4()),
         "status": "in_progress",
         "question_order": ids,
+        "question_snapshots": snapshots,
+        "analytics_schema_version": 1,
+        "study_id": getattr(db, "study_id", "study-1") if isinstance(getattr(db, "study_id", None), str) else "study-1",
+        "study_protocol": protocol,
+        "requested_question_count": question_count,
+        "actual_question_count": len(ids),
+        "study_flow_version": user_doc.get("study_flow_version"),
+        "variant_sequence": user_doc.get("variant_sequence", []),
+        "step_order": user_doc.get("step_order", []),
+        "quiz_set_assignment": user_doc.get("quiz_set_assignment", {}),
+        "variant_position": quiz_order.index(quiz_id) + 1 if quiz_id in quiz_order else None,
+        "is_test": bool(user_doc.get("is_admin", False) or user_doc.get("is_test", False)),
         "incorrect_question_ids": incorrect_question_ids,
+        # The set this attempt drew from, recorded at draw time so analysis can
+        # see it without re-deriving it from the participant's assignment (which
+        # an admin may since have changed). None = drew from the whole pool.
+        "question_set": quiz_set,
         "answers": [],
         "created_at": now,
         "updated_at": now,
     }
-    res = col.insert_one(doc)
+    try:
+        res = col.insert_one(doc)
+    except DuplicateKeyError:
+        return col.find_one({"user_id": user_id, "quiz_id": quiz_id})
     doc["_id"] = res.inserted_id
     return doc
 
@@ -99,70 +168,38 @@ def _find_next_unanswered(doc: dict, qcol=None) -> Optional[str]:
 
 
 def _mark_quiz_completed(db, doc: dict) -> None:
-    """Mark a quiz attempt as completed and update user-level completion flags."""
+    """Mark a quiz attempt as completed and advance the user's study flow."""
     completed_at = datetime.utcnow()
     col = get_quiz_attempts_collection(db)
     col.update_one(
         {"_id": doc["_id"]},
-        {"$set": {"status": "completed", "updated_at": completed_at}},
+        {"$set": {"status": "completed", "updated_at": completed_at, "completed_at": completed_at}},
     )
+
     users = get_users_collection(db)
-    user_set_doc = _get_user_quiz_update_fields(doc["quiz_id"], completed_at)
-    result = users.update_one(
-        {"_id": ObjectId(doc["user_id"])},
-        {"$set": user_set_doc},
-    )
-    if result.matched_count == 0:
+    if not users.count_documents({"_id": ObjectId(doc["user_id"])}, limit=1):
         raise HTTPException(status_code=404, detail="User not found")
 
-
-def _get_user_quiz_update_fields(quiz_id: str, completed_at: datetime) -> dict:
-    """
-    Decide which user-level completion flag and next survey_stage should be set
-    when a quiz is completed.
-
-    Adjust the quiz_id values here to match your actual routing / DB values.
-    """
-    if quiz_id == "base":
-        return {
-            "quiz_base_completed": True,
-            "survey_stage": SurveyStage.post_base.value,
-            "updated_at": completed_at,
-        }
-
-    if quiz_id in _VARIANT_QUIZ_IDS:
-        return {
-            "quiz_variant_completed": True,
-            "survey_stage": SurveyStage.post_variant.value,
-            "updated_at": completed_at,
-        }
-        
-    # Unknown quiz_id (e.g. admin test runs) — don't update user flags
-    return {"updated_at": completed_at}
+    # Progress is now one generic operation: tick this step off the user's
+    # assigned step_order, then recompute the derived legacy flags. The old
+    # base-vs-variant branching lived here and in three other places;
+    # services/study_flow owns all of it now. A quiz_id outside this user's
+    # flow (admin test runs, the Phase 13 quiz-2 ids) is simply a no-op.
+    study_flow.mark_step_completed(
+        db, doc["user_id"], study_flow.quiz_step_id(doc["quiz_id"]), completed_at
+    )
 
 
 def reset_quiz_attempt(db, user_id: str, quiz_id: str) -> None:
     col = get_quiz_attempts_collection(db)
-    col.delete_one({"user_id": user_id, "quiz_id": quiz_id})
-
-    if quiz_id == "base":
-        revert = {
-            "quiz_base_completed": False,
-            "survey_stage": SurveyStage.pre_base.value,
-            "updated_at": datetime.utcnow(),
-        }
-    elif quiz_id in _VARIANT_QUIZ_IDS:
-        revert = {
-            "quiz_variant_completed": False,
-            "survey_stage": SurveyStage.post_base.value,
-            "updated_at": datetime.utcnow(),
-        }
-    else:
-        # Unknown quiz_id (e.g. admin test runs) — just delete the attempt, no user flags to revert
-        return
-
-    users = get_users_collection(db)
-    users.update_one({"_id": ObjectId(user_id)}, {"$set": revert})
+    existing = col.find_one({"user_id": user_id, "quiz_id": quiz_id})
+    if existing:
+        from .result_archive import archive_result
+        archive_result(db, "quiz_attempts", existing, "admin_reset")
+    study_flow.unmark_step_completed(db, user_id, study_flow.quiz_step_id(quiz_id))
+    # A reset means "redo this quiz from scratch", so pick up any change the
+    # admin has made to the question-set map since it was first drawn.
+    study_flow.repoint_quiz_set(db, user_id, quiz_id)
 
 
 def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
@@ -174,7 +211,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         # Use raw stored counts — never recompute against current DB state
         total = len(question_order)
         answered = sum(1 for a in doc.get("answers", []) if a.get("answered_at"))
-        attempt_pub = QuizAttemptPublic(
+        attempt_pub = QuizAttemptPublic(attempt_id=str(doc.get("_id", "")),
             quiz_id=doc["quiz_id"],
             status=doc["status"],
             total_questions=total,
@@ -188,7 +225,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         )
 
     # In-progress: filter total/answered to only questions that still exist in the DB
-    existing_ids = {
+    existing_ids = set(doc["question_snapshots"]) if doc.get("question_snapshots") else {
         str(q["_id"])
         for q in qcol.find(
             {"_id": {"$in": [ObjectId(qid) for qid in question_order]}},
@@ -201,7 +238,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         if a.get("answered_at") and a["question_id"] in existing_ids
     )
 
-    attempt_pub = QuizAttemptPublic(
+    attempt_pub = QuizAttemptPublic(attempt_id=str(doc.get("_id", "")),
         quiz_id=doc["quiz_id"],
         status=doc["status"],
         total_questions=total,
@@ -209,10 +246,10 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         incorrect_question_ids=doc.get("incorrect_question_ids", [])
     )
 
-    next_qid = _find_next_unanswered(doc, qcol)
+    next_qid = _find_next_unanswered(doc, None if doc.get("question_snapshots") else qcol)
     if not next_qid:
         _mark_quiz_completed(db, doc)
-        attempt_pub = QuizAttemptPublic(
+        attempt_pub = QuizAttemptPublic(attempt_id=str(doc.get("_id", "")),
             quiz_id=doc["quiz_id"],
             status="completed",
             total_questions=total,
@@ -225,11 +262,11 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
             current_question=None,
         )
 
-    qdoc = qcol.find_one({"_id": ObjectId(next_qid)})
+    qdoc = doc.get("question_snapshots", {}).get(next_qid) or qcol.find_one({"_id": ObjectId(next_qid)})
     if not qdoc:
         # Race condition: deleted between _find_next_unanswered and here
         _mark_quiz_completed(db, doc)
-        attempt_pub = QuizAttemptPublic(
+        attempt_pub = QuizAttemptPublic(attempt_id=str(doc.get("_id", "")),
             quiz_id=doc["quiz_id"],
             status="completed",
             total_questions=total,
@@ -243,7 +280,7 @@ def build_quiz_state_response(db, doc: dict) -> QuizStateResponse:
         )
 
     question_payload = QuizQuestionPayload(
-        id=str(qdoc["_id"]),
+        id=next_qid,
         stem=qdoc["stem"],
         subtitle=qdoc.get("subtitle"),
         choices=qdoc["choices"],
@@ -281,7 +318,8 @@ def record_question_shown(db, doc: dict, question_id: str) -> dict:
     return doc
 
 
-def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: str) -> dict:
+def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: str,
+                  telemetry_page_id: str | None = None, telemetry_elapsed_ms: float | None = None) -> dict:
     col = get_quiz_attempts_collection(db)
 
     doc = col.find_one({"user_id": user_id, "quiz_id": quiz_id})
@@ -289,6 +327,14 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
         raise HTTPException(status_code=400, detail="No quiz attempt found")
 
     if doc["status"] == "completed":
+        original = next((a for a in doc.get("answers", [])
+                         if a.get("question_id") == question_id and a.get("answered_at")), None)
+        if original and original.get("choice_id") == choice_id:
+            study_flow.mark_step_completed(
+                db, user_id, study_flow.quiz_step_id(quiz_id),
+                doc.get("completed_at") or datetime.utcnow(),
+            )
+            return doc
         raise HTTPException(status_code=400, detail="Quiz already completed")
 
     if question_id not in set(doc.get("question_order", [])):
@@ -297,7 +343,7 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
     now = datetime.utcnow()
 
     qcol = get_questions_collection(db)
-    qdoc = qcol.find_one({"_id": ObjectId(question_id)}, {"correct_choice_id": 1})
+    qdoc = doc.get("question_snapshots", {}).get(question_id) or qcol.find_one({"_id": ObjectId(question_id)}, {"correct_choice_id": 1})
     is_correct = bool(qdoc and qdoc.get("correct_choice_id") == choice_id)
 
     res = col.update_one(
@@ -310,6 +356,7 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
                 "answers.$.choice_id": choice_id,
                 "answers.$.answered_at": now,
                 "answers.$.marked_correct": is_correct,
+                "answers.$.telemetry_submission": {"page_id": telemetry_page_id, "elapsed_ms": telemetry_elapsed_ms},
                 "updated_at": now,
             }
         },
@@ -326,6 +373,7 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
                         "answered_at": now,
                         "choice_id": choice_id,
                         "marked_correct": is_correct,
+                        "telemetry_submission": {"page_id": telemetry_page_id, "elapsed_ms": telemetry_elapsed_ms},
                     }
                 },
                 "$set": {"updated_at": now},
@@ -333,7 +381,7 @@ def record_answer(db, user_id: str, quiz_id: str, question_id: str, choice_id: s
         )
 
     updated = col.find_one({"_id": doc["_id"]})
-    next_qid = _find_next_unanswered(updated, qcol)
+    next_qid = _find_next_unanswered(updated, None if updated.get("question_snapshots") else qcol)
 
     if not next_qid:
         _mark_quiz_completed(db, updated)
@@ -357,7 +405,7 @@ def get_quiz_results(db, user_id: str, quiz_id: str) -> QuizResultsResponse:
         ans = answers_by_qid.get(qid)
         if not ans:
             continue
-        qdoc = qcol.find_one({"_id": ObjectId(qid)}, {"stem": 1, "choices": 1, "correct_choice_id": 1})
+        qdoc = doc.get("question_snapshots", {}).get(qid) or qcol.find_one({"_id": ObjectId(qid)}, {"stem": 1, "choices": 1, "correct_choice_id": 1})
         if not qdoc:
             continue
 

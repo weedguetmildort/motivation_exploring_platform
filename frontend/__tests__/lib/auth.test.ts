@@ -168,6 +168,46 @@ describe("auth lib", () => {
   });
 
   describe("getMe", () => {
+    it("does not let an invalidated in-flight request overwrite fresh progress", async () => {
+      let finishOld!: (response: any) => void;
+      (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }));
+      const oldRequest = getMe();
+      invalidateMeCache();
+      const fresh = { user: { id: "new-user", completed_steps: ["survey:pre_quiz"] } };
+      mockFetchOnce(fresh);
+      await getMe();
+      finishOld({ ok: true, text: async () => JSON.stringify({ user: { id: "old-user", completed_steps: [] } }) });
+      await oldRequest;
+      expect(await getMe()).toEqual(fresh);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not let an old failed request clear a newer pending request", async () => {
+      let failOld!: (error: Error) => void;
+      let finishNew!: (response: any) => void;
+      (global.fetch as jest.Mock).mockReturnValueOnce(new Promise((_resolve, reject) => { failOld = reject; }));
+      const oldRequest = getMe().catch(() => {});
+      invalidateMeCache();
+      (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(resolve => { finishNew = resolve; }));
+      const newRequest = getMe();
+      failOld(new Error("old session"));
+      await oldRequest;
+      const deduped = getMe();
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      finishNew({ ok: true, text: async () => JSON.stringify({ user: { id: "new" } }) });
+      expect(await newRequest).toEqual(await deduped);
+    });
+
+    it("signup clears the previous account's cached session", async () => {
+      mockFetchOnce({ user: { id: "previous" } });
+      await getMe();
+      mockFetchOnce({ user: { id: "new" } });
+      await signup({ firstName: "Test", lastName: "User", email: "new@example.com", password: "password", consent: true });
+      mockFetchOnce({ user: { id: "new" } });
+      expect((await getMe()).user.id).toBe("new");
+      expect(global.fetch).toHaveBeenCalledTimes(3);
+    });
+
     it("fetches /auth/me and caches the result for subsequent calls", async () => {
       mockFetchOnce({ user: { id: "1", email: "ada@example.com", is_admin: false } });
 

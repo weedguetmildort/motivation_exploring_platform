@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { sendChat, loadUserHistory, type ChatTrigger } from "../lib/chat";
 import { recordLinkClick } from "../lib/linkClicks";
 import { recordCopyEvent } from "../lib/copyEvents";
+import type { QuestionResearch } from "../lib/research";
 import MarkdownMessage from "./MarkdownMessage";
 import MentionSuggestions from "./MentionSuggestions";
 import ChatHeader from "./ChatHeader";
@@ -19,6 +20,8 @@ import {
 type Bot = "A" | "B" | "C" | "D";
 type AgentFilter = "double" | "base";
 type Msg = {
+  requestId?: string;
+  questionId?: string;
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -42,6 +45,8 @@ const MessageBubble = memo(function MessageBubble({
   showLabel = true,
   labelAlign,
   onLinkClick,
+  requestId,
+  questionId,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -50,6 +55,8 @@ const MessageBubble = memo(function MessageBubble({
   showLabel?: boolean;
   labelAlign?: "left" | "right" | "center";
   onLinkClick?: (href: string) => void;
+  requestId?: string;
+  questionId?: string;
 }) {
   const label = role === "user" ? "You" : bot ? `Agent ${bot}` : "Assistant";
   const bubbleClass =
@@ -63,7 +70,10 @@ const MessageBubble = memo(function MessageBubble({
     labelAlign ?? (isRightAligned ? "right" : "left");
 
   return (
-    <div>
+    <div data-research-region={bot === "A" ? "agent_A" : bot === "B" ? "agent_B" : "chat"}
+      data-research-kind={role === "assistant" && requestId ? "ai_message_displayed" : undefined}
+      data-research-request={requestId} data-research-question={questionId}
+      data-research-agent={bot ?? "default"} data-research-item={requestId ? `${requestId}:${bot ?? "default"}` : undefined}>
       {showLabel && (
         <div className={`text-sm text-gray-600 px-1 mb-1 ${computedLabelAlign === "center" ? "text-center" : computedLabelAlign === "right" ? "text-right" : "text-left"}`}>
           {label}
@@ -79,6 +89,7 @@ const MessageBubble = memo(function MessageBubble({
 });
 
 type ChatBoxProps = {
+  research?: QuestionResearch;
   quizId: string;
   onAssistantMessage?: (message: string) => void;
   onError?: () => void;
@@ -95,6 +106,7 @@ type ChatBoxProps = {
 };
 
 export default function ChatBox({
+  research,
   quizId,
   onAssistantMessage,
   onError,
@@ -117,6 +129,8 @@ export default function ChatBox({
   const [followupQuestions, setFollowupQuestions] = useState<string[] | undefined>(undefined);
   const [followupStreamText, setFollowupStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [suggestionRequestId, setSuggestionRequestId] = useState<string>();
+  const [suggestionQuestionId, setSuggestionQuestionId] = useState<string>();
   const [activeConvId, setActiveConvId] = useState<string | null>(
     conversationId,
   );
@@ -168,16 +182,18 @@ export default function ChatBox({
             loaded.push({
               id: crypto.randomUUID(),
               role: "assistant",
+              requestId: m.request_id,
+              questionId: m.question_id,
               content: r,
               ts: 0,
               bot: agentFilter === "double"
-                ? (["A", "B"][i] as Bot ?? undefined)
+                ? (r.startsWith("[AGENT B]") ? "B" : r.startsWith("[AGENT A]") ? "A" : ["A", "B"][i] as Bot ?? undefined)
                 : replies.length > 1 ? (["A", "B", "C", "D"][i] as Bot ?? "A") : undefined,
             });
           });
         }
       }
-      onHistoryLoaded?.();
+      if (messages.some(m => !m.question_id || m.question_id === questionId)) onHistoryLoaded?.();
       setMessages(loaded);
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -286,6 +302,8 @@ export default function ChatBox({
       content: trimmed,
       ts: Date.now(),
     };
+    setSuggestionRequestId(userMsg.id);
+    setSuggestionQuestionId(questionId);
     setMessages((m) => [...m, userMsg]);
 
     const controller = new AbortController();
@@ -303,12 +321,14 @@ export default function ChatBox({
         ? agents.length > 0
           ? (agents
               .map(mapAgentToBot)
-              .filter((bot): bot is Bot => Boolean(bot)) as Bot[])
+              .filter((bot): bot is Bot => Boolean(bot)).sort() as Bot[])
           : ["A", "B"]
         : [];
 
     const buildBotMsgs = (replies: string[]): Msg[] =>
       replies.map((r, i) => ({
+        requestId: userMsg.id,
+        questionId,
         id: crypto.randomUUID(),
         role: "assistant" as const,
         content: r,
@@ -329,6 +349,8 @@ export default function ChatBox({
         messageForBackend,
         agents,
         {
+          research,
+          requestId: userMsg.id,
           signal: controller.signal,
           answerIncorrectly,
           answerChoices,
@@ -486,7 +508,9 @@ export default function ChatBox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalQuestion]);
 
-  function handleFollowupClick(question: string) {
+  function handleFollowupClick(question: string, position: number) {
+    research?.emit("suggestion_clicked", { request_id: suggestionRequestId,
+      item_id: `${suggestionRequestId}:${position}`, position, text: question.slice(0, 2000) });
     void sendMessage(question, "followup_chip");
   }
 
@@ -514,6 +538,7 @@ export default function ChatBox({
         <MessageBubble
           key={m.id}
           role={m.role}
+          requestId={m.requestId} questionId={m.questionId}
           content={m.content}
           bot={m.bot}
           onLinkClick={m.role === "assistant" && quizId === "links" ? handleLinkClick : undefined}
@@ -531,6 +556,7 @@ export default function ChatBox({
           <MessageBubble
             key={current.id}
             role={current.role}
+            requestId={current.requestId} questionId={current.questionId}
             content={current.content}
             bot={current.bot}
             onLinkClick={current.role === "assistant" && quizId === "links" ? handleLinkClick : undefined}
@@ -553,12 +579,12 @@ export default function ChatBox({
         <div key={`pair-${pair.A?.id ?? "none"}-${pair.B?.id ?? "none"}`} className="grid grid-cols-2 gap-3">
           <div>
             {pair.A ? (
-              <MessageBubble role="assistant" content={pair.A.content} bot="A" assistantAlign="left" showLabel labelAlign="center" onLinkClick={quizId === "links" ? handleLinkClick : undefined} />
+              <MessageBubble requestId={pair.A.requestId} questionId={pair.A.questionId} role="assistant" content={pair.A.content} bot="A" assistantAlign="left" showLabel labelAlign="center" onLinkClick={quizId === "links" ? handleLinkClick : undefined} />
             ) : null}
           </div>
           <div>
             {pair.B ? (
-              <MessageBubble role="assistant" content={pair.B.content} bot="B" assistantAlign="right" showLabel labelAlign="center" onLinkClick={quizId === "links" ? handleLinkClick : undefined} />
+              <MessageBubble requestId={pair.B.requestId} questionId={pair.B.questionId} role="assistant" content={pair.B.content} bot="B" assistantAlign="right" showLabel labelAlign="center" onLinkClick={quizId === "links" ? handleLinkClick : undefined} />
             ) : null}
           </div>
         </div>,
@@ -622,7 +648,7 @@ export default function ChatBox({
   };
 
   return (
-    <div data-quiz-theme={quizId} className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
+    <div data-research-region="chat" data-quiz-theme={quizId} className="flex h-full min-h-0 w-full flex-col rounded-2xl border bg-white shadow-sm overflow-hidden">
       <ChatHeader
         quizId={quizId}
         questionCollapsed={questionCollapsed}
@@ -635,7 +661,7 @@ export default function ChatBox({
       >
         {renderMessages()}
 
-        {(followupActive || followupStreamText !== "" || followupQuestions || followupInProgress) && (
+        {suggestionQuestionId === questionId && (followupActive || followupStreamText !== "" || followupQuestions || followupInProgress) && (
           <div className="mt-3 border-t border-gray-200 pt-3">
             <div className="mb-2 text-lg font-semibold text-gray-900">Follow-up Questions</div>
             {(followupActive || followupStreamText !== "") && !followupQuestions?.length && !followupInProgress ? (
@@ -647,7 +673,10 @@ export default function ChatBox({
                     key={i}
                     type="button"
                     className="text-sm px-3 py-1.5 rounded-full border border-gray-300 bg-white hover:bg-gray-100 transition"
-                    onClick={() => handleFollowupClick(q)}
+                    data-research-region="suggestions" data-research-kind="suggestion_displayed"
+                    data-research-request={suggestionRequestId} data-research-item={`${suggestionRequestId}:${i}`} data-research-position={i}
+                    data-research-question={suggestionQuestionId}
+                    onClick={() => handleFollowupClick(q, i)}
                   >
                     <MarkdownMessage content={q} inline />
                   </button>
@@ -685,7 +714,7 @@ export default function ChatBox({
         />
         <div className="flex items-end gap-2">
           <textarea
-            ref={textareaRef}
+            ref={textareaRef} data-research-region="chat_input"
             className="w-full resize-none rounded-xl border px-3 py-2 focus:outline-none focus:ring text-base text-gray-900"
             placeholder={agentFilter === "double" ? "Message both agents, or @AgentA / @AgentB to address one…" : "Type a message…"}
             value={input}

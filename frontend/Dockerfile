@@ -23,6 +23,7 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 
 # Copy only what's needed to run "next start"
 # COPY --from=builder /app/package*.json ./

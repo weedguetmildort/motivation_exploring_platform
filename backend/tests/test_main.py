@@ -63,7 +63,9 @@ class TestStartup:
         client.admin.command.assert_called_once_with("ping")
 
         assert app.state.mongo_client is client
-        assert app.state.db is mock_db
+        assert app.state.raw_db is mock_db
+        assert app.state.db.raw is mock_db
+        assert app.state.db.study_id == "study-1"
         assert app.state.messages is shared_col
         assert app.state.knowledge_links == []
         assert app.state.allowlist_cache == set()

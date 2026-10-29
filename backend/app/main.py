@@ -13,14 +13,21 @@ from .api.copy_events import router as copy_events_router
 from .api.users import router as users_router
 from .api.messages import router as messages_router
 from .api.export import router as export_router
+from .api.research import router as research_router, ensure_research_indexes
 from .api import questions as questions_router
 from .api import quiz as quiz_router
 from .api import demographics as demographics_router
 from .api import surveys as surveys_router
+from .api import study as study_router
 
 from .core.config import get_settings
 
+from .api.studies import router as studies_router
+from .core.study_middleware import StudyMiddleware
+from .services.studies import StudyDatabase, initialize_studies
+
 app = FastAPI()
+app.add_middleware(StudyMiddleware)
 settings = get_settings()
 
 app.add_middleware(
@@ -92,10 +99,14 @@ def _startup():
         allowlist_col = get_allowlist_collection(db)
         ensure_allowlist_indexes(allowlist_col)
 
+        initialize_studies(db)
+        app.state.raw_db = db
         app.state.mongo_client = client
-        app.state.db = db
+        app.state.db = StudyDatabase(db, "study-1")
         app.state.messages = messages
         app.state.settings = settings
+        ensure_research_indexes(db)
+        ensure_research_indexes(StudyDatabase(db, "study-2"))
 
         # Chat cache: only READY links are surfaced to the chatbot
         app.state.knowledge_links = reload_knowledge_links_cache(links_col)
@@ -147,9 +158,13 @@ app.include_router(questions_router.router)
 app.include_router(quiz_router.router)
 app.include_router(demographics_router.router)
 app.include_router(surveys_router.router)
+app.include_router(study_router.router)
 app.include_router(reports_router)
 app.include_router(link_clicks_router)
 app.include_router(copy_events_router)
 app.include_router(users_router)
 app.include_router(messages_router)
 app.include_router(export_router)
+app.include_router(research_router)
+
+app.include_router(studies_router)

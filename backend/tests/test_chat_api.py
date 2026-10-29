@@ -103,6 +103,8 @@ def chat_app(regular_user, chat_col):
     app = FastAPI()
     app.include_router(chat_module.router)
     app.state.messages = chat_col
+    import mongomock
+    app.state.db = mongomock.MongoClient().db
     app.state.knowledge_links = []
     app.dependency_overrides[get_current_user] = lambda: regular_user
     return app
@@ -478,7 +480,7 @@ class TestStandardStream:
         assert events[0] == chat_module._sse({"type": "token", "content": "foo", "agent": "A"})
         assistant_doc = col.insert_one.call_args_list[1].args[0]
         assert assistant_doc["content"] == ["[AGENT A] foo"]
-        assert assistant_doc["metadata"] == {"answer_incorrectly": True, "manipulation_leaked": {"default": False}}
+        assert assistant_doc["metadata"] == {"answer_incorrectly": True, "manipulation_leaked": {"A": False}}
 
     def test_error_mid_stream_no_save(self, monkeypatch):
         monkeypatch.setattr(chat_module._client.chat.completions, "create", AsyncMock(side_effect=RuntimeError("boom")))

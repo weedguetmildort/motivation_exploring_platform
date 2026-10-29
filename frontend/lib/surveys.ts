@@ -3,7 +3,13 @@ import { apiFetch } from "./fetcher";
 
 export type SurveyStage = string;
 
+export type SurveyOption = { id: string; label: string };
+export type SurveyScale = { min: number; max: number; anchors?: string[] | null };
+
 export type SurveyItem = {
+  scope?: import("./surveyConfig").QuestionScope | null;
+  stages?: string[];
+  active?: boolean;
   id: string;
   stage: string;
   category?: string | null;
@@ -17,8 +23,9 @@ export type SurveyItem = {
   scale_max?: number;
   scale_left_label?: string | null;
   scale_right_label?: string | null;
+  scale?: SurveyScale | null;
   // for select types:
-  options?: { id: string; label: string }[];
+  options?: SurveyOption[] | null;
 };
 
 export type SurveyAnswer = {
@@ -26,15 +33,28 @@ export type SurveyAnswer = {
   value: number | string | string[];
 };
 
-export type SurveyStateResponse = {
+export type SurveyAttemptPublic = {
   stage: string;
   status: "not_started" | "in_progress" | "completed";
+  answered_count: number;
+  total_items: number;
+};
+
+// Mirrors backend SurveyStateResponse. Status lives under `attempt` — this type
+// previously declared `stage`/`status` at the top level, which the API has never
+// returned, so every completion check against it silently read undefined.
+export type SurveyStateResponse = {
+  attempt: SurveyAttemptPublic;
   items: SurveyItem[];
   answers: { item_id: string; value: any }[];
 };
 
 export async function getSurveyState(stage: SurveyStage) {
-  return apiFetch<SurveyStateResponse>(`/api/surveys/${stage}/state`); // no /api here if you proxy
+  const state = await apiFetch<SurveyStateResponse>(`/api/surveys/${stage}/state`);
+  return { ...state, items: (state.items ?? []).map(item => item.scale ? { ...item,
+    scale_min: item.scale.min, scale_max: item.scale.max,
+    scale_left_label: item.scale.anchors?.[0], scale_right_label: item.scale.anchors?.[1],
+  } : item) };
 }
 
 export async function submitSurvey(stage: SurveyStage, answers: SurveyAnswer[]) {
@@ -42,4 +62,8 @@ export async function submitSurvey(stage: SurveyStage, answers: SurveyAnswer[]) 
     method: "POST",
     body: JSON.stringify({ answers }),
   });
+}
+
+export function getSurveyPreview(stage: SurveyStage) {
+  return apiFetch<SurveyItem[]>(`/api/surveys/preview/${encodeURIComponent(stage)}`);
 }

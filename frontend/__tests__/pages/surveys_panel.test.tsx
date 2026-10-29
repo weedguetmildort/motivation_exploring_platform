@@ -1,7 +1,9 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import SurveyPanelPage from "../../pages/surveys_panel";
 import { getMe, logout } from "../../lib/auth";
 import { apiFetch } from "../../lib/fetcher";
+import { getStudyConfig } from "../../lib/study";
+jest.mock("../../lib/study", () => ({ getStudyConfig: jest.fn().mockResolvedValue({}) }));
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -55,6 +57,7 @@ const singleSelectItem = {
 
 describe("SurveyPanelPage", () => {
   beforeEach(() => {
+    (getStudyConfig as jest.Mock).mockResolvedValue({});
     mockReplace.mockClear();
     mockPush.mockClear();
     mockGetMe.mockReset();
@@ -66,6 +69,38 @@ describe("SurveyPanelPage", () => {
     mockGetMe.mockReturnValue(new Promise(() => {}));
     render(<SurveyPanelPage />);
     expect(screen.getByText("Loading survey questions panel…")).toBeInTheDocument();
+  });
+
+  it("previews the union of shared and variant-specific active questions", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    const sharedItems = [
+      { ...likertItem, id: "shared", stage: "post_base", scope: "post_quiz", prompt: "Common question" },
+      { ...likertItem, id: "specific", stage: "post_double", scope: "stages", stages: ["post_double"], prompt: "Double question" },
+    ];
+    mockApiFetch.mockImplementation(url => Promise.resolve(url.endsWith("/post_links") ? sharedItems.slice(0, 1) : sharedItems));
+    render(<SurveyPanelPage />);
+    await screen.findByText("Common question");
+    fireEvent.change(screen.getByLabelText("Preview survey"), { target: { value: "post_double" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview effective survey" }));
+    const preview = within(screen.getByRole("region", { name: "Effective survey preview" }));
+    expect(await preview.findByText(/Common question/)).toBeInTheDocument();
+    expect(preview.getByText(/Double question/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Preview survey"), { target: { value: "post_links" } });
+    await waitFor(() => expect(preview.queryByText(/Double question/)).not.toBeInTheDocument());
+  });
+
+  it("creates a question for all surveys without duplicating it into each stage", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url, init) => Promise.resolve(init?.method === "POST" ? { ...likertItem, scope: "all_surveys" } : []));
+    render(<SurveyPanelPage />);
+    await screen.findByText("No survey items yet.");
+    fireEvent.change(screen.getByLabelText("Question target"), { target: { value: "all_surveys" } });
+    fireEvent.change(screen.getByLabelText("Question prompt"), { target: { value: "Shared prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save survey item" }));
+    await screen.findByText("Survey item added.");
+    const body = JSON.parse(mockApiFetch.mock.calls.find(([, init]) => init?.method === "POST")[1].body);
+    expect(body.scope).toBe("all_surveys");
+    expect(body.stages).toEqual([]);
   });
 
   it("redirects non-admin users to the dashboard", async () => {
@@ -161,7 +196,7 @@ describe("SurveyPanelPage", () => {
     const textareas = screen.getAllByRole("textbox").filter((el) => el.tagName === "TEXTAREA");
     fireEvent.change(textareas[0], { target: { value: "Pick one." } });
 
-    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "single_select" } });
+    fireEvent.change(screen.getByLabelText("Question type"), { target: { value: "single_select" } });
 
     const optionInputs = screen.getAllByRole("textbox").filter((el) => el.tagName === "INPUT");
     fireEvent.change(optionInputs[optionInputs.length - 5], { target: { value: "Only one option" } });
@@ -203,6 +238,7 @@ describe("SurveyPanelPage", () => {
           method: "POST",
           body: JSON.stringify({
             stage: "pre_quiz",
+            scope: "stages", stages: ["pre_quiz"],
             category: "TRUST",
             prompt: "New prompt",
             type: "likert",
@@ -210,6 +246,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            options: null,
             scale: {
               min: 1,
               max: 5,
@@ -247,7 +284,7 @@ describe("SurveyPanelPage", () => {
     const textareas = screen.getAllByRole("textbox").filter((el) => el.tagName === "TEXTAREA");
     fireEvent.change(textareas[0], { target: { value: "Pick one" } });
 
-    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "single_select" } });
+    fireEvent.change(screen.getByLabelText("Question type"), { target: { value: "single_select" } });
 
     const optionInputs = screen.getAllByRole("textbox").filter((el) => el.tagName === "INPUT");
     fireEvent.change(optionInputs[optionInputs.length - 5], { target: { value: "Option A" } });
@@ -262,6 +299,7 @@ describe("SurveyPanelPage", () => {
           method: "POST",
           body: JSON.stringify({
             stage: "pre_quiz",
+            scope: "stages", stages: ["pre_quiz"],
             category: "TRUST",
             prompt: "Pick one",
             type: "single_select",
@@ -269,6 +307,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            scale: null,
             options: [
               { id: "a", label: "Option A" },
               { id: "b", label: "Option B" },
@@ -514,7 +553,7 @@ describe("SurveyPanelPage", () => {
     await screen.findByText("No survey items yet.");
 
     // Stage select (create form, first combobox)
-    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "post_base" } });
+    fireEvent.change(screen.getByLabelText("Question target"), { target: { value: "post_base" } });
     fireEvent.change(screen.getByPlaceholderText("e.g., TRUST, NFC, AI Literacy"), { target: { value: "TRUST" } });
     const textareas = screen.getAllByRole("textbox").filter((el) => el.tagName === "TEXTAREA");
     fireEvent.change(textareas[0], { target: { value: "P" } });
@@ -536,6 +575,7 @@ describe("SurveyPanelPage", () => {
           method: "POST",
           body: JSON.stringify({
             stage: "post_base",
+            scope: "stages", stages: ["post_base"],
             category: "TRUST",
             prompt: "P",
             type: "likert",
@@ -543,6 +583,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            options: null,
             scale: { min: 0, max: 6, anchors: ["Low", "High"] },
           }),
         }),
@@ -565,7 +606,7 @@ describe("SurveyPanelPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     // Stage (edit form renders it as a text input valued "pre_quiz")
-    fireEvent.change(screen.getByDisplayValue("pre_quiz"), { target: { value: "post_base" } });
+    fireEvent.change(screen.getByLabelText("Edit question target"), { target: { value: "post_base" } });
     // Category (edit input valued "Motivation")
     fireEvent.change(screen.getByDisplayValue("Motivation"), { target: { value: "TRUST" } });
 
@@ -686,6 +727,7 @@ describe("SurveyPanelPage", () => {
           method: "POST",
           body: JSON.stringify({
             stage: "pre_quiz",
+            scope: "stages", stages: ["pre_quiz"],
             category: null,
             prompt: "P",
             type: "likert",
@@ -693,6 +735,7 @@ describe("SurveyPanelPage", () => {
             reverse_scored: false,
             order: 0,
             active: true,
+            options: null,
             scale: { min: 1, max: 5, anchors: ["Strongly disagree", "Strongly agree"] },
           }),
         }),

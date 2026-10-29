@@ -318,6 +318,7 @@ describe("sendChat", () => {
     (global.fetch as jest.Mock).mockResolvedValue(makeStreamingResponse(chunks));
 
     await sendChat("base", "conv-6", "hi", [], {
+      requestId: "research-request",
       answerIncorrectly: true,
       answerChoices: [{ id: "c1", label: "Choice 1" }],
     });
@@ -327,6 +328,7 @@ describe("sendChat", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
+          request_id: "research-request",
           message: "hi",
           conversation_id: "conv-6",
           agents: [],
