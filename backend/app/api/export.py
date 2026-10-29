@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..schemas.user import UserPublic
+from ..core.study_profiles import study_id_of
 from ..api.auth import get_current_user
-from ..services.research_analytics import ANALYSIS_VERSION, research_data, research_attempts, variant_summaries, prompt_intents
+from ..services.research_analytics import ANALYSIS_VERSION, research_data, research_attempts, variant_summaries
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -217,7 +218,9 @@ def export_chat_messages(
     _: UserPublic = Depends(_require_admin),
 ):
     col = request.app.state.db["messages"]
-    docs = list(col.find({}, sort=[("created_at", 1)]))
+    # AI replies only, as this file has always held. Student prompts are in
+    # the research bundle's messages.json.
+    docs = list(col.find({"role": "assistant"}, sort=[("created_at", 1)]))
     rows = []
     for doc in docs:
         meta = doc.get("metadata") or {}
@@ -227,10 +230,9 @@ def export_chat_messages(
             "study_id": doc.get("study_id", "study-1"),
             "user_email": _fmt(doc.get("user_email")),
             "participant_id": doc.get("user_id"), "message_id": _fmt(doc.get("_id")),
-            "request_id": doc.get("request_id"), "role": doc.get("role"), "content": doc.get("content"),
+            "request_id": doc.get("request_id"), "content": doc.get("content"),
             "model_version": doc.get("model_version") or meta.get("model_version"),
             "prompt_version": doc.get("prompt_version"), "prompt_hash": doc.get("prompt_hash"),
-            "intent_labels_heuristic": prompt_intents(doc.get("content", "")) if doc.get("role") == "user" and isinstance(doc.get("content"), str) and doc.get("trigger") != "auto_question" else [],
             "conversation_id": _fmt(doc.get("conversation_id")),
             "question_id": _fmt(doc.get("question_id")),
             "trigger": _fmt(doc.get("trigger")),
@@ -307,7 +309,7 @@ def _research_bundle_bytes(db, include_tests=False, include_archived=False):
         for u in db["users"].find({}) if str(u["_id"]) in participant_ids]
     files["survey_items_at_export"] = list(db["survey_items"].find({}))
     manifest = {"analysis_version": ANALYSIS_VERSION, "schema_version": 1,
-                "study_id": getattr(db, "study_id", "study-1") if isinstance(getattr(db, "study_id", None), str) else "study-1",
+                "study_id": study_id_of(db, "study-1"),
                 "exported_at": datetime.now(timezone.utc).isoformat(), "include_tests": include_tests,
                 "include_archived": include_archived, "record_counts": {key: len(value) for key, value in files.items()},
                 "definitions": {"accuracy": "Correct submitted answers divided by submitted answers with a stored boolean grade or an immutable attempt answer key. Missing grades are excluded, not counted as incorrect.",

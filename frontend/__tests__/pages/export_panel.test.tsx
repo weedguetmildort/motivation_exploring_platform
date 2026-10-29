@@ -68,6 +68,13 @@ describe("ExportPanelPage", () => {
     expect(screen.getAllByRole("button", { name: "Download CSV" })).toHaveLength(7);
   });
 
+  it("says the chat export holds AI replies and where student prompts are", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    render(<ExportPanelPage />);
+
+    expect(await screen.findByText(/^Assistant replies with request IDs/)).toHaveTextContent("Student prompts are in the Research Snapshot.");
+  });
+
   it("calls window.open with the correct URL when a Download CSV button is clicked", async () => {
     mockGetMe.mockResolvedValue({ user: adminUser });
     render(<ExportPanelPage />);

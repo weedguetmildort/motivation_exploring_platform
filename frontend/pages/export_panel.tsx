@@ -30,7 +30,7 @@ const EXPORTS: { key: ExportType; label: string; description: string }[] = [
   {
     key: "chat-messages",
     label: "Chat Messages",
-    description: "Student prompts and assistant replies, request IDs, model versions, stated choices, and exploratory intent labels.",
+    description: "Assistant replies with request IDs, model versions, and stated choices. Student prompts are in the Research Snapshot.",
   },
   { key: "research-bundle", label: "Research Snapshot", description: "Versioned ZIP with question metrics, variant summaries, raw events, prompts, surveys, and frozen questions. Excludes test and reset attempts." },
   { key: "research-questions", label: "Question Analytics", description: "Accuracy, AI agreement, timing, pointer regions, verification prompts, feature use, and data quality for each question." },
