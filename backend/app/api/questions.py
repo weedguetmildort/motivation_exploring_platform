@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from ..schemas.question import (
     QuestionCreate,
     QuestionAdminPublic,
+    QuestionImport,
+    QuestionImportReport,
     QuestionUpdate,
     SetAssign,
     DifficultyOverride,
@@ -13,6 +15,7 @@ from ..core.llm import get_sync_llm_client
 from ..services.questions import (
     get_questions_collection,
     create_question,
+    import_questions,
     list_questions,
     update_question,
     delete_question,
@@ -37,6 +40,12 @@ def create_question_endpoint(data: QuestionCreate, request: Request):
 def list_questions_endpoint(request: Request):
     col = get_questions_collection(request.app.state.db)
     return list_questions(col)
+
+@router.post("/import", response_model=QuestionImportReport, dependencies=[Depends(require_admin)])
+def import_questions_endpoint(data: QuestionImport, request: Request):
+    """Check a question CSV (dry_run) or import it. Rows with errors block the whole file."""
+    col = get_questions_collection(request.app.state.db)
+    return import_questions(col, data.csv, dry_run=data.dry_run)
 
 @router.post("/judge-difficulty", dependencies=[Depends(require_admin)])
 def judge_difficulty_endpoint(request: Request):

@@ -166,6 +166,7 @@ describe("QuestionPanelPage", () => {
               { id: "d", label: "Choice D" },
             ],
             correct_choice_id: "b",
+            set: null,
           }),
         }),
       ),
@@ -481,6 +482,66 @@ describe("QuestionPanelPage", () => {
     );
     expect(await screen.findByText(/Judged 2 questions\./)).toBeInTheDocument();
     expect(await screen.findByText("Medium · AI")).toBeInTheDocument();
+  });
+
+  it("saves a new question straight into the chosen set and keeps the set for the next one", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      if ((init?.method ?? "GET") === "GET") return Promise.resolve([]);
+      return Promise.resolve({ ...question1, id: "q9", stem: "Sets question", set: "c" });
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("No questions have been created yet.");
+    const textboxes = screen.getAllByRole("textbox");
+    fireEvent.change(textboxes[0], { target: { value: "Sets question" } });
+    ["1", "2", "3", "4"].forEach((label, index) => fireEvent.change(textboxes[index + 2], { target: { value: label } }));
+    fireEvent.click(screen.getAllByRole("radio")[0]);
+    fireEvent.change(screen.getByRole("combobox", { name: "Set" }), { target: { value: "c" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save question" }));
+
+    await waitFor(() => {
+      const post = mockApiFetch.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(post).toBeDefined();
+      expect(JSON.parse(post![1].body)).toEqual(expect.objectContaining({ set: "c", correct_choice_id: "a" }));
+    });
+    expect(await screen.findByText("Question saved!")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Set" })).toHaveValue("c");
+    expect(screen.getByLabelText("Set for Sets question")).toHaveValue("c");
+  });
+
+  it("offers Unassigned and every set when adding a question", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    mockApiFetch.mockResolvedValue([]);
+    render(<QuestionPanelPage />);
+    await screen.findByText("No questions have been created yet.");
+    const select = screen.getByRole("combobox", { name: "Set" });
+    expect(select).toHaveValue("");
+    expect(Array.from((select as HTMLSelectElement).options).map(option => option.textContent)).toEqual(["Unassigned", "A", "B", "C", "D"]);
+  });
+
+  it("reloads the whole list after a CSV import", async () => {
+    mockGetMe.mockResolvedValue({ user: adminUser });
+    let gets = 0;
+    const report = { dry_run: true, valid: true, rows: 1, to_import: 1, imported: 0,
+      by_set: { a: 0, b: 0, c: 1, d: 0, unassigned: 0 }, errors: [], skipped: [] };
+    mockApiFetch.mockImplementation((url: string, init?: any) => {
+      if (url === "/api/questions/import") {
+        const dryRun = JSON.parse(init.body).dry_run;
+        return Promise.resolve({ ...report, dry_run: dryRun, imported: dryRun ? 0 : 1 });
+      }
+      gets += 1;
+      return Promise.resolve(gets === 1 ? [] : [{ ...question1, id: "q7", stem: "Imported topic", set: "c" }]);
+    });
+
+    render(<QuestionPanelPage />);
+    await screen.findByText("No questions have been created yet.");
+    const file = new File(["topic,question,a,b,c,d,correct,set\nImported topic,Q,1,2,3,4,a,c\n"], "bank.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByLabelText("Question CSV"), { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole("button", { name: "Import 1 question" }));
+
+    expect(await screen.findByText("Imported topic")).toBeInTheDocument();
+    expect(gets).toBe(2);
   });
 
   it("shows an error when difficulty judging fails", async () => {

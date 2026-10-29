@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { getMe, logout, type User } from "../lib/auth";
 import { apiFetch } from "../lib/fetcher";
+import QuestionImport from "../components/QuestionImport";
 
 export default function QuestionPanelPage() {
   type ChoiceInput = { id: string; label: string };
@@ -58,6 +59,8 @@ export default function QuestionPanelPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [correctChoiceId, setCorrectChoiceId] = useState("");
   const [editCorrectChoiceId, setEditCorrectChoiceId] = useState("");
+  // Kept after saving, so several questions for one set can be added in a row.
+  const [newSet, setNewSet] = useState<SetId | "">("");
 
   const [judging, setJudging] = useState(false);
   const [judgeMessage, setJudgeMessage] = useState<string | null>(null);
@@ -145,6 +148,15 @@ export default function QuestionPanelPage() {
     } catch (e) {
       console.error("Failed to set difficulty", e);
       alert("Failed to set difficulty.");
+    }
+  }
+
+  async function reloadQuestions() {
+    try {
+      setQuestions(await apiFetch<Question[]>("/api/questions/"));
+    } catch (e) {
+      console.error("Failed to reload questions:", e);
+      setQuestionsError("Failed to load questions.");
     }
   }
 
@@ -252,7 +264,7 @@ export default function QuestionPanelPage() {
       const created = await apiFetch<Question>("/api/questions/", {
         // [UPDATE]
         method: "POST",
-        body: JSON.stringify({ stem, subtitle, choices, correct_choice_id: correctChoiceId }),
+        body: JSON.stringify({ stem, subtitle, choices, correct_choice_id: correctChoiceId, set: newSet || null }),
       });
 
       setQuestions((prev) => [created, ...prev]);
@@ -405,6 +417,23 @@ export default function QuestionPanelPage() {
               </div>
             </div>
 
+            <div>
+              <label htmlFor="new-question-set" className="block text-sm font-medium mb-1">
+                Set
+              </label>
+              <select
+                id="new-question-set"
+                value={newSet}
+                onChange={(e) => setNewSet(e.target.value as SetId | "")}
+                className="rounded-lg border px-3 py-2 text-sm"
+              >
+                <option value="">Unassigned</option>
+                {SETS.map((s) => (
+                  <option key={s} value={s}>{s.toUpperCase()}</option>
+                ))}
+              </select>
+            </div>
+
             <button
               type="submit"
               disabled={saving || !correctChoiceId}
@@ -416,6 +445,9 @@ export default function QuestionPanelPage() {
             {message && <p className="text-sm mt-2 text-gray-700">{message}</p>}
           </form>
         </div>
+      </div>
+      <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto pt-0 px-6 pb-6">
+        <QuestionImport onImported={reloadQuestions} />
       </div>
       <div className="max-w-6xl 2xl:max-w-screen-2xl mx-auto pt-0 px-6 pb-6">
         <div className="bg-white rounded-xl p-8 shadow-sm border text-center">
