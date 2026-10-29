@@ -100,7 +100,7 @@ class TestListQuestions:
                 "created_at": datetime.utcnow(),
             },
         ]
-        mock_col.find.return_value.sort.return_value.limit.return_value = docs
+        mock_col.find.return_value.sort.return_value = docs
 
         result = list_questions(mock_col)
 
@@ -113,18 +113,21 @@ class TestListQuestions:
         assert result[1].subtitle is None
 
     def test_empty_collection_returns_empty_list(self, mock_col):
-        mock_col.find.return_value.sort.return_value.limit.return_value = []
+        mock_col.find.return_value.sort.return_value = []
 
         result = list_questions(mock_col)
 
         assert result == []
 
-    def test_default_limit_is_passed(self, mock_col):
-        mock_col.find.return_value.sort.return_value.limit.return_value = []
+    def test_lists_the_whole_bank_by_default(self, mock_col):
+        # The panel's per-set counts are computed from this list, so it must not be a page.
+        cursor = MagicMock()
+        cursor.__iter__.return_value = iter([])
+        mock_col.find.return_value.sort.return_value = cursor
 
-        list_questions(mock_col)
+        assert list_questions(mock_col) == []
 
-        mock_col.find.return_value.sort.return_value.limit.assert_called_once_with(100)
+        cursor.limit.assert_not_called()
 
     def test_custom_limit_is_passed(self, mock_col):
         mock_col.find.return_value.sort.return_value.limit.return_value = []
@@ -143,7 +146,7 @@ class TestListQuestions:
                 # no correct_choice_id key
             },
         ]
-        mock_col.find.return_value.sort.return_value.limit.return_value = docs
+        mock_col.find.return_value.sort.return_value = docs
 
         result = list_questions(mock_col)
 
@@ -495,7 +498,7 @@ class TestListQuestionsEndpoint:
             "correct_choice_id": "a",
             "created_at": datetime.utcnow(),
         }]
-        mock_col.find.return_value.sort.return_value.limit.return_value = docs
+        mock_col.find.return_value.sort.return_value = docs
 
         resp = questions_client.get("/questions")
 
@@ -506,7 +509,7 @@ class TestListQuestionsEndpoint:
         assert data[0]["stem"] == "Q1"
 
     def test_empty_list(self, questions_client, mock_col):
-        mock_col.find.return_value.sort.return_value.limit.return_value = []
+        mock_col.find.return_value.sort.return_value = []
 
         resp = questions_client.get("/questions")
 
@@ -646,3 +649,265 @@ class TestJudgeDifficultyEndpoint:
             resp = questions_client_unauthed.post("/questions/judge-difficulty")
         assert resp.status_code == 403
         mock_run.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Correct-answer rule shared by the forms and the CSV import
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCorrectChoiceMustBeOffered:
+    def test_correct_choice_outside_the_choices_is_rejected(self):
+        with pytest.raises(ValueError, match="correct_choice_id"):
+            QuestionCreate(stem="T", choices=[QuestionChoice(id="a", label="1")], correct_choice_id="z")
+
+    def test_edits_follow_the_same_rule(self):
+        with pytest.raises(ValueError, match="correct_choice_id"):
+            QuestionUpdate(stem="T", choices=[QuestionChoice(id="a", label="1")], correct_choice_id="")
+
+    def test_create_endpoint_rejects_an_unknown_correct_choice(self, questions_client, mock_col):
+        resp = questions_client.post("/questions", json={**VALID_QUESTION_PAYLOAD, "correct_choice_id": "d"})
+        assert resp.status_code == 422
+        mock_col.insert_one.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CSV import
+# ═══════════════════════════════════════════════════════════════════════════
+
+from app.services.questions import parse_question_csv, import_questions, MAX_IMPORT_ROWS
+
+HEADER = "topic,question,a,b,c,d,correct,set\n"
+ROW = "Basic Probability,A jar contains 4 red and 6 blue,2/5,3/5,1/6,2/3,b,c\n"
+
+
+def csv_text(*rows, header=HEADER):
+    return header + "".join(rows)
+
+
+@pytest.fixture
+def bank():
+    import mongomock
+    return mongomock.MongoClient().db["questions"]
+
+
+class TestParseQuestionCsv:
+    def test_reads_a_valid_row_into_a_question(self):
+        questions, errors, rows = parse_question_csv(csv_text(ROW))
+        assert errors == [] and rows == 1
+        row, question = questions[0]
+        assert row == 2
+        assert question.stem == "Basic Probability" and question.subtitle == "A jar contains 4 red and 6 blue"
+        assert [(c.id, c.label) for c in question.choices] == [("a", "2/5"), ("b", "3/5"), ("c", "1/6"), ("d", "2/3")]
+        assert question.correct_choice_id == "b" and question.set == "c"
+
+    def test_headers_and_letters_are_case_insensitive_and_trimmed(self):
+        text = csv_text(" Combinatorics , How many ways? , 12 , 7 , 24 , 4 , A , D \n",
+                        header=" Topic , QUESTION ,A,B,C,D, Correct , Set \n")
+        (_, question), = parse_question_csv(text)[0]
+        assert question.stem == "Combinatorics" and question.correct_choice_id == "a" and question.set == "d"
+        assert question.choices[0].label == "12"
+
+    def test_set_column_may_be_left_out_or_blank(self):
+        no_column = csv_text("T,Q,1,2,3,4,a\n", header="topic,question,a,b,c,d,correct\n")
+        blank = csv_text("T,Q,1,2,3,4,a,\n")
+        assert parse_question_csv(no_column)[0][0][1].set is None
+        assert parse_question_csv(blank)[0][0][1].set is None
+
+    def test_question_text_may_be_blank_like_the_form(self):
+        (_, question), = parse_question_csv(csv_text("T,,1,2,3,4,a,\n"))[0]
+        assert question.subtitle is None
+
+    def test_columns_may_come_in_any_order(self):
+        text = csv_text("c,4,3,2,1,T,Q,b\n", header="set,d,c,b,a,topic,question,correct\n")
+        (_, question), = parse_question_csv(text)[0]
+        assert [c.label for c in question.choices] == ["1", "2", "3", "4"] and question.set == "c"
+
+    def test_quoted_cells_keep_commas_and_line_breaks(self):
+        text = csv_text('"Statistical Inference","A 95% confidence interval, computed\nfrom a sample","(0.08, 7.92)","b","c","d",a,\n')
+        (row, question), = parse_question_csv(text)[0]
+        assert question.subtitle == "A 95% confidence interval, computed\nfrom a sample"
+        assert question.choices[0].label == "(0.08, 7.92)"
+        assert row == 2
+
+    def test_excel_byte_order_mark_is_ignored(self):
+        assert parse_question_csv("﻿" + csv_text(ROW))[1] == []
+
+    def test_blank_rows_are_skipped_but_keep_row_numbers_aligned(self):
+        questions, errors, rows = parse_question_csv(csv_text(ROW, ",,,,,,,\n", "\n", "T,Q,1,2,3,4,z,\n"))
+        assert rows == 2
+        assert errors[0].row == 5  # the spreadsheet row, counting the blank rows above it
+
+    @pytest.mark.parametrize("header,message", [
+        ("topic,question,a,b,c,d,correct,set,difficulty\n", "Unknown column(s): difficulty"),
+        ("topic,question,a,b,c,correct\n", "Missing column(s): d"),
+        ("topic,question,a,b,c,d,correct,set,set\n", "Repeated column(s): set"),
+        ("stem,subtitle,choices[0].id,a,b,c,d,correct_choice_id\n",
+         "Unknown column(s): stem, subtitle, choices[0].id, correct_choice_id"),
+    ])
+    def test_a_bad_header_is_reported_once_on_row_1(self, header, message):
+        questions, errors, rows = parse_question_csv(csv_text(ROW, header=header))
+        assert questions == [] and rows == 0 and len(errors) == 1
+        assert errors[0].row == 1 and message in errors[0].message
+        assert "Expected: topic, question, a, b, c, d, correct, set" in errors[0].message
+
+    @pytest.mark.parametrize("text", ["", "\n", ",,,\n"])
+    def test_an_empty_file_is_reported(self, text):
+        errors = parse_question_csv(text)[1]
+        assert [(e.row, e.message) for e in errors] == [(1, "The file is empty")]
+
+    @pytest.mark.parametrize("row,message", [
+        (",Q,1,2,3,4,a,\n", "topic is empty"),
+        ("T,Q,1,,3,4,a,\n", "choice b is empty"),
+        ("T,Q,1,2,3,4,e,\n", "correct must be a, b, c or d (found 'e')"),
+        ("T,Q,1,2,3,4,,\n", "correct must be a, b, c or d (found '')"),
+        ("T,Q,1,2,3,4,a,e\n", "set must be blank or one of a, b, c, d (found 'e')"),
+        ("T,Q,1,2,3,4,a,c,extra\n", "the row has more cells than the header"),
+    ])
+    def test_row_problems_are_reported_with_their_row(self, row, message):
+        questions, errors, _ = parse_question_csv(csv_text(ROW, row))
+        assert len(questions) == 1
+        assert errors[0].row == 3 and message in errors[0].message
+
+    def test_every_problem_in_a_row_is_reported_together(self):
+        errors = parse_question_csv(csv_text(",Q,,2,3,4,x,z\n"))[1]
+        assert errors[0].message == ("topic is empty; choice a is empty; correct must be a, b, c or d (found 'x'); "
+                                     "set must be blank or one of a, b, c, d (found 'z')")
+
+    def test_a_short_row_reports_its_missing_cells(self):
+        errors = parse_question_csv(csv_text("T,Q,1,2\n"))[1]
+        assert "choice c is empty" in errors[0].message and "choice d is empty" in errors[0].message
+
+    @pytest.mark.parametrize("label", ["2/5/2026", "10/21/26", "2026-02-05", "2026-02-05 00:00:00", "5-Feb", "5-Feb-26"])
+    def test_answers_a_spreadsheet_turned_into_dates_are_rejected(self, label):
+        errors = parse_question_csv(csv_text(f"T,Q,{label},2,3,4,a,\n"))[1]
+        assert "choice a" in errors[0].message and "looks like a date" in errors[0].message
+
+    @pytest.mark.parametrize("label", ["2/5", "10/21", "13/21", "18/100", "(0.08, 7.92)", "1.5", "120", "95% of individuals"])
+    def test_real_answers_are_not_mistaken_for_dates(self, label):
+        assert parse_question_csv(csv_text(f'T,Q,"{label}",2,3,4,a,\n'))[1] == []
+
+    def test_files_are_capped(self):
+        rows = "".join(f"T{i},Q,1,2,3,4,a,\n" for i in range(MAX_IMPORT_ROWS + 5))
+        questions, errors, count = parse_question_csv(csv_text(rows))
+        assert len(questions) == MAX_IMPORT_ROWS
+        assert errors[-1].row == MAX_IMPORT_ROWS + 2 and f"at most {MAX_IMPORT_ROWS}" in errors[-1].message
+
+    def test_unreadable_csv_is_reported_not_raised(self, monkeypatch):
+        import csv
+        from app.services import questions as service
+
+        class Broken:
+            line_num = 3
+            def __init__(self, rows):
+                self.rows = iter(rows)
+            def __iter__(self):
+                return self
+            def __next__(self):
+                row = next(self.rows)
+                if row is None:
+                    raise csv.Error("new-line character seen in unquoted field")
+                return row
+
+        header = HEADER.strip().split(",")
+        monkeypatch.setattr(service.csv, "reader", lambda _: Broken([header, ROW.strip().split(","), None]))
+        questions, errors, _ = parse_question_csv("ignored")
+        assert len(questions) == 1
+        assert [(e.row, e.message) for e in errors] == [
+            (3, "The file is not valid CSV: new-line character seen in unquoted field")]
+
+
+class TestImportQuestions:
+    def test_a_dry_run_reports_without_saving(self, bank):
+        report = import_questions(bank, csv_text(ROW, "T,Q,1,2,3,4,a,\n"))
+        assert report.dry_run and report.valid
+        assert (report.rows, report.to_import, report.imported) == (2, 2, 0)
+        assert report.by_set == {"a": 0, "b": 0, "c": 1, "d": 0, "unassigned": 1}
+        assert bank.count_documents({}) == 0
+
+    def test_an_import_saves_new_unjudged_questions(self, bank):
+        report = import_questions(bank, csv_text(ROW), dry_run=False)
+        assert report.imported == 1
+        doc = bank.find_one({})
+        assert doc["stem"] == "Basic Probability" and doc["set"] == "c" and doc["correct_choice_id"] == "b"
+        assert doc["choices"] == [{"id": "a", "label": "2/5"}, {"id": "b", "label": "3/5"},
+                                  {"id": "c", "label": "1/6"}, {"id": "d", "label": "2/3"}]
+        # Difficulty is left for the "Judge difficulty" button.
+        assert (doc["difficulty"], doc["difficulty_source"], doc["difficulty_checked"]) == (None, None, False)
+        assert doc["active"] is True and doc["created_at"]
+
+    def test_any_row_error_blocks_the_whole_file(self, bank):
+        report = import_questions(bank, csv_text(ROW, "T,Q,1,2,3,4,z,\n"), dry_run=False)
+        assert not report.valid and report.imported == 0 and report.to_import == 1
+        assert bank.count_documents({}) == 0
+
+    def test_questions_already_in_the_bank_are_skipped_with_a_note(self, bank):
+        import_questions(bank, csv_text(ROW), dry_run=False)
+        # Same question with different case and spacing.
+        again = "basic   probability,a jar contains 4 RED and 6 blue,2/5,3/5,1/6,2/3,b,a\n"
+        report = import_questions(bank, csv_text(again, "T,Q,1,2,3,4,a,\n"), dry_run=False)
+        assert report.valid and report.imported == 1
+        assert [(s.row, s.message) for s in report.skipped] == [(2, "Already in the question bank; skipped")]
+        assert bank.count_documents({}) == 2
+
+    def test_repeated_rows_within_the_file_are_imported_once(self, bank):
+        report = import_questions(bank, csv_text(ROW, "T,Q,1,2,3,4,a,\n", ROW), dry_run=False)
+        assert report.imported == 2
+        assert [(s.row, s.message) for s in report.skipped] == [(4, "Same question as row 2; skipped")]
+
+    def test_a_question_added_by_hand_counts_as_a_duplicate(self, bank):
+        create_question(bank, QuestionCreate(stem="T", subtitle="Q", correct_choice_id="a", choices=[
+            QuestionChoice(id=letter, label=label) for letter, label in zip("abcd", "1234")]))
+        report = import_questions(bank, csv_text("T,Q,1,2,3,4,b,\n"))
+        assert report.to_import == 0 and report.skipped[0].message == "Already in the question bank; skipped"
+
+    def test_different_answers_are_not_duplicates(self, bank):
+        import_questions(bank, csv_text("T,Q,1,2,3,4,a,\n"), dry_run=False)
+        assert import_questions(bank, csv_text("T,Q,1,2,3,5,a,\n")).to_import == 1
+
+    def test_legacy_questions_with_two_choices_do_not_break_the_check(self, bank):
+        bank.insert_one({"stem": "Old", "choices": [{"id": "a", "label": "x"}, {"id": "b", "label": "y"}]})
+        assert import_questions(bank, csv_text(ROW)).to_import == 1
+
+    def test_a_file_of_only_duplicates_imports_nothing(self, bank):
+        import_questions(bank, csv_text(ROW), dry_run=False)
+        report = import_questions(bank, csv_text(ROW), dry_run=False)
+        assert report.valid and report.imported == 0 and len(report.skipped) == 1
+
+
+class TestImportQuestionsEndpoint:
+    def _client(self, user, bank):
+        app = FastAPI()
+        app.include_router(questions_router)
+        app.state.db = bank.database
+        app.dependency_overrides[get_current_user] = lambda: user
+        return TestClient(app)
+
+    def test_preview_then_import(self, admin_user, bank):
+        client = self._client(admin_user, bank)
+        preview = client.post("/questions/import", json={"csv": csv_text(ROW)})
+        assert preview.status_code == 200
+        assert preview.json()["dry_run"] is True and preview.json()["to_import"] == 1
+        assert bank.count_documents({}) == 0
+        done = client.post("/questions/import", json={"csv": csv_text(ROW), "dry_run": False}).json()
+        assert done["imported"] == 1 and bank.count_documents({}) == 1
+        listed = client.get("/questions").json()
+        assert listed[0]["set"] == "c" and listed[0]["difficulty"] is None
+
+    def test_errors_come_back_by_row(self, admin_user, bank):
+        client = self._client(admin_user, bank)
+        body = client.post("/questions/import", json={"csv": csv_text("T,Q,1,2,3,4,z,\n"), "dry_run": False}).json()
+        assert body["valid"] is False and body["imported"] == 0
+        assert body["errors"] == [{"row": 2, "message": "correct must be a, b, c or d (found 'z')"}]
+
+    def test_non_admins_cannot_import(self, regular_user, bank):
+        client = self._client(regular_user, bank)
+        assert client.post("/questions/import", json={"csv": csv_text(ROW), "dry_run": False}).status_code == 403
+        assert bank.count_documents({}) == 0
+
+    def test_oversized_uploads_are_refused(self, admin_user, bank):
+        client = self._client(admin_user, bank)
+        assert client.post("/questions/import", json={"csv": "x" * 2_000_001}).status_code == 422
+
+    def test_the_csv_text_is_required(self, admin_user, bank):
+        client = self._client(admin_user, bank)
+        assert client.post("/questions/import", json={}).status_code == 422

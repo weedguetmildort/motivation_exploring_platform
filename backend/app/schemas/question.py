@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Literal, get_args
 
 
@@ -30,6 +30,36 @@ class QuestionCreate(BaseModel):
     choices: List[QuestionChoice]
     correct_choice_id: str      # id of the correct QuestionChoice
     set: Optional[SetId] = None # optional set assignment at creation time
+
+    @model_validator(mode="after")
+    def _correct_choice_is_offered(self):
+        # Shared by the add/edit forms and the CSV import, so all three agree.
+        if self.correct_choice_id not in {choice.id for choice in self.choices}:
+            raise ValueError("correct_choice_id must be the id of one of the choices")
+        return self
+
+
+# Body for a CSV import. dry_run checks every row and reports what would be
+# imported without saving anything.
+class QuestionImport(BaseModel):
+    csv: str = Field(..., max_length=2_000_000)
+    dry_run: bool = True
+
+
+class QuestionImportIssue(BaseModel):
+    row: int      # spreadsheet row number; the header is row 1
+    message: str
+
+
+class QuestionImportReport(BaseModel):
+    dry_run: bool
+    valid: bool                   # False when any row has an error; nothing is saved then
+    rows: int                     # non-blank data rows read
+    to_import: int                # new questions (rows minus duplicates)
+    imported: int                 # questions actually saved (0 for a dry run or invalid file)
+    by_set: dict[str, int]        # new questions per set letter, plus "unassigned"
+    errors: List[QuestionImportIssue]
+    skipped: List[QuestionImportIssue]  # duplicates, which are not imported
 
 
 # Question data returned to a regular (non-admin) user during a quiz.
