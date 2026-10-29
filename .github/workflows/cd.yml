@@ -67,8 +67,6 @@ jobs:
           python backend/scripts/research_deployment.py shared-preflight
           heroku container:release web --app "$APP_BACKEND"
           heroku container:release web --app "$APP_FRONTEND"
-          heroku ps:scale web=1 --app "$APP_BACKEND"
-          heroku ps:scale web=1 --app "$APP_FRONTEND"
       - name: Verify health and study access routing
         env:
           BACKEND_URL: ${{ steps.preflight.outputs.backend_url }}

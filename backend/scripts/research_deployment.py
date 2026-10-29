@@ -146,13 +146,20 @@ def smoke():
             time.sleep(5)
 
 
+# Mirrors app.core.config.STUDY_ACCESS_MODES; this script stays standard-library only.
+STUDY_ACCESS_MODES = ("sequential_approval", "sequential", "independent_approval", "independent")
+
+
 def validate_shared_config(config, frontend_url):
     required = ("MONGO_URL", "MONGO_DB", "JWT_SECRET", "COOKIE_NAME", "COOKIE_SECURE",
                 "COOKIE_SAMESITE", "FRONTEND_ORIGIN", "ENV", "UF_OPENAI_API_KEY",
-                "UF_OPENAI_BASE_URL", "UF_OPENAI_API_MODEL")
+                "UF_OPENAI_BASE_URL", "UF_OPENAI_API_MODEL", "STUDY_ACCESS_MODE")
     missing = [key for key in required if not str(config.get(key) or "").strip()]
     if missing:
         raise DeploymentError("Missing shared backend config vars: " + ", ".join(missing))
+    # An unknown mode stops the backend from starting; who may enter Study 2 is set explicitly.
+    if config["STUDY_ACCESS_MODE"].strip().lower() not in STUDY_ACCESS_MODES:
+        raise DeploymentError("STUDY_ACCESS_MODE must be one of: " + ", ".join(STUDY_ACCESS_MODES))
     if not config["MONGO_URL"].startswith(("mongodb://", "mongodb+srv://")):
         raise DeploymentError("MONGO_URL must be a MongoDB connection string")
     if len(config["JWT_SECRET"]) < 32 or config["JWT_SECRET"] == "dev-secret-change-me":

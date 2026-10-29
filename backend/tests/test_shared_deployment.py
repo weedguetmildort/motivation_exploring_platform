@@ -6,7 +6,8 @@ def configuration():
     return dict(MONGO_URL="mongodb+srv://database.example/test", MONGO_DB="existing_experiment",
         JWT_SECRET="s" * 40, COOKIE_NAME="session", COOKIE_SECURE="true", COOKIE_SAMESITE="Lax",
         FRONTEND_ORIGIN="https://shared-front.example", ENV="production", UF_OPENAI_API_KEY="test",
-        UF_OPENAI_BASE_URL="https://ai.example/v1", UF_OPENAI_API_MODEL="test-model")
+        UF_OPENAI_BASE_URL="https://ai.example/v1", UF_OPENAI_API_MODEL="test-model",
+        STUDY_ACCESS_MODE="independent_approval")
 
 
 def test_shared_config_keeps_existing_database_and_cookie():
@@ -14,11 +15,26 @@ def test_shared_config_keeps_existing_database_and_cookie():
 
 
 @pytest.mark.parametrize("field,value", [("JWT_SECRET", "short"), ("COOKIE_DOMAIN", ".example.com"),
-    ("COOKIE_SECURE", "false"), ("FRONTEND_ORIGIN", "https://other.example"), ("MONGO_URL", "https://example.com")])
+    ("COOKIE_SECURE", "false"), ("FRONTEND_ORIGIN", "https://other.example"), ("MONGO_URL", "https://example.com"),
+    ("STUDY_ACCESS_MODE", "approval"), ("STUDY_ACCESS_MODE", "")])
 def test_rejects_invalid_shared_configuration(field, value):
     config = configuration(); config[field] = value
     with pytest.raises(DeploymentError):
         validate_shared_config(config, "https://shared-front.example")
+
+
+def test_study_access_mode_must_be_set_explicitly():
+    config = configuration(); del config["STUDY_ACCESS_MODE"]
+    with pytest.raises(DeploymentError, match="STUDY_ACCESS_MODE"):
+        validate_shared_config(config, "https://shared-front.example")
+
+
+@pytest.mark.parametrize("mode", ["sequential_approval", "sequential", "independent_approval", "independent", " Independent "])
+def test_every_mode_the_backend_accepts_passes(mode):
+    from app.core.config import STUDY_ACCESS_MODES
+    from scripts.research_deployment import STUDY_ACCESS_MODES as checked
+    assert set(checked) == set(STUDY_ACCESS_MODES)
+    validate_shared_config({**configuration(), "STUDY_ACCESS_MODE": mode}, "https://shared-front.example")
 
 
 def test_preflight_uses_actual_urls_and_only_two_apps(monkeypatch, tmp_path):
