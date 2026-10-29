@@ -26,6 +26,8 @@ jobs:
       HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
       APP_BACKEND: ${{ secrets.HEROKU_APP_BACKEND }}
       APP_FRONTEND: ${{ secrets.HEROKU_APP_FRONTEND }}
+      # Host the frontend proxies to; when empty, the backend app's Heroku URL is used.
+      BACKEND_URL: ${{ secrets.BACKEND_URL }}
     steps:
       - uses: actions/checkout@v5
       - name: Check shared apps and database configuration
