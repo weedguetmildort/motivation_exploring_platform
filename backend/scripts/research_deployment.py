@@ -150,29 +150,51 @@ def smoke():
 STUDY_ACCESS_MODES = ("sequential_approval", "sequential", "independent_approval", "independent")
 
 
-def validate_shared_config(config, frontend_url):
-    required = ("MONGO_URL", "MONGO_DB", "JWT_SECRET", "COOKIE_NAME", "COOKIE_SECURE",
-                "COOKIE_SAMESITE", "FRONTEND_ORIGIN", "ENV", "UF_OPENAI_API_KEY",
-                "UF_OPENAI_BASE_URL", "UF_OPENAI_API_MODEL", "STUDY_ACCESS_MODE")
-    missing = [key for key in required if not str(config.get(key) or "").strip()]
+def validate_shared_config(config):
+    """Check the settings the backend will actually run with.
+
+    Only variables whose code default cannot work in production are required.
+    COOKIE_NAME ("session"), COOKIE_SAMESITE ("Lax") and UF_OPENAI_API_MODEL
+    have working defaults in app/core; ENV is never read; FRONTEND_ORIGIN only
+    adds a CORS origin, and browsers reach the backend through the frontend's
+    same-origin proxy. Optional variables are still checked when set.
+    """
+    value = lambda key, default="": str(config.get(key) or default).strip()
+    required = ("MONGO_URL", "MONGO_DB", "JWT_SECRET", "COOKIE_SECURE", "UF_OPENAI_API_KEY",
+                "UF_OPENAI_BASE_URL", "STUDY_ACCESS_MODE")
+    missing = [key for key in required if not value(key)]
     if missing:
         raise DeploymentError("Missing shared backend config vars: " + ", ".join(missing))
     # An unknown mode stops the backend from starting; who may enter Study 2 is set explicitly.
-    if config["STUDY_ACCESS_MODE"].strip().lower() not in STUDY_ACCESS_MODES:
+    if value("STUDY_ACCESS_MODE").lower() not in STUDY_ACCESS_MODES:
         raise DeploymentError("STUDY_ACCESS_MODE must be one of: " + ", ".join(STUDY_ACCESS_MODES))
-    if not config["MONGO_URL"].startswith(("mongodb://", "mongodb+srv://")):
+    if not value("MONGO_URL").startswith(("mongodb://", "mongodb+srv://")):
         raise DeploymentError("MONGO_URL must be a MongoDB connection string")
-    if len(config["JWT_SECRET"]) < 32 or config["JWT_SECRET"] == "dev-secret-change-me":
+    if len(value("JWT_SECRET")) < 32 or value("JWT_SECRET") == "dev-secret-change-me":
         raise DeploymentError("Use a JWT_SECRET of at least 32 characters")
-    if config["COOKIE_SECURE"].lower() not in ("1", "true", "yes") or config["COOKIE_SAMESITE"].lower() != "lax":
-        raise DeploymentError("Use secure host-only cookies with COOKIE_SAMESITE=Lax")
-    if config.get("COOKIE_DOMAIN") or config["ENV"] != "production":
-        raise DeploymentError("Use ENV=production and omit COOKIE_DOMAIN")
-    if public_origin(config["FRONTEND_ORIGIN"]) != frontend_url:
-        raise DeploymentError("FRONTEND_ORIGIN must match the shared frontend")
-    endpoint = urlsplit(config["UF_OPENAI_BASE_URL"])
+    if value("COOKIE_SECURE").lower() not in ("1", "true", "yes") or value("COOKIE_SAMESITE", "Lax").lower() != "lax":
+        raise DeploymentError("Use secure cookies (COOKIE_SECURE=true) with COOKIE_SAMESITE=Lax or unset")
+    if value("COOKIE_DOMAIN"):
+        raise DeploymentError("Omit COOKIE_DOMAIN so session cookies stay host-only")
+    if value("ENV") and value("ENV") != "production":
+        raise DeploymentError("ENV must be production when set")
+    if value("FRONTEND_ORIGIN"):
+        # A custom frontend domain is a valid origin too, so only the form is checked.
+        public_origin(value("FRONTEND_ORIGIN"))
+    endpoint = urlsplit(value("UF_OPENAI_BASE_URL"))
     if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password:
         raise DeploymentError("UF_OPENAI_BASE_URL must be an HTTPS API endpoint")
+
+
+def shared_backend_url(heroku_web_url):
+    """The frontend proxies to the BACKEND_URL secret, as before the shared deploy; else Heroku's URL.
+
+    The secret has always held a bare host (the old workflow prefixed https://).
+    """
+    secret = os.environ.get("BACKEND_URL", "").strip()
+    if not secret:
+        return public_origin(heroku_web_url)
+    return public_origin(secret if "://" in secret else "https://" + secret)
 
 
 def shared_preflight():
@@ -183,8 +205,8 @@ def shared_preflight():
     back, front = heroku_get(f"/apps/{backend}", token), heroku_get(f"/apps/{frontend}", token)
     if any(info.get("stack", {}).get("name") != "container" for info in (back, front)):
         raise DeploymentError("Both shared apps must use the container stack")
-    backend_url, frontend_url = public_origin(back["web_url"]), public_origin(front["web_url"])
-    validate_shared_config(heroku_get(f"/apps/{backend}/config-vars", token), frontend_url)
+    backend_url, frontend_url = shared_backend_url(back["web_url"]), public_origin(front["web_url"])
+    validate_shared_config(heroku_get(f"/apps/{backend}/config-vars", token))
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"backend_url={backend_url}\nfrontend_url={frontend_url}\n")
