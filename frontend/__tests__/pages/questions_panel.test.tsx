@@ -497,7 +497,7 @@ describe("QuestionPanelPage", () => {
     fireEvent.change(textboxes[0], { target: { value: "Sets question" } });
     ["1", "2", "3", "4"].forEach((label, index) => fireEvent.change(textboxes[index + 2], { target: { value: label } }));
     fireEvent.click(screen.getAllByRole("radio")[0]);
-    fireEvent.change(screen.getByLabelText("Set"), { target: { value: "c" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Set" }), { target: { value: "c" } });
     fireEvent.click(screen.getByRole("button", { name: "Save question" }));
 
     await waitFor(() => {
@@ -506,7 +506,7 @@ describe("QuestionPanelPage", () => {
       expect(JSON.parse(post![1].body)).toEqual(expect.objectContaining({ set: "c", correct_choice_id: "a" }));
     });
     expect(await screen.findByText("Question saved!")).toBeInTheDocument();
-    expect(screen.getByLabelText("Set")).toHaveValue("c");
+    expect(screen.getByRole("combobox", { name: "Set" })).toHaveValue("c");
     expect(screen.getByLabelText("Set for Sets question")).toHaveValue("c");
   });
 
@@ -515,7 +515,7 @@ describe("QuestionPanelPage", () => {
     mockApiFetch.mockResolvedValue([]);
     render(<QuestionPanelPage />);
     await screen.findByText("No questions have been created yet.");
-    const select = screen.getByLabelText("Set");
+    const select = screen.getByRole("combobox", { name: "Set" });
     expect(select).toHaveValue("");
     expect(Array.from((select as HTMLSelectElement).options).map(option => option.textContent)).toEqual(["Unassigned", "A", "B", "C", "D"]);
   });
