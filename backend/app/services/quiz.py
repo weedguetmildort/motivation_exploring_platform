@@ -12,10 +12,8 @@ from fastapi import HTTPException
 
 from .questions import get_questions_collection
 from . import study_flow
+from ..core.study_profiles import study_id_of
 from ..schemas.quiz import QuizStateResponse, QuizAttemptPublic, QuizQuestionPayload, QuizResultItem, QuizResultsResponse
-from ..schemas.user import AssignedVar
-
-_VARIANT_QUIZ_IDS = {v.value for v in AssignedVar}
 
 # ── Quiz 2 (Phase 13 scaffold) ───────────────────────────────────────────────
 # Placeholder namespace for a future second quiz version, parallel to quiz 1's
@@ -110,8 +108,6 @@ def _load_or_create_attempt(
     incorrect_question_ids = random.sample(ids, min(wrong_count, len(ids)))
 
     now = datetime.utcnow()
-    user_doc = db["users"].find_one({"_id": ObjectId(user_id)}) if ObjectId.is_valid(user_id) else None
-    user_doc = user_doc or {}
     snapshots = {}
     for question in questions:
         qid = str(question["_id"])
@@ -129,7 +125,7 @@ def _load_or_create_attempt(
         "question_order": ids,
         "question_snapshots": snapshots,
         "analytics_schema_version": 1,
-        "study_id": getattr(db, "study_id", "study-1") if isinstance(getattr(db, "study_id", None), str) else "study-1",
+        "study_id": study_id_of(db, "study-1"),
         "study_protocol": protocol,
         "requested_question_count": question_count,
         "actual_question_count": len(ids),

@@ -8,6 +8,8 @@ once, then edited independently per study. Collection.database is scoped
 as well, so service helpers cannot accidentally use another study's counters.
 """
 import hmac
+import logging
+import math
 import secrets
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -21,6 +23,7 @@ from ..core.study_profiles import PROFILES, STUDY_IDS
 GLOBAL_FIELDS = {"email", "password_hash", "first_name", "last_name", "is_admin", "is_test",
                  "demographics", "demographics_completed", "created_at", "last_active_at"}
 SHARED_COLLECTIONS = {"questions", "knowledge_links", "allowlist"}
+logger = logging.getLogger(__name__)
 
 
 
@@ -34,6 +37,25 @@ def access_policy():
     requires_first, requires_approval = STUDY_ACCESS_MODES[mode]
     return {"mode": mode, "requires_study1_completion": requires_first,
             "requires_approval": requires_approval}
+
+
+def policy_protocol_fields(policy=None):
+    """The access rules a Study 2 protocol snapshot records; STUDY_ACCESS_MODE is authoritative."""
+    policy = policy or access_policy()
+    return {"requires_study1_completion": policy["requires_study1_completion"],
+            "study_access_mode": policy["mode"], "requires_study2_approval": policy["requires_approval"]}
+
+
+def _project(doc, projection):
+    """Apply a top-level Mongo projection to an overlaid enrollment document."""
+    if not doc or not projection:
+        return doc
+    fields = projection if isinstance(projection, dict) else dict.fromkeys(projection, 1)
+    included = {key for key, value in fields.items() if value and key != "_id"}
+    if included:
+        keep = included | ({"_id"} if fields.get("_id", 1) else set())
+        return {key: value for key, value in doc.items() if key in keep}
+    return {key: value for key, value in doc.items() if fields.get(key, 1)}
 
 
 class Cursor:
@@ -103,16 +125,18 @@ class StudyUsers(StudyCollection):
                 **(enrollment or {}), "study_id": "study-2"}
 
     def find_one(self, query=None, projection=None, **kwargs):
-        return self.overlay(self.raw.find_one(query or {}, **kwargs))
+        if self.database.study_id == "study-1":
+            return self.tag(self.raw.find_one(query or {}, projection, **kwargs))
+        return _project(self.overlay(self.raw.find_one(query or {}, **kwargs)), projection)
 
     def find(self, query=None, projection=None, **kwargs):
-        cursor = self.raw.find(query or {}, **kwargs)
         if self.database.study_id == "study-1":
-            return Cursor(cursor, self.tag)
-        enrolled = {e["_id"] for e in self.database.raw["study_enrollments"].find({})}
-        # Use Mongo filtering/sorting before the overlay. Callers search global
-        # identity fields; enrollment CAS filters are handled in update_one.
-        return iter(self.overlay(user) for user in cursor if user["_id"] in enrolled)
+            return Cursor(self.raw.find(query or {}, projection, **kwargs), self.tag)
+        enrolled = [e["_id"] for e in self.database.raw["study_enrollments"].find({}, {"_id": 1})]
+        # Mongo filters and sorts on global identity fields before the overlay;
+        # enrollment CAS filters are handled in update_one.
+        query = {"$and": [query or {}, {"_id": {"$in": enrolled}}]}
+        return Cursor(self.raw.find(query, **kwargs), lambda user: _project(self.overlay(user), projection))
 
     def count_documents(self, query, **kwargs):
         return int(self.find_one(query) is not None) if "_id" in query else len(list(self.find(query)))
@@ -199,16 +223,23 @@ def initialize_studies(raw):
         }}, upsert=True)
         db["study_config"].update_one({"_id": "active_flow", "mode": {"$ne": PROFILES[sid]["mode"]}},
             {"$set": {"mode": PROFILES[sid]["mode"]}, "$inc": {"version": 1}})
+    # Failed-code records only matter for one window; let Mongo expire them.
+    raw["study_access_attempts"].create_index(
+        "window_start", expireAfterSeconds=int(CODE_FAILURE_WINDOW.total_seconds()))
     initialize_survey_bank(raw)
     # Repair old saved journeys on deployment as well as on authentication.
     # Only affected Study 1 accounts are selected; Study 2 is never migrated.
+    # Authentication repairs the same accounts, so one failure must not stop startup.
     from itertools import combinations
     from .study_flow import all_variants
     from .study_repair import repair_study1_flow
     query = {"$or": [{"step_order": {"$all": [f"quiz:{a}", f"quiz:{b}"]}}
                      for a, b in combinations(all_variants(), 2)]}
     for user in raw["users"].find(query):
-        repair_study1_flow(StudyDatabase(raw, "study-1"), user)
+        try:
+            repair_study1_flow(StudyDatabase(raw, "study-1"), user)
+        except Exception:
+            logger.exception("Startup repair failed for user %s", user["_id"])
 
 
 def initialize_survey_bank(raw):
@@ -217,9 +248,12 @@ def initialize_survey_bank(raw):
     if config.find_one(marker) or not raw["survey_items"].count_documents({}):
         return
     # Study 2 already has its own items: never merge Study 1's bank into it later.
-    if raw["study2__survey_items"].count_documents({}):
+    # Items left by an interrupted copy are not its own, so that copy resumes.
+    copying = {"_id": "survey_bank_copy_started"}
+    if raw["study2__survey_items"].count_documents({}) and not config.find_one(copying):
         config.update_one(marker, {"$setOnInsert": {"initialized_at": datetime.now(timezone.utc)}}, upsert=True)
         return
+    config.update_one(copying, {"$setOnInsert": {"started_at": datetime.now(timezone.utc)}}, upsert=True)
     for item in raw["survey_items"].find({}):
         raw["study2__survey_items"].update_one({"_id": item["_id"]}, {"$setOnInsert": {
             **item, "study_id": "study-2"}}, upsert=True)
@@ -239,7 +273,9 @@ def check_access(raw, user, study_id):
     enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]})
     policy = access_policy()
     if policy["requires_approval"] and not (enrollment or {}).get("approved"):
-        raise HTTPException(403, "Study 2 is available during your interview after administrator approval")
+        if (enrollment or {}).get("revoked_at"):
+            raise HTTPException(403, REVOKED_MESSAGE)
+        raise HTTPException(403, "Enter the Study 2 access code from your interviewer")
     if policy["requires_study1_completion"] and not study1_complete(raw, user):
         raise HTTPException(403, "Complete Study 1 before starting Study 2")
 
@@ -259,11 +295,14 @@ def enrollment_status(raw, user, study_id):
     eligible, reason = True, None
     if study_id == "study-2" and policy["requires_approval"] and not approved:
         eligible = False
-        reason = "Study 2 access was revoked" if enrollment.get("revoked_at") else "Enter the access code from your interviewer"
+        reason = REVOKED_MESSAGE if enrollment.get("revoked_at") else "Enter the access code from your interviewer"
     elif study_id == "study-2" and not user.get("is_admin") and policy["requires_study1_completion"] and not study1_complete(raw, user):
         eligible, reason = False, "Complete Study 1 first"
     return {"study_id": study_id, "label": "Study 1" if study_id == "study-1" else "Study 2",
         "approved": approved, "available": eligible, "reason": reason,
+        "revoked": study_id == "study-2" and not approved and bool(enrollment.get("revoked_at")),
+        "code_required": study_id == "study-2" and policy["requires_approval"] and not approved
+                         and not enrollment.get("revoked_at"),
         "status": "completed" if finished else "in_progress" if (doc or {}).get("started_at") or completed else "approved" if approved else "ready" if eligible else "not_approved",
         "completed_steps": completed, "total_steps": len(order), "finished": finished,
         "consent_required": study_id == "study-2" and not user.get("is_admin") and (
@@ -275,14 +314,15 @@ def enrollment_status(raw, user, study_id):
 def ensure_study2_enrollment(raw, user, source="self_enrollment"):
     """Freeze a protocol on first entry, without manufacturing admin approval."""
     from .study_flow import assign_flow
+    from .users import _consume_next_override
     enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]})
     if (enrollment or {}).get("step_order"):
         return
     policy = access_policy()
-    flow = assign_flow(StudyDatabase(raw, "study-2"))
-    flow["study_protocol"] = {**flow["study_protocol"],
-        "requires_study1_completion": policy["requires_study1_completion"],
-        "study_access_mode": policy["mode"], "requires_study2_approval": policy["requires_approval"]}
+    db = StudyDatabase(raw, "study-2")
+    # Honour a variant an admin pinned for the next Study 2 participant.
+    flow = assign_flow(db, forced_first=_consume_next_override(db["users"]))
+    flow["study_protocol"] = {**flow["study_protocol"], **policy_protocol_fields(policy)}
     now = datetime.now(timezone.utc)
     try:
         raw["study_enrollments"].update_one({"_id": user["_id"], "$or": [
@@ -317,16 +357,21 @@ def approve_study2(raw, user_id, admin_id, approved, interview_at=None, notes=""
     if not user or user.get("is_admin"):
         raise HTTPException(404, "Participant not found")
     now = datetime.now(timezone.utc)
+    enrollments = raw["study_enrollments"]
     # First approval freezes the full protocol. A re-grant preserves progress.
     if approved:
         ensure_study2_enrollment(raw, user, source="admin_approval")
+        # Record who first granted access (an admin or the access code); saving
+        # interview details later must not rewrite it. Re-approval lifts a revocation.
+        enrollments.update_one({"_id": user["_id"], "approved": {"$ne": True}}, {
+            "$set": {"approved": True, "approved_at": now, "approved_by": admin_id},
+            "$unset": {"revoked_at": "", "revoked_by": ""}})
     # Atomically append the audit record with the access change.
     change = {"approved": approved, "admin_id": admin_id, "at": now, "notes": notes,
               "interview_at": interview_at}
-    raw["study_enrollments"].update_one({"_id": user["_id"]}, {
-        "$set": {"approved": approved, "approved_at" if approved else "revoked_at": now,
-                 "approved_by" if approved else "revoked_by": admin_id,
-                 "interview_at": interview_at, "interviewer_notes": notes},
+    access = {"approved": True} if approved else {"approved": False, "revoked_at": now, "revoked_by": admin_id}
+    enrollments.update_one({"_id": user["_id"]}, {
+        "$set": {**access, "interview_at": interview_at, "interviewer_notes": notes},
         "$push": {"access_history": change},
         "$setOnInsert": {"user_id": user_id, "study_id": "study-2", "created_at": now},
     }, upsert=True)
@@ -340,6 +385,7 @@ CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I lookalikes
 CODE_LENGTH = 8
 MAX_CODE_FAILURES = 10
 CODE_FAILURE_WINDOW = timedelta(minutes=15)
+REVOKED_MESSAGE = "Study 2 access was revoked. Contact the research team."
 
 
 def normalize_code(code):
@@ -364,34 +410,55 @@ def rotate_access_code(raw, admin_id):
     return access_code_status(raw)
 
 
+def _count_code_attempt(attempts, user_id, now):
+    """Atomically count one attempt in the user's current window and return its record.
+
+    Counting before the comparison stops parallel guesses from all passing the
+    limit check. An expired window is removed first, so the next attempt opens
+    a fresh one; the conditional delete never removes a live window.
+    """
+    attempts.delete_one({"_id": user_id, "window_start": {"$lte": now - CODE_FAILURE_WINDOW}})
+    try:
+        return attempts.find_one_and_update(
+            {"_id": user_id}, {"$inc": {"failures": 1}, "$setOnInsert": {"window_start": now}},
+            upsert=True, return_document=ReturnDocument.AFTER)
+    except DuplicateKeyError:
+        # A parallel attempt opened the window first; count against it.
+        return attempts.find_one_and_update(
+            {"_id": user_id}, {"$inc": {"failures": 1}}, return_document=ReturnDocument.AFTER)
+
+
 def redeem_access_code(raw, user, code):
     """Grant Study 2 approval with the active code. Study 1 rules still apply."""
     if user.get("is_admin") or not access_policy()["requires_approval"]:
         return enrollment_status(raw, user, "study-2")
-    now = datetime.now(timezone.utc)
-    attempts = raw["study_access_attempts"]
-    record = attempts.find_one({"_id": user["_id"]})
-    if record and as_utc(record["window_start"]) <= now - CODE_FAILURE_WINDOW:
-        attempts.delete_one({"_id": user["_id"]})
-        record = None
-    if record and record["failures"] >= MAX_CODE_FAILURES:
-        raise HTTPException(429, "Too many incorrect codes. Try again in 15 minutes.")
     enrollment = raw["study_enrollments"].find_one({"_id": user["_id"]}) or {}
     if enrollment.get("approved"):
         return enrollment_status(raw, user, "study-2")
     if enrollment.get("revoked_at"):
-        raise HTTPException(403, "Study 2 access was revoked. Ask the interviewer to restore it.")
+        raise HTTPException(403, REVOKED_MESSAGE)
+    now = datetime.now(timezone.utc)
+    attempts = raw["study_access_attempts"]
+    record = _count_code_attempt(attempts, user["_id"], now)
+    if record["failures"] > MAX_CODE_FAILURES:
+        wait = as_utc(record["window_start"]) + CODE_FAILURE_WINDOW - now
+        minutes = max(1, math.ceil(wait.total_seconds() / 60))
+        raise HTTPException(429, f"Too many incorrect codes. Try again in {minutes} minute{'' if minutes == 1 else 's'}.")
     active = raw["study_access_codes"].find_one({"_id": "study-2"})
     if not active or not hmac.compare_digest(normalize_code(code).encode(), active["code"].encode()):
-        attempts.update_one({"_id": user["_id"]}, {"$inc": {"failures": 1}, "$setOnInsert": {"window_start": now}},
-                            upsert=True)
         raise HTTPException(403, "That access code is not valid. Check it with your interviewer.")
     attempts.delete_one({"_id": user["_id"]})
     ensure_study2_enrollment(raw, user, source="access_code")
     change = {"approved": True, "admin_id": None, "via": "access_code", "code_version": active["version"], "at": now}
-    raw["study_enrollments"].update_one({"_id": user["_id"], "approved": {"$ne": True}}, {
-        "$set": {"approved": True, "approved_at": now, "approved_by": "access_code",
-                 "access_code_version": active["version"]},
-        "$push": {"access_history": change},
-    })
+    # A revocation that lands while the code is being checked wins.
+    granted = raw["study_enrollments"].update_one(
+        {"_id": user["_id"], "approved": {"$ne": True}, "revoked_at": {"$exists": False}}, {
+            "$set": {"approved": True, "approved_at": now, "approved_by": "access_code",
+                     "access_code_version": active["version"]},
+            "$push": {"access_history": change},
+        })
+    if not granted.matched_count:
+        current = raw["study_enrollments"].find_one({"_id": user["_id"]}) or {}
+        if not current.get("approved") and current.get("revoked_at"):
+            raise HTTPException(403, REVOKED_MESSAGE)
     return enrollment_status(raw, user, "study-2")

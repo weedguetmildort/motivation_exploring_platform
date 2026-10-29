@@ -139,18 +139,22 @@ def _consume_next_override(users: Collection) -> Optional[str]:
 def peek_next_assignment(users: Collection) -> dict:
     """What condition the next sign-up will receive, without consuming anything.
 
-    Returns the pending override if set, else the value round-robin would hand
-    out next (derived from the current counter without incrementing it).
+    Returns the pending override if set, else the first variant the next
+    round-robin slot will hand out under the current variant order and
+    counterbalance setting (read without incrementing the counter).
     """
     counters = users.database["counters"]
+    config = study_flow.load_study_config(users.database)
 
     override = counters.find_one({"_id": _NEXT_OVERRIDE_ID})
-    if override and override.get("variant"):
+    # assign_flow ignores an override outside the configured variant order.
+    if override and override.get("variant") in config.variant_order:
         return {"next": override["variant"], "source": "override"}
 
     counter = counters.find_one({"_id": _ROUND_ROBIN_ID})
     seq = int(counter.get("seq", 0)) if counter else 0
-    return {"next": _ASSIGNED_VARS[seq % len(_ASSIGNED_VARS)], "source": "rotation"}
+    sequence = study_flow.variant_sequence_for_seq(seq + 1, config)
+    return {"next": sequence[0] if sequence else _ASSIGNED_VARS[0], "source": "rotation"}
 
 
 # ── Quiz set restriction (Phase 11) ──────────────────────────────────────────

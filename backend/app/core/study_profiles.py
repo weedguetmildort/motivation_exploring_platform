@@ -7,6 +7,11 @@ PROFILES = {
 STUDY_IDS = tuple(PROFILES)
 
 
-def profile_for(db):
+def study_id_of(db, default=None):
+    """The study a database handle is scoped to; unscoped handles (and test mocks) get ``default``."""
     study_id = getattr(db, "study_id", None)
-    return PROFILES.get(study_id, {}) if isinstance(study_id, str) else {}
+    return study_id if isinstance(study_id, str) else default
+
+
+def profile_for(db):
+    return PROFILES.get(study_id_of(db), {})

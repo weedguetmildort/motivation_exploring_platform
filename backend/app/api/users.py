@@ -58,6 +58,7 @@ def _to_summary(doc: dict) -> ParticipantSummary:
         consent_viewed_at=doc.get("consent_viewed_at"),
         consent_abandoned_at=doc.get("consent_abandoned_at"),
         quiz_sets=doc.get("quiz_sets"),
+        quiz_set_assignment=dict(doc.get("quiz_set_assignment") or {}),
         followup_study_granted=doc.get("followup_study_granted", False),
         created_at=doc.get("created_at"),
     )

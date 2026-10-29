@@ -9,12 +9,17 @@ def repair_study1_flow(db, doc):
     if getattr(db, "study_id", None) != "study-1":
         return doc
     uid = str(doc["_id"])
+    variants = [key.split(":", 1)[1] for key in (doc.get("step_order") or [])
+                if isinstance(key, str) and key.startswith("quiz:") and key.split(":", 1)[1] in flow.all_variants()]
+    # An audit record exists only once a repair began, and a begun repair either
+    # still has several variants or is stamped repaired. Skip the lookup otherwise;
+    # this runs on every Study 1 request.
+    if len(variants) <= 1 and doc.get("study1_repair_version") != 1:
+        return doc
     history = db["study_flow_repairs"]
     audit = history.find_one({"_id": uid})
     if doc.get("study1_repair_version") == 1 and (not audit or audit.get("finished_at")):
         return doc
-    variants = [key.split(":", 1)[1] for key in (doc.get("step_order") or [])
-                if isinstance(key, str) and key.startswith("quiz:") and key.split(":", 1)[1] in flow.all_variants()]
     if len(variants) <= 1 and not audit:
         return doc
     assigned = (audit or {}).get("retained_variant") or doc.get("assigned_var")

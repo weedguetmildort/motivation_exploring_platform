@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import mongomock
 import pytest
 from bson import ObjectId
@@ -409,7 +409,7 @@ def test_access_code_cannot_bypass_admin_revocation(setup, code_mode):
     code = rotate(client)["code"]
     client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
     approve_study2(raw, student.id, admin, False)
-    assert client.get("/studies/catalog", headers=headers()).json()["studies"][1]["reason"] == "Study 2 access was revoked"
+    assert client.get("/studies/catalog", headers=headers()).json()["studies"][1]["reason"] == "Study 2 access was revoked. Contact the research team."
     response = client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
     assert response.status_code == 403 and "revoked" in response.json()["detail"]
     approve_study2(raw, student.id, admin, True)
@@ -451,3 +451,287 @@ def test_study2_survey_bank_created_first_is_not_merged_with_study1(setup):
     own = create_survey_item(second, SurveyItemCreate(stage="pre_quiz", type="likert", prompt="Study 2 only", required=True, order=0))
     create_survey_item(db, SurveyItemCreate(stage="pre_quiz", type="likert", prompt="Study 1 only", required=True, order=0))
     assert [i["_id"] for i in second["survey_items"].find({})] == [ObjectId(own.id)]
+
+
+# ── Survey bank copy ─────────────────────────────────────────────────────────
+
+def _study1_items(raw, count=3):
+    return raw.survey_items.insert_many([{"stage": "pre_quiz", "type": "likert", "prompt": f"Item {i}",
+                                          "required": True, "order": i} for i in range(count)]).inserted_ids
+
+
+def test_interrupted_survey_bank_copy_resumes_instead_of_locking_in(setup):
+    from app.services.studies import initialize_survey_bank
+    raw = setup[0]
+    ids = _study1_items(raw)
+    # A copy that crashed after its first item: the marker says it began.
+    raw.study2__study_config.insert_one({"_id": "survey_bank_copy_started"})
+    raw.study2__survey_items.insert_one({**raw.survey_items.find_one({"_id": ids[0]}), "study_id": "study-2"})
+    initialize_survey_bank(raw)
+    assert sorted(i["_id"] for i in raw.study2__survey_items.find({})) == sorted(ids)
+    assert raw.study2__study_config.find_one({"_id": "survey_bank_initialized"})
+
+
+def test_survey_bank_copy_records_its_start_and_never_overwrites_study2_edits(setup):
+    from app.services.studies import initialize_survey_bank
+    raw = setup[0]
+    ids = _study1_items(raw, 2)
+    initialize_survey_bank(raw)
+    assert raw.study2__study_config.find_one({"_id": "survey_bank_copy_started"})
+    raw.study2__survey_items.update_one({"_id": ids[0]}, {"$set": {"prompt": "Edited for Study 2"}})
+    raw.study2__study_config.delete_one({"_id": "survey_bank_initialized"})
+    initialize_survey_bank(raw)
+    assert raw.study2__survey_items.find_one({"_id": ids[0]})["prompt"] == "Edited for Study 2"
+    assert raw.study2__survey_items.count_documents({}) == 2
+
+
+# ── Startup ──────────────────────────────────────────────────────────────────
+
+def test_failed_failure_records_expire_with_the_lockout_window():
+    raw = mongomock.MongoClient().db
+    initialize_studies(raw)
+    index = next(i for i in raw.study_access_attempts.index_information().values() if i["key"] == [("window_start", 1)])
+    assert index["expireAfterSeconds"] == 900
+
+
+def test_one_failing_startup_repair_does_not_stop_the_app(monkeypatch, caplog):
+    from app.services import study_repair
+    raw = mongomock.MongoClient().db
+    broken = raw.users.insert_one({"email": "x@example.com", "step_order": ["quiz:followup", "quiz:double"]}).inserted_id
+    def explode(db, user):
+        raise RuntimeError("bad legacy document")
+    monkeypatch.setattr(study_repair, "repair_study1_flow", explode)
+    initialize_studies(raw)
+    assert str(broken) in caplog.text and "Startup repair failed" in caplog.text
+
+
+# ── Access-code and approval edge cases ──────────────────────────────────────
+
+def test_saving_interview_details_keeps_how_access_was_first_granted(setup, code_mode):
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
+    granted = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    interview = datetime(2026, 11, 3, 14, tzinfo=timezone.utc)
+    approve_study2(raw, student.id, admin, True, interview_at=interview, notes="Room 2")
+    saved = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert saved["approved_by"] == "access_code" and saved["approved_at"] == granted["approved_at"]
+    assert saved["access_code_version"] == 1
+    assert saved["interviewer_notes"] == "Room 2" and saved["interview_at"].replace(tzinfo=timezone.utc) == interview
+    # The audit trail still records both changes.
+    assert [h.get("via") or h["admin_id"] for h in saved["access_history"]] == ["access_code", admin]
+
+
+def test_admin_reapproval_lifts_a_revocation(setup, code_mode):
+    raw, db, student, admin, client = setup
+    approve_study2(raw, student.id, admin, True)
+    approve_study2(raw, student.id, admin, False)
+    revoked = client.get("/studies/catalog", headers=headers()).json()["studies"][1]
+    assert revoked["revoked"] is True and revoked["code_required"] is False and revoked["available"] is False
+    approve_study2(raw, student.id, admin, True)
+    enrollment = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert "revoked_at" not in enrollment and "revoked_by" not in enrollment and enrollment["approved"] is True
+    status = client.get("/studies/catalog", headers=headers()).json()["studies"][1]
+    assert status["revoked"] is False and status["available"] is True
+
+
+def test_revoking_access_before_approval_keeps_the_code_blocked(setup, code_mode):
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    approve_study2(raw, student.id, admin, False)
+    response = client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
+    assert response.status_code == 403 and "Contact the research team" in response.json()["detail"]
+    # A blocked attempt is not a guess: it never counts toward the lockout.
+    assert raw.study_access_attempts.count_documents({}) == 0
+
+
+def test_a_revocation_during_redemption_wins(setup, code_mode, monkeypatch):
+    from app.services import studies as service
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    enroll = service.ensure_study2_enrollment
+    def enroll_then_revoke(raw_db, user, source="self_enrollment"):
+        enroll(raw_db, user, source)
+        approve_study2(raw_db, student.id, admin, False)
+    monkeypatch.setattr(service, "ensure_study2_enrollment", enroll_then_revoke)
+    response = client.post("/studies/access-code/redeem", json={"code": code}, headers=headers())
+    assert response.status_code == 403 and "revoked" in response.json()["detail"]
+    enrollment = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert enrollment["approved"] is False and [h["approved"] for h in enrollment["access_history"]] == [False]
+
+
+def test_every_attempt_counts_before_the_code_is_compared(setup, code_mode):
+    raw, db, student, admin, client = setup
+    code = rotate(client)["code"]
+    statuses = [client.post("/studies/access-code/redeem", json={"code": "WRONG123"}, headers=headers()).status_code
+                for _ in range(12)]
+    assert statuses == [403] * 10 + [429] * 2
+    assert raw.study_access_attempts.find_one({"_id": ObjectId(student.id)})["failures"] == 12
+    assert client.post("/studies/access-code/redeem", json={"code": code}, headers=headers()).status_code == 429
+
+
+def test_parallel_guesses_cannot_exceed_the_limit(setup, code_mode):
+    from app.services.studies import redeem_access_code, MAX_CODE_FAILURES
+    raw, db, student, admin, client = setup
+    rotate(client)
+    user = raw.users.find_one({"_id": ObjectId(student.id)})
+    def guess(_):
+        try:
+            redeem_access_code(raw, user, "WRONG123")
+        except HTTPException as error:
+            return error.status_code
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        statuses = list(pool.map(guess, range(40)))
+    assert statuses.count(403) == MAX_CODE_FAILURES and statuses.count(429) == 40 - MAX_CODE_FAILURES
+
+
+@pytest.mark.parametrize("elapsed,left", [(timedelta(minutes=10), "5 minutes"), (timedelta(minutes=14, seconds=30), "1 minute")])
+def test_lockout_message_reports_the_time_actually_left(setup, code_mode, elapsed, left):
+    raw, db, student, admin, client = setup
+    rotate(client)
+    raw.study_access_attempts.insert_one({"_id": ObjectId(student.id), "failures": 10,
+                                          "window_start": datetime.now(timezone.utc) - elapsed})
+    response = client.post("/studies/access-code/redeem", json={"code": "WRONG123"}, headers=headers())
+    assert response.status_code == 429 and response.json()["detail"] == f"Too many incorrect codes. Try again in {left}."
+
+
+def test_an_approved_participant_who_was_locked_out_gets_their_status(setup, code_mode):
+    raw, db, student, admin, client = setup
+    rotate(client)
+    for _ in range(11):
+        client.post("/studies/access-code/redeem", json={"code": "WRONG123"}, headers=headers())
+    approve_study2(raw, student.id, admin, True)
+    response = client.post("/studies/access-code/redeem", json={"code": "WRONG123"}, headers=headers())
+    assert response.status_code == 200 and response.json()["available"] is True
+
+
+def test_catalog_says_when_a_code_is_the_way_in(setup, code_mode, monkeypatch):
+    from app.core.config import get_settings
+    raw, db, student, admin, client = setup
+    second = lambda email="student@example.com": client.get("/studies/catalog", headers=headers(email)).json()["studies"][1]
+    assert second()["code_required"] is True and second()["revoked"] is False
+    assert second("admin@example.com")["code_required"] is False
+    client.post("/studies/access-code/redeem", json={"code": rotate(client)["code"]}, headers=headers())
+    assert second()["code_required"] is False
+    monkeypatch.setattr(get_settings(), "STUDY_ACCESS_MODE", "independent")
+    other = create_user(db["users"], "open@example.com", "password", "Open", "Mode", True)
+    assert second(other.email)["code_required"] is False
+
+
+def test_direct_study2_requests_point_to_the_code_or_the_revocation(setup, code_mode):
+    raw, db, student, admin, client = setup
+    response = client.get("/studies/study-2/study/next", headers=headers())
+    assert response.status_code == 403 and response.json()["detail"] == "Enter the Study 2 access code from your interviewer"
+    approve_study2(raw, student.id, admin, False)
+    response = client.get("/studies/study-2/study/next", headers=headers())
+    assert response.json()["detail"] == "Study 2 access was revoked. Contact the research team."
+
+
+# ── Study 2 assignment ───────────────────────────────────────────────────────
+
+def test_study2_enrollment_honours_a_pinned_variant_and_leaves_study1_alone(setup):
+    from app.services.users import set_next_assignment_override, peek_next_assignment
+    raw, db, student, admin, client = setup
+    second = StudyDatabase(raw, "study-2")
+    set_next_assignment_override(second["users"], "links")
+    set_next_assignment_override(db["users"], "double")
+    assert peek_next_assignment(second["users"]) == {"next": "links", "source": "override"}
+    approve_study2(raw, student.id, admin, True)
+    enrollment = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert enrollment["variant_sequence"][0] == "links" and enrollment["assignment_source"] == "override"
+    assert peek_next_assignment(second["users"])["source"] == "rotation"
+    assert peek_next_assignment(db["users"]) == {"next": "double", "source": "override"}
+
+
+# ── Admin previews ───────────────────────────────────────────────────────────
+
+def test_study2_admin_preview_records_the_live_access_policy(setup, code_mode):
+    raw, db, student, admin, client = setup
+    user = client.get("/studies/study-2/auth/me", headers=headers("admin@example.com")).json()["user"]
+    assert user["study_protocol"]["requires_study1_completion"] is False
+    assert user["study_protocol"]["study_access_mode"] == "independent_approval"
+    assert user["study_protocol"]["requires_study2_approval"] is True
+
+
+def test_admin_previews_draw_sets_like_participants_without_claiming_slots(setup):
+    raw, db, student, admin, client = setup
+    second = client.get("/studies/study-2/auth/me", headers=headers("admin@example.com")).json()["user"]
+    quizzes = [step.split(":", 1)[1] for step in second["step_order"] if step.startswith("quiz:")]
+    sets = second["quiz_set_assignment"]
+    assert sorted(sets) == sorted(quizzes) and len(set(sets.values())) == len(quizzes)
+    assert not any(c["_id"].startswith("quiz_sets:") for c in raw.study2__counters.find({}))
+    # Stable across requests once drawn.
+    again = client.get("/studies/study-2/auth/me", headers=headers("admin@example.com")).json()["user"]
+    assert again["quiz_set_assignment"] == sets
+    # Study 1 uses its preset map, which is empty: every quiz draws from the whole pool.
+    first = client.get("/auth/me", headers=headers("admin@example.com")).json()["user"]
+    assert first["quiz_set_assignment"] == {}
+
+
+def test_study1_admin_preview_follows_the_preset_map(setup):
+    raw, db, student, admin, client = setup
+    save_study_config(db, quiz_set_map={"base": "c"})
+    first = client.get("/auth/me", headers=headers("admin@example.com")).json()["user"]
+    assert first["quiz_set_assignment"] == {"base": "c"}
+
+
+# ── Users wrapper ────────────────────────────────────────────────────────────
+
+def test_study2_users_wrapper_sorts_projects_and_hides_unenrolled_people(setup):
+    raw, db, student, admin, client = setup
+    people = [create_user(db["users"], f"{name}@example.com", "password", name, "P", True) for name in ("amy", "zoe", "bob")]
+    for person in people[:2]:
+        approve_study2(raw, person.id, admin, True)
+    users = StudyDatabase(raw, "study-2")["users"]
+    found = list(users.find({"is_admin": {"$ne": True}}, {"email": 1}).sort("email", -1))
+    assert found == [{"_id": ObjectId(people[1].id), "email": "zoe@example.com"},
+                     {"_id": ObjectId(people[0].id), "email": "amy@example.com"}]
+    assert users.find_one({"_id": ObjectId(people[0].id)}, {"step_order": 0})["completed_steps"] == []
+    assert "step_order" not in users.find_one({"_id": ObjectId(people[0].id)}, {"step_order": 0})
+    assert users.find_one({"_id": ObjectId(people[2].id)}) is None
+    assert users.count_documents({"email": "bob@example.com"}) == 0
+
+
+def test_study1_users_wrapper_applies_projections(setup):
+    raw, db, student, admin, client = setup
+    assert db["users"].find_one({"_id": ObjectId(student.id)}, {"email": 1}) == {
+        "_id": ObjectId(student.id), "email": "student@example.com", "study_id": "study-1"}
+    assert [u["email"] for u in db["users"].find({"is_admin": False}, {"email": 1})] == ["student@example.com"]
+
+
+# ── Middleware and endpoints ─────────────────────────────────────────────────
+
+def test_study2_requests_do_not_touch_study1_progress(setup, code_mode):
+    raw, db, student, admin, client = setup
+    approve_study2(raw, student.id, admin, True)
+    raw.users.update_one({"_id": ObjectId(student.id)}, {"$unset": {"step_order": "", "completed_steps": ""}})
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+    assert "step_order" not in raw.users.find_one({"_id": ObjectId(student.id)})
+
+
+def test_study2_requests_still_reject_unknown_sessions(setup):
+    client = setup[4]
+    assert client.get("/studies/study-2/study/next").status_code == 401
+    assert client.get("/studies/study-2/study/next", headers=headers("nobody@example.com")).status_code == 401
+
+
+def test_flow_reports_each_studys_quiz_structure(setup, code_mode):
+    raw, db, student, admin, client = setup
+    assert client.get("/study/flow", headers=headers()).json()["mode"] == "single_variant"
+    approve_study2(raw, student.id, admin, True)
+    assert client.get("/studies/study-2/study/flow", headers=headers()).json()["mode"] == "all_variants"
+
+
+def test_chat_message_export_holds_ai_replies_only(setup):
+    import csv
+    import io
+    raw, db, student, admin, client = setup
+    raw.messages.insert_many([
+        {"role": "user", "content": "Is it B?", "user_id": student.id, "created_at": datetime(2026, 1, 1)},
+        {"role": "assistant", "content": "It is B.", "user_id": student.id, "created_at": datetime(2026, 1, 2),
+         "model_version": "gpt-4.1"},
+    ])
+    response = client.get("/export/chat-messages", headers=headers("admin@example.com"))
+    rows = list(csv.DictReader(io.StringIO(response.text)))
+    assert [row["content"] for row in rows] == ["It is B."] and rows[0]["model_version"] == "gpt-4.1"
+    assert "role" not in rows[0] and "intent_labels_heuristic" not in rows[0]

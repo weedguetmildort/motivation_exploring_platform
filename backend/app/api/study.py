@@ -16,6 +16,7 @@ from ..schemas.study import (
     StudyFlowResponse,
 )
 from ..schemas.question import ALL_SET_IDS
+from ..core.study_profiles import study_id_of
 from ..schemas.user import UserPublic
 from ..services import study_flow
 from ..services.studies import access_policy
@@ -63,7 +64,7 @@ def get_next_step(user: UserPublic = Depends(get_current_user)):
 
 
 @router.get("/flow", response_model=StudyFlowResponse)
-def get_flow(user: UserPublic = Depends(get_current_user)):
+def get_flow(request: Request, user: UserPublic = Depends(get_current_user)):
     step_order = list(user.step_order)
     completed = set(user.completed_steps)
 
@@ -83,6 +84,10 @@ def get_flow(user: UserPublic = Depends(get_current_user)):
         total_steps=len(step_order),
         finished=current is None,
         study_flow_version=user.study_flow_version,
+        # The participant's frozen protocol, else the study's fixed quiz structure.
+        mode=(user.study_protocol or {}).get("mode")
+        or study_flow.study_profile_mode(request.app.state.db)
+        or study_flow.MODE_ALL_VARIANTS,
     )
 
 
@@ -140,7 +145,7 @@ def _config_public(config: study_flow.StudyConfig, study_id=None) -> StudyConfig
 @router.get("/config", response_model=StudyConfigPublic)
 def get_config(request: Request, user: UserPublic = Depends(require_admin)):
     db = request.app.state.db
-    return _config_public(study_flow.load_study_config(db), getattr(db, "study_id", None) if isinstance(getattr(db, "study_id", None), str) else None)
+    return _config_public(study_flow.load_study_config(db), study_id_of(db))
 
 
 @router.put("/config", response_model=StudyConfigPublic)
@@ -220,4 +225,4 @@ def update_config(
         variant_survey_mode=data.variant_survey_mode,
         survey_stages={key: value.model_dump() for key, value in data.survey_stages.items()} if data.survey_stages is not None else None,
     )
-    return _config_public(config, getattr(db, "study_id", None) if isinstance(getattr(db, "study_id", None), str) else None)
+    return _config_public(config, study_id_of(db))

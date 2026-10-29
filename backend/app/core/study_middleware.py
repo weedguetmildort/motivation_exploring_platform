@@ -22,12 +22,13 @@ class StudyMiddleware:
         raw = getattr(app.state, "raw_db", None)
         if raw is None:
             return await JSONResponse({"detail": "Study storage unavailable"}, status_code=503)(scope, receive, send)
-        from ..api.auth import get_current_user_doc
+        from ..api.auth import authenticate_identity
         from starlette.requests import Request
         from fastapi import HTTPException
-        # Authenticate against the global identity/Study 1 before selecting progress.
+        # Authenticate against the global identity before selecting progress. The
+        # route authenticates again in its own study, so no progress is loaded here.
         try:
-            user = await run_in_threadpool(get_current_user_doc, Request(scope, receive))
+            user = await run_in_threadpool(authenticate_identity, Request(scope, receive), raw["users"])
             await run_in_threadpool(check_access, raw, user, sid)
             if sid == "study-2" and user.get("is_admin"):
                 from ..services.studies import ensure_admin_preview

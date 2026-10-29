@@ -312,6 +312,20 @@ def test_interrupted_stream_keeps_the_prompt_and_partial_reply(study):
     assert ledger["first_token_at"]
 
 
+@pytest.mark.parametrize("configured,logged", [(None, "gpt-4.1"), ("gpt-test", "gpt-test")])
+def test_request_ledger_records_the_model_actually_requested(study, monkeypatch, configured, logged):
+    from app.services.research_chat import begin_request
+    from app.schemas.chat import ChatRequest
+    db, _, user, qid, _, _ = study
+    if configured:
+        monkeypatch.setenv("UF_OPENAI_API_MODEL", configured)
+    else:
+        monkeypatch.delenv("UF_OPENAI_API_MODEL", raising=False)
+    request = ChatRequest(message="Hi", conversation_id="conv", question_id=qid, request_id="m", trigger="manual")
+    assert begin_request(db, user, request, "conv", "links", "system prompt")["model_version"] == logged
+    assert db.ai_requests.find_one({"request_id": "m"})["model_version"] == logged
+
+
 def test_second_tab_time_is_clipped_at_the_submitted_decision(study):
     db, client, _, qid, _, _ = study
     submit = event(qid, "answer_submit_clicked", event_id="submit", sequence=0, elapsed=10000)

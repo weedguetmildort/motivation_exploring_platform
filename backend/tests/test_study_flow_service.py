@@ -370,6 +370,64 @@ class TestMarkAndUnmarkStep:
         assert sf.mark_step_completed(db, missing, "quiz:base", datetime.utcnow()) == {}
         assert sf.unmark_step_completed(db, missing, "quiz:base") == {}
 
+    @staticmethod
+    def _race(db, uid, concurrent):
+        """Let ``concurrent`` write between this request's read and its write."""
+        users = db["users"]
+        write = users.update_one
+        raced = []
+
+        def update_one(q, update, upsert=False):
+            if "completed_steps" in q and not raced:
+                raced.append(True)
+                concurrent(users.find_one({"_id": ObjectId(uid)}))
+            return write(q, update, upsert=upsert)
+
+        users.update_one = update_one
+
+    def test_a_step_completed_concurrently_is_not_lost(self, db):
+        uid, _ = self._user(db, ["survey:pre_quiz"])
+        # e.g. a second tab finishing another step at the same moment.
+        self._race(db, uid, lambda doc: doc.update(completed_steps=["survey:pre_quiz", "survey:post_base"]))
+        update = sf.mark_step_completed(db, uid, "quiz:base", datetime.utcnow())
+        stored = db["users"].find_one({"_id": ObjectId(uid)})
+        assert stored["completed_steps"] == ["survey:pre_quiz", "survey:post_base", "quiz:base"]
+        assert update["completed_steps"] == stored["completed_steps"]
+        assert stored["quiz_base_completed"] is True and stored["survey_post_base_completed"] is True
+
+    def test_an_admin_reset_racing_a_completion_keeps_the_completion(self, db):
+        uid, _ = self._user(db, ["survey:pre_quiz", "quiz:base"])
+        self._race(db, uid, lambda doc: doc.update(completed_steps=["survey:pre_quiz", "quiz:base", "survey:post_base"]))
+        sf.unmark_step_completed(db, uid, "quiz:base")
+        stored = db["users"].find_one({"_id": ObjectId(uid)})
+        assert stored["completed_steps"] == ["survey:pre_quiz", "survey:post_base"]
+        assert stored["quiz_base_completed"] is False
+
+    def test_the_same_step_completed_twice_concurrently_is_recorded_once(self, db):
+        uid, _ = self._user(db, ["survey:pre_quiz"])
+        self._race(db, uid, lambda doc: doc.update(completed_steps=["survey:pre_quiz", "quiz:base"]))
+        assert sf.mark_step_completed(db, uid, "quiz:base", datetime.utcnow()) == {}
+        assert db["users"].find_one({"_id": ObjectId(uid)})["completed_steps"] == ["survey:pre_quiz", "quiz:base"]
+
+    def test_a_user_deleted_mid_write_is_handled(self, db):
+        uid, _ = self._user(db, ["survey:pre_quiz"])
+        self._race(db, uid, lambda doc: db["users"].docs.remove(doc))
+        assert sf.mark_step_completed(db, uid, "quiz:base", datetime.utcnow()) == {}
+
+    def test_writes_that_never_land_raise_instead_of_dropping_progress(self, db):
+        uid, _ = self._user(db, ["survey:pre_quiz"])
+        db["users"].update_one = lambda *a, **k: types.SimpleNamespace(matched_count=0)
+        with pytest.raises(RuntimeError):
+            sf.mark_step_completed(db, uid, "quiz:base", datetime.utcnow())
+
+    def test_the_write_is_conditional_on_the_list_it_read(self, db):
+        uid, _ = self._user(db, ["survey:pre_quiz"])
+        calls = []
+        write = db["users"].update_one
+        db["users"].update_one = lambda q, update, upsert=False: calls.append(q) or write(q, update, upsert=upsert)
+        sf.mark_step_completed(db, uid, "quiz:base", datetime.utcnow())
+        assert calls[-1] == {"_id": ObjectId(uid), "completed_steps": ["survey:pre_quiz"]}
+
 
 # ── Migration of pre-existing accounts ───────────────────────────────────────
 
@@ -448,6 +506,41 @@ class TestEnsureUserFlow:
         db["users"].docs.append({"_id": oid, "assigned_var": "links"})
         doc = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
         assert doc["variant_sequence"] == ["links"]
+
+    def test_user_without_a_protocol_gets_the_studys_final_survey(self, db):
+        # Study 1 asks one final survey; a rebuild must not invent per-variant ones.
+        sf.save_study_config(db, mode=sf.MODE_SINGLE_VARIANT, variant_survey_mode="end_only")
+        oid = ObjectId()
+        db["users"].docs.append({"_id": oid, "assigned_var": "double", "survey_pre_base_completed": True,
+                                 "quiz_base_completed": True, "survey_post_base_completed": True,
+                                 "quiz_variant_completed": True})
+        doc = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
+        assert doc["step_order"] == ["survey:pre_quiz", "quiz:base", "survey:post_base",
+                                     "quiz:double", "survey:post_variant"]
+        assert sf.next_step_id(doc) == "survey:post_variant"
+        assert doc["study_protocol"]["variant_survey_mode"] == "end_only"
+
+    def test_user_without_a_protocol_gets_the_studys_enabled_surveys(self, db):
+        sf.save_study_config(db, survey_stages={"post_base": {"name": "Mid", "enabled": False}})
+        oid = ObjectId()
+        db["users"].docs.append({"_id": oid, "assigned_var": "links"})
+        doc = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
+        assert "survey:post_base" not in doc["step_order"]
+
+    def test_a_snapshotted_protocol_still_wins_over_the_current_config(self, db):
+        sf.save_study_config(db, variant_survey_mode="end_only")
+        oid = ObjectId()
+        db["users"].docs.append({"_id": oid, "assigned_var": "links",
+                                 "study_protocol": {"variant_survey_mode": "per_variant"}})
+        doc = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
+        assert "survey:post_links" in doc["step_order"] and "survey:post_variant" not in doc["step_order"]
+
+    def test_a_protocol_missing_the_survey_mode_falls_back_to_the_config(self, db):
+        sf.save_study_config(db, variant_survey_mode="end_only")
+        oid = ObjectId()
+        db["users"].docs.append({"_id": oid, "assigned_var": "links", "study_protocol": {"questions_per_quiz": 10}})
+        doc = sf.ensure_user_flow(db, db["users"].find_one({"_id": oid}))
+        assert doc["step_order"][-1] == "survey:post_variant"
 
 
 # ── Admin reorder isolation ──────────────────────────────────────────────────

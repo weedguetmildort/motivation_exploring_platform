@@ -1,11 +1,11 @@
 """Request ledger survives cancelled/failed streams; message records remain authoritative."""
 import hashlib
 import logging
-import os
 import uuid
 import json
 from datetime import datetime
 from fastapi import HTTPException
+from ..core.llm import get_llm_model
 
 logger = logging.getLogger(__name__)
 PROMPT_VERSION = "study-chat-1"
@@ -23,7 +23,7 @@ def begin_request(db, user, req, conv_id, quiz_id, system_prompts, generation_se
         raise HTTPException(422, "Chat variant does not match this attempt")
     context = {"request_id": req.request_id or str(uuid.uuid4()), "user_id": user.id,
                "conversation_id": conv_id, "question_id": req.question_id, "quiz_id": quiz_id,
-               "started_at": datetime.utcnow(), "model_version": os.getenv("UF_OPENAI_API_MODEL"),
+               "started_at": datetime.utcnow(), "model_version": get_llm_model(),
                "prompt_version": PROMPT_VERSION,
                "generation_settings": generation_settings or {},
                "prompt_hash": hashlib.sha256(system_prompts.encode()).hexdigest(),

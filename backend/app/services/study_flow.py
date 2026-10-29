@@ -720,7 +720,10 @@ def ensure_user_flow(db, doc: dict) -> dict:
     if config.mode == MODE_SINGLE_VARIANT:
         sequence = sequence[:1]
 
-    step_order = build_step_order(sequence, (doc.get("study_protocol") or {}).get("survey_stages"), (doc.get("study_protocol") or {}).get("variant_survey_mode", "per_variant"))
+    # A user without a protocol snapshot gets this study's surveys, not a generic default.
+    protocol = doc.get("study_protocol") or config.as_dict()
+    step_order = build_step_order(sequence, protocol.get("survey_stages", config.survey_stages),
+                                  protocol.get("variant_survey_mode", config.variant_survey_mode))
     completed = _legacy_backfill_completed(doc, step_order)
 
     update = {
@@ -945,15 +948,37 @@ def derive_legacy_flags(doc: dict) -> dict:
     }
 
 
-def _write_completed_steps(db, doc: dict, completed: list[str], updated_at: datetime) -> dict:
-    """Persist a new completed_steps list plus the flags derived from it."""
-    doc["completed_steps"] = completed
+# Concurrent writers to one user's progress are rare (a participant finishing
+# a step while an admin resets another), so a few retries always suffice.
+_COMPLETED_STEPS_RETRIES = 5
 
-    update = {"completed_steps": completed, "updated_at": updated_at}
-    update.update(derive_legacy_flags(doc))
 
-    db["users"].update_one({"_id": doc["_id"]}, {"$set": update})
-    return update
+def _update_completed_steps(db, doc: dict, change, updated_at: datetime) -> dict:
+    """Apply ``change`` to completed_steps with compare-and-set, plus the derived flags.
+
+    ``change`` maps (doc, completed) to the new list, or None for a no-op. A
+    write that raced another request is retried against a fresh read, so
+    neither request's step is lost.
+    """
+    for _ in range(_COMPLETED_STEPS_RETRIES):
+        previous = doc.get("completed_steps")
+        completed = change(doc, list(previous or []))
+        if completed is None:
+            return {}
+
+        update = {"completed_steps": completed, "updated_at": updated_at}
+        update.update(derive_legacy_flags({**doc, "completed_steps": completed}))
+
+        result = db["users"].update_one(
+            {"_id": doc["_id"], "completed_steps": previous}, {"$set": update}
+        )
+        if result.matched_count:
+            doc["completed_steps"] = completed
+            return update
+        doc = db["users"].find_one({"_id": doc["_id"]})
+        if not doc:
+            return {}
+    raise RuntimeError("completed_steps kept changing; progress was not saved")
 
 
 def mark_step_completed(db, user_id: str, step_id: str, completed_at: datetime) -> dict:
@@ -970,12 +995,12 @@ def mark_step_completed(db, user_id: str, step_id: str, completed_at: datetime) 
 
     doc = ensure_user_flow(db, doc)
 
-    completed = list(doc.get("completed_steps") or [])
-    if step_id not in (doc.get("step_order") or []) or step_id in completed:
-        return {}
+    def add(current, completed):
+        if step_id not in (current.get("step_order") or []) or step_id in completed:
+            return None
+        return completed + [step_id]
 
-    completed.append(step_id)
-    return _write_completed_steps(db, doc, completed, completed_at)
+    return _update_completed_steps(db, doc, add, completed_at)
 
 
 def unmark_step_completed(db, user_id: str, step_id: str) -> dict:
@@ -990,9 +1015,9 @@ def unmark_step_completed(db, user_id: str, step_id: str) -> dict:
 
     doc = ensure_user_flow(db, doc)
 
-    completed = list(doc.get("completed_steps") or [])
-    if step_id not in completed:
-        return {}
+    def remove(_current, completed):
+        if step_id not in completed:
+            return None
+        return [s for s in completed if s != step_id]
 
-    completed = [s for s in completed if s != step_id]
-    return _write_completed_steps(db, doc, completed, datetime.utcnow())
+    return _update_completed_steps(db, doc, remove, datetime.utcnow())

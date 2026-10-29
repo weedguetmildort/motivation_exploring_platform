@@ -201,24 +201,52 @@ class TestNextAssignmentOverride:
         }
         assert peek_next_assignment(mock_col) == {"next": "links", "source": "override"}
 
+    @staticmethod
+    def _stored(mock_col, docs):
+        # Every collection of a mocked database is the same mock; answer by _id.
+        mock_col.database["counters"].find_one.side_effect = lambda query, *a, **k: docs.get(query["_id"])
+
     def test_peek_returns_rotation_value_by_seq(self, mock_col):
-        counters = mock_col.database["counters"]
-        # First find_one → no override; second → round-robin counter at seq=1.
-        counters.find_one.side_effect = [
-            None,
-            {"_id": "user_signup_round_robin", "seq": 1},
-        ]
+        self._stored(mock_col, {"user_signup_round_robin": {"seq": 1}})
         # seq=1 → next signup increments to 2 → index 1 → double. Peek must agree.
         assert peek_next_assignment(mock_col) == {
             "next": AssignedVar.double.value, "source": "rotation",
         }
 
     def test_peek_rotation_defaults_to_followup_before_any_signup(self, mock_col):
-        counters = mock_col.database["counters"]
-        counters.find_one.side_effect = [None, None]  # no override, no counter yet
+        self._stored(mock_col, {})  # no override, no counter, no saved config yet
         assert peek_next_assignment(mock_col) == {
             "next": AssignedVar.followup.value, "source": "rotation",
         }
+
+    def test_peek_follows_the_configured_variant_order(self, mock_col):
+        self._stored(mock_col, {"active_flow": {"variant_order": ["links", "followup", "double"]},
+                                "user_signup_round_robin": {"seq": 1}})
+        assert peek_next_assignment(mock_col) == {"next": "followup", "source": "rotation"}
+
+    def test_peek_without_counterbalancing_always_names_the_first_variant(self, mock_col):
+        self._stored(mock_col, {"active_flow": {"variant_order": ["double", "links", "followup"], "counterbalance": False},
+                                "user_signup_round_robin": {"seq": 7}})
+        assert peek_next_assignment(mock_col) == {"next": "double", "source": "rotation"}
+
+    def test_peek_ignores_an_override_signup_would_ignore(self, mock_col):
+        self._stored(mock_col, {"next_assignment_override": {"variant": "retired"},
+                                "user_signup_round_robin": {"seq": 0}})
+        assert peek_next_assignment(mock_col) == {"next": "followup", "source": "rotation"}
+
+    @pytest.mark.parametrize("config", [
+        {"variant_order": ["links", "double", "followup"], "counterbalance": True},
+        {"variant_order": ["double", "followup", "links"], "counterbalance": False},
+        {"variant_order": ["followup", "double", "links"], "counterbalance": True, "mode": "single_variant"},
+    ])
+    def test_peek_matches_what_the_next_signups_receive(self, config):
+        import mongomock
+        from app.services import study_flow
+        db = mongomock.MongoClient().db
+        db["study_config"].insert_one({"_id": "active_flow", **config})
+        for _ in range(4):
+            expected = peek_next_assignment(db["users"])["next"]
+            assert study_flow.assign_flow(db)["variant_sequence"][0] == expected
 
 
 # ── quiz set restriction (Phase 11) ──────────────────────────────────────────
@@ -542,3 +570,17 @@ class TestMaybeTouchLastActive:
         maybe_touch_last_active(mock_col, doc)
 
         mock_col.update_one.assert_called_once()
+
+
+# ── participants panel summary ───────────────────────────────────────────────
+
+class TestParticipantSummary:
+    def test_summary_includes_each_quizs_question_set(self):
+        from app.api.users import _to_summary
+        doc = {"_id": ObjectId(), "email": "p@example.com", "quiz_set_assignment": {"base": "a", "links": "c"}}
+        assert _to_summary(doc).quiz_set_assignment == {"base": "a", "links": "c"}
+
+    def test_summary_without_an_assignment_is_empty(self):
+        from app.api.users import _to_summary
+        assert _to_summary({"_id": ObjectId(), "email": "p@example.com"}).quiz_set_assignment == {}
+        assert _to_summary({"_id": ObjectId(), "email": "p@example.com", "quiz_set_assignment": None}).quiz_set_assignment == {}

@@ -65,12 +65,10 @@ def build_user_public(doc: dict) -> UserPublic:
     return user_to_public(doc)
 
 
-def get_current_user_doc(request: Request) -> dict:
-    """Authenticate the request and return the raw user document.
+def authenticate_identity(request: Request, users) -> dict:
+    """Validate the session cookie and return the user's document from ``users``.
 
-    Also lazily backfills step_order/completed_steps for accounts created before
-    the multi-variant flow existed and reconciles older snapshots with saved
-    results. Once repaired, neither migration scans the result collections.
+    Identity only: no study progress is read or repaired here.
     """
     s = get_settings()
     token = request.cookies.get(s.COOKIE_NAME)
@@ -86,11 +84,22 @@ def get_current_user_doc(request: Request) -> dict:
     if not email:
         raise HTTPException(status_code=401, detail="Invalid token (no subject)")
 
-    db = request.app.state.db
-    users = get_users_collection(db)
     doc = find_user_by_email(users, email)
     if not doc:
         raise HTTPException(status_code=401, detail="User not found")
+    return doc
+
+
+def get_current_user_doc(request: Request) -> dict:
+    """Authenticate the request and return the raw user document.
+
+    Also lazily backfills step_order/completed_steps for accounts created before
+    the multi-variant flow existed and reconciles older snapshots with saved
+    results. Once repaired, neither migration scans the result collections.
+    """
+    db = request.app.state.db
+    users = get_users_collection(db)
+    doc = authenticate_identity(request, users)
 
     from ..services.studies import snapshot_legacy_protocol
     doc = snapshot_legacy_protocol(db, doc)
