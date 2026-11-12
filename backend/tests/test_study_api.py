@@ -6,6 +6,8 @@ participant goes, so these cover the whole walk plus the admin config endpoints.
 """
 from unittest.mock import MagicMock
 
+from bson import ObjectId
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -128,13 +130,20 @@ class TestGetFlow:
 
 # ── /study/config ────────────────────────────────────────────────────────────
 
+def stocked_db(per_set=20):
+    """An in-memory bank with enough questions per set for any question settings."""
+    from tests.test_study_flow_service import FakeDB
+    db = FakeDB()
+    for set_id in ALL_SET_IDS:
+        for index in range(per_set):
+            db["questions"].insert_one({"_id": f"{set_id}{index}", "set": set_id})
+    return db
+
 class TestStudyConfigEndpoints:
     @pytest.fixture
     def admin_client(self):
-        from tests.test_study_flow_service import FakeDB
-
         admin = UserPublic(id="a1", email="admin@test.edu", is_admin=True)
-        return TestClient(_app(admin, db=FakeDB()))
+        return TestClient(_app(admin, db=stocked_db()))
 
     def test_non_admin_is_refused(self):
         client = TestClient(_app(participant_at()))
@@ -190,10 +199,8 @@ class TestStudyConfigEndpoints:
 class TestQuizSetConfigEndpoints:
     @pytest.fixture
     def admin_client(self):
-        from tests.test_study_flow_service import FakeDB
-
         admin = UserPublic(id="a1", email="admin@test.edu", is_admin=True)
-        return TestClient(_app(admin, db=FakeDB()))
+        return TestClient(_app(admin, db=stocked_db()))
 
     def test_defaults_to_balanced_random_with_an_empty_map(self, admin_client):
         data = admin_client.get("/study/config").json()
@@ -249,14 +256,13 @@ class TestQuizSetConfigEndpoints:
         assert resp.status_code == 400
         assert "not_a_quiz" in resp.json()["detail"]
 
-    def test_rejects_reusing_one_set_for_two_quizzes(self, admin_client):
-        """Two quizzes sharing a set is exactly the repetition this prevents."""
-        resp = admin_client.put(
-            "/study/config", json={"quiz_set_map": {"base": "a", "followup": "a"}}
-        )
+    def test_quizzes_may_share_a_set_when_it_holds_enough_questions(self, admin_client):
+        """A participant never sees a question twice, so sharing is safe with 4 × 5 questions."""
+        shared = {quiz: "c" for quiz in (sf.BASE_QUIZ_ID, *sf.all_variants())}
+        resp = admin_client.put("/study/config", json={"quiz_set_mode": "preset", "quiz_set_map": shared})
 
-        assert resp.status_code == 400
-        assert "own set" in resp.json()["detail"]
+        assert resp.status_code == 200
+        assert resp.json()["quiz_set_map"] == shared and resp.json()["supply_problems"] == []
 
     def test_rejects_an_invalid_set_mode_at_the_schema(self, admin_client):
         resp = admin_client.put("/study/config", json={"quiz_set_mode": "sideways"})
@@ -280,3 +286,85 @@ class TestQuizSetConfigEndpoints:
         client = TestClient(_app(participant_at()))
         resp = client.put("/study/config", json={"quiz_set_map": {"base": "a"}})
         assert resp.status_code == 403
+
+
+# ── /study/config — question supply and enrolled participants ────────────────
+
+class TestQuestionSupplyEndpoints:
+    ADMIN = UserPublic(id="a1", email="admin@test.edu", is_admin=True)
+    SHARED_C = {quiz: "c" for quiz in (sf.BASE_QUIZ_ID, *sf.all_variants())}
+
+    def client(self, db):
+        return TestClient(_app(self.ADMIN, db=db))
+
+    def test_reports_questions_per_set(self):
+        db = stocked_db(per_set=3)
+        db["questions"].insert_one({"_id": "loose", "set": None})
+        counts = self.client(db).get("/study/config").json()["question_counts"]
+        assert counts == {"a": 3, "b": 3, "c": 3, "d": 3, "unassigned": 1, "total": 13}
+
+    def test_refuses_a_shared_set_without_enough_questions(self):
+        db = stocked_db(per_set=19)
+        resp = self.client(db).put("/study/config", json={"quiz_set_mode": "preset", "quiz_set_map": self.SHARED_C})
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == (
+            "Not enough questions to give every participant different questions in each quiz. "
+            "Set C has 19 questions, but 4 quizzes × 5 questions need 20 different ones.")
+        assert self.client(db).get("/study/config").json()["quiz_set_map"] == {}
+
+    def test_a_larger_quiz_size_is_checked_too(self):
+        db = stocked_db(per_set=20)
+        client = self.client(db)
+        assert client.put("/study/config", json={"quiz_set_mode": "preset", "quiz_set_map": self.SHARED_C}).status_code == 200
+        resp = client.put("/study/config", json={"questions_per_quiz": 6})
+        assert resp.status_code == 400 and "4 quizzes × 6 questions need 24" in resp.json()["detail"]
+
+    def test_random_modes_need_a_full_quiz_in_every_set(self):
+        db = stocked_db(per_set=5)
+        db["questions"].docs = [q for q in db["questions"].docs if not q["_id"].startswith("d")]
+        resp = self.client(db).put("/study/config", json={"quiz_set_mode": "random"})
+        assert resp.status_code == 400
+        assert "Set D has 0 questions; every set needs at least 5" in resp.json()["detail"]
+
+    def test_saved_settings_that_no_longer_fit_are_reported_but_do_not_block_other_edits(self):
+        db = stocked_db(per_set=20)
+        client = self.client(db)
+        client.put("/study/config", json={"quiz_set_mode": "preset", "quiz_set_map": self.SHARED_C})
+        db["questions"].docs = [q for q in db["questions"].docs if q["_id"] != "c0"]  # a question was deleted
+        data = client.get("/study/config").json()
+        assert data["supply_problems"] == ["Set C has 19 questions, but 4 quizzes × 5 questions need 20 different ones."]
+        resp = client.put("/study/config", json={"counterbalance": False})
+        assert resp.status_code == 200 and resp.json()["supply_problems"]
+
+    def test_announces_this_studys_own_default_mode(self):
+        assert self.client(stocked_db()).get("/study/config").json()["default_quiz_set_mode"] is None
+
+    def test_counts_participants_with_quizzes_not_yet_started(self):
+        db = stocked_db()
+        order = sf.build_step_order(["followup", "double", "links"])
+        db["users"].insert_one({"_id": ObjectId(), "step_order": order, "is_admin": False})
+        done = ObjectId()
+        db["users"].insert_one({"_id": done, "step_order": ["survey:pre_quiz", "quiz:base"], "is_admin": False})
+        db["quiz_attempts"].insert_one({"user_id": str(done), "quiz_id": "base"})
+        db["users"].insert_one({"_id": ObjectId(), "step_order": order, "is_admin": True})
+        assert self.client(db).get("/study/config").json()["enrolled_with_unstarted_quizzes"] == 1
+
+    def test_saving_can_apply_the_sets_to_enrolled_participants(self):
+        db = stocked_db()
+        uid = ObjectId()
+        order = sf.build_step_order(["followup", "double", "links"])
+        db["users"].insert_one({"_id": uid, "step_order": order, "is_admin": False,
+                                "quiz_set_assignment": {"base": "a", "followup": "b", "double": "c", "links": "d"}})
+        db["quiz_attempts"].insert_one({"user_id": str(uid), "quiz_id": "base"})
+        client = self.client(db)
+
+        untouched = client.put("/study/config", json={"quiz_set_mode": "preset", "quiz_set_map": self.SHARED_C}).json()
+        assert untouched["applied_participants"] is None
+        assert db["users"].find_one({"_id": uid})["quiz_set_assignment"]["followup"] == "b"
+
+        applied = client.put("/study/config", json={"apply_to_enrolled": True}).json()
+        assert applied["applied_participants"] == 1
+        doc = db["users"].find_one({"_id": uid})
+        # The started base quiz keeps its set; the rest move to C.
+        assert doc["quiz_set_assignment"] == {"base": "a", "followup": "c", "double": "c", "links": "c"}
+        assert doc["quiz_set_history"][0]["by"] == "a1" and doc["quiz_set_history"][0]["started"] == ["base"]

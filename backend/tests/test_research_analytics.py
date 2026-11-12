@@ -240,7 +240,7 @@ def test_snapshot_export_is_admin_only_and_omits_direct_identity(study):
 def test_question_content_and_grading_are_frozen_at_attempt_creation():
     db = mongomock.MongoClient().db
     uid, qid = ObjectId(), ObjectId()
-    db.users.insert_one({"_id": uid})
+    db.users.insert_one({"_id": uid, "study_protocol": {"questions_per_quiz": 1}})
     db.questions.insert_one({"_id": qid, "stem": "Original", "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "correct_choice_id": "a"})
     attempt = _load_or_create_attempt(db, str(uid), "a@test.edu", "base")
     db.questions.update_one({"_id": qid}, {"$set": {"stem": "Edited", "correct_choice_id": "b"}})

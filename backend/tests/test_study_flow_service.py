@@ -33,6 +33,9 @@ class FakeCol:
     def find_one(self, q, *a, **k):
         return next((d for d in self.docs if self._match(d, q)), None)
 
+    def find(self, q=None, *a, **k):
+        return [d for d in self.docs if self._match(d, q or {})]
+
     def count_documents(self, q, limit=None):
         return sum(1 for d in self.docs if self._match(d, q))
 
@@ -40,6 +43,8 @@ class FakeCol:
         d.update(update.get("$set", {}))
         for key, amount in update.get("$inc", {}).items():
             d[key] = d.get(key, 0) + amount
+        for key, item in update.get("$push", {}).items():
+            d[key] = [*d.get(key, []), item]
 
     def update_one(self, q, update, upsert=False):
         d = self.find_one(q)
@@ -66,7 +71,10 @@ class FakeDB:
         self.cols = {}
 
     def __getitem__(self, name):
-        return self.cols.setdefault(name, FakeCol())
+        if name not in self.cols:
+            self.cols[name] = FakeCol()
+            self.cols[name].database = self  # like pymongo's Collection.database
+        return self.cols[name]
 
 
 @pytest.fixture
@@ -1050,3 +1058,148 @@ class TestRepointQuizSet:
     def test_missing_user_is_handled(self, db):
         sf.save_study_config(db, quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map={"base": "a"})
         assert sf.repoint_quiz_set(db, str(ObjectId()), "base") is None
+
+
+# ── Question supply: no repeats within a participant's study ─────────────────
+
+def counts(**per_set):
+    result = {set_id: per_set.get(set_id, 0) for set_id in ALL_SET_IDS}
+    result["unassigned"] = per_set.get("unassigned", 0)
+    result["total"] = sum(result.values())
+    return result
+
+
+ALL_QUIZZES = (sf.BASE_QUIZ_ID, *sf.all_variants())
+
+
+def supply(mode=sf.MODE_ALL_VARIANTS, set_mode=sf.QUIZ_SET_MODE_PRESET, set_map=None, per_quiz=5, bank=None, default_sets=None):
+    return sf.question_supply_problems(mode=mode, quiz_set_mode=set_mode, quiz_set_map=set_map or {},
+                                       questions_per_quiz=per_quiz, counts=bank or counts(), default_sets=default_sets)
+
+
+class TestQuestionSetCounts:
+    def test_counts_each_set_unassigned_and_total(self, db):
+        for set_id in ("a", "a", "c", None):
+            db["questions"].insert_one({"set": set_id})
+        assert sf.question_set_counts(db) == {"a": 2, "b": 0, "c": 1, "d": 0, "unassigned": 1, "total": 4}
+
+
+class TestQuestionSupplyProblems:
+    def test_four_quizzes_can_share_set_c_with_twenty_questions(self):
+        assert supply(set_map={q: "c" for q in ALL_QUIZZES}, bank=counts(c=20)) == []
+
+    def test_nineteen_questions_are_one_short(self):
+        assert supply(set_map={q: "c" for q in ALL_QUIZZES}, bank=counts(c=19)) == [
+            "Set C has 19 questions, but 4 quizzes × 5 questions need 20 different ones."]
+
+    def test_each_set_is_checked_for_the_quizzes_that_use_it(self):
+        set_map = {"base": "a", "followup": "a", "double": "b", "links": "d"}
+        assert supply(set_map=set_map, bank=counts(a=9, b=5, d=4)) == [
+            "Set A has 9 questions, but 2 quizzes × 5 questions need 10 different ones.",
+            "Set D has 4 questions, but 1 quiz × 5 questions need 5 different ones."]
+
+    def test_single_variant_participants_take_only_one_variant(self):
+        # Study 1: base + one variant. Three variants on C still means 2 quizzes per participant.
+        set_map = {q: "c" for q in ALL_QUIZZES}
+        assert supply(mode=sf.MODE_SINGLE_VARIANT, set_map=set_map, per_quiz=10, bank=counts(c=20)) == []
+        assert supply(mode=sf.MODE_SINGLE_VARIANT, set_map=set_map, per_quiz=10, bank=counts(c=19)) == [
+            "Set C has 19 questions, but 2 quizzes × 10 questions need 20 different ones."]
+
+    def test_quizzes_without_a_set_need_the_whole_bank_to_cover_them(self):
+        assert supply(bank=counts(a=10, unassigned=10)) == []
+        assert supply(bank=counts(a=10, unassigned=9)) == [
+            "The whole question bank has 19 questions, but 4 quizzes × 5 questions need 20 different ones."]
+
+    def test_a_set_also_covers_quizzes_drawing_from_the_whole_bank_in_the_worst_case(self):
+        # base draws from the whole bank and could take set A's questions.
+        problems = supply(set_map={"followup": "a", "double": "b", "links": "c"}, bank=counts(a=5, b=10, c=10, d=10))
+        assert "Set A has 5 questions, but 2 quizzes × 5 questions need 10 different ones." in problems
+
+    def test_default_question_sets_limit_where_quizzes_without_a_set_draw(self):
+        problems = supply(bank=counts(a=10, b=9, c=50), default_sets=["a", "b"])
+        assert problems == ["Default question sets A, B has 19 questions, but 4 quizzes × 5 questions need 20 different ones."]
+        # A set outside the defaults is not drained by those quizzes.
+        assert supply(set_map={"links": "c"}, bank=counts(a=10, b=5, c=5), default_sets=["a", "b"]) == []
+
+    @pytest.mark.parametrize("mode", [sf.QUIZ_SET_MODE_RANDOM, sf.QUIZ_SET_MODE_BALANCED_RANDOM])
+    def test_random_modes_need_a_full_quiz_in_every_set(self, mode):
+        assert supply(set_mode=mode, bank=counts(a=5, b=5, c=5, d=5)) == []
+        assert supply(set_mode=mode, bank=counts(a=5, b=5, c=50, d=4)) == [
+            "Set D has 4 questions; every set needs at least 5 because any quiz can draw from any set."]
+
+    def test_an_empty_bank_reports_every_shortfall(self):
+        assert len(supply(set_mode=sf.QUIZ_SET_MODE_RANDOM)) == len(ALL_SET_IDS)
+        assert supply() == ["The whole question bank has 0 questions, but 4 quizzes × 5 questions need 20 different ones."]
+
+
+# ── Applying question sets to enrolled participants ──────────────────────────
+
+class TestApplyQuizSetsToEnrolled:
+    ORDER = sf.build_step_order(["followup", "double", "links"])
+
+    def _enroll(self, db, assignment, started=(), **fields):
+        oid = ObjectId()
+        db["users"].insert_one({"_id": oid, "step_order": self.ORDER, "quiz_set_assignment": dict(assignment), **fields})
+        for quiz in started:
+            db["quiz_attempts"].insert_one({"user_id": str(oid), "quiz_id": quiz})
+        return oid
+
+    def _config(self, **overrides):
+        return sf.StudyConfig(variant_order=tuple(sf.all_variants()), **overrides)
+
+    def test_preset_moves_only_unstarted_quizzes_and_records_history(self, db):
+        oid = self._enroll(db, {"base": "a", "followup": "b", "double": "c", "links": "d"}, started=["base"])
+        config = self._config(quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map=tuple((q, "c") for q in ALL_QUIZZES), version=7)
+        assert sf.apply_quiz_sets_to_enrolled(db, config, "admin") == 1
+        doc = db["users"].find_one({"_id": oid})
+        assert doc["quiz_set_assignment"] == {"base": "a", "followup": "c", "double": "c", "links": "c"}
+        entry, = doc["quiz_set_history"]
+        assert entry["previous"] == {"base": "a", "followup": "b", "double": "c", "links": "d"}
+        assert (entry["by"], entry["study_flow_version"], entry["started"]) == ("admin", 7, ["base"])
+
+    def test_participants_already_on_the_settings_are_left_alone(self, db):
+        oid = self._enroll(db, {q: "c" for q in ALL_QUIZZES})
+        config = self._config(quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map=tuple((q, "c") for q in ALL_QUIZZES))
+        assert sf.apply_quiz_sets_to_enrolled(db, config, "admin") == 0
+        assert "quiz_set_history" not in db["users"].find_one({"_id": oid})
+
+    def test_finished_participants_and_admins_are_left_alone(self, db):
+        done = self._enroll(db, {"base": "a"}, started=ALL_QUIZZES)
+        admin = self._enroll(db, {"base": "a"}, is_admin=True)
+        legacy = db["users"].insert_one({"_id": ObjectId(), "quiz_set_assignment": {}}).inserted_id
+        config = self._config(quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map=(("base", "d"),))
+        assert sf.apply_quiz_sets_to_enrolled(db, config, "admin") == 0
+        for oid in (done, admin, legacy):
+            assert "quiz_set_history" not in db["users"].find_one({"_id": oid})
+
+    def test_a_quiz_dropped_from_the_preset_map_draws_from_the_whole_pool(self, db):
+        oid = self._enroll(db, {"base": "a", "followup": "b"})
+        config = self._config(quiz_set_mode=sf.QUIZ_SET_MODE_PRESET, quiz_set_map=(("base", "a"),))
+        sf.apply_quiz_sets_to_enrolled(db, config, "admin")
+        assert db["users"].find_one({"_id": oid})["quiz_set_assignment"] == {"base": "a"}
+
+    def test_random_mode_gives_unstarted_quizzes_the_sets_started_ones_do_not_use(self, db):
+        oid = self._enroll(db, {q: "c" for q in ALL_QUIZZES}, started=["base"])
+        sf.apply_quiz_sets_to_enrolled(db, self._config(quiz_set_mode=sf.QUIZ_SET_MODE_RANDOM), "admin")
+        assignment = db["users"].find_one({"_id": oid})["quiz_set_assignment"]
+        assert assignment["base"] == "c"
+        assert sorted(assignment.values()) == sorted(ALL_SET_IDS)
+
+    def test_random_mode_keeps_participants_who_already_have_distinct_sets(self, db):
+        distinct = dict(zip(ALL_QUIZZES, ALL_SET_IDS))
+        oid = self._enroll(db, distinct)
+        assert sf.apply_quiz_sets_to_enrolled(db, self._config(quiz_set_mode=sf.QUIZ_SET_MODE_BALANCED_RANDOM), "admin") == 0
+        assert db["users"].find_one({"_id": oid})["quiz_set_assignment"] == distinct
+
+    def test_balanced_mode_takes_a_balanced_slot_for_someone_who_has_not_started(self, db):
+        oid = self._enroll(db, {q: "c" for q in ALL_QUIZZES})
+        sf.apply_quiz_sets_to_enrolled(db, self._config(quiz_set_mode=sf.QUIZ_SET_MODE_BALANCED_RANDOM), "admin")
+        assignment = db["users"].find_one({"_id": oid})["quiz_set_assignment"]
+        assert sorted(assignment.values()) == sorted(ALL_SET_IDS)
+        assert any(key.startswith("quiz_sets:balanced_random:") for key in (d["_id"] for d in db["counters"].docs))
+
+    def test_counts_participants_with_unstarted_quizzes(self, db):
+        self._enroll(db, {}, started=["base"])
+        self._enroll(db, {}, started=ALL_QUIZZES)
+        self._enroll(db, {}, is_admin=True)
+        assert sf.enrolled_with_unstarted_quizzes(db) == 1

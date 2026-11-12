@@ -36,6 +36,9 @@ def session_app(monkeypatch):
             "stage": stage, "prompt": "How motivated are you?", "type": "likert",
             "required": True, "active": True, "order": 0,
         })
+    # One question per set, so each quiz is a single question: a quiz now
+    # refuses to start rather than run short.
+    sf.save_study_config(db, questions_per_quiz=1)
     app = FastAPI()
     app.state.db = db
     for module in (auth, quiz, study, surveys):

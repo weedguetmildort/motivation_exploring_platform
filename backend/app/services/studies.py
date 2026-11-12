@@ -144,7 +144,7 @@ class StudyUsers(StudyCollection):
     def update_one(self, query, update, **kwargs):
         if self.database.study_id == "study-1":
             return self.raw.update_one(query, update, **kwargs)
-        if set(update) - {"$set", "$unset", "$addToSet", "$pull", "$inc", "$setOnInsert"}:
+        if set(update) - {"$set", "$unset", "$addToSet", "$pull", "$push", "$inc", "$setOnInsert"}:
             raise ValueError("Unsupported enrollment update")
         identity_query = {k: v for k, v in query.items() if k in GLOBAL_FIELDS or k == "_id"}
         user = self.raw.find_one(identity_query)

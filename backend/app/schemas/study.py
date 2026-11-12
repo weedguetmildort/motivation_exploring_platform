@@ -78,6 +78,21 @@ class StudyConfigPublic(BaseModel):
     known_sets: List[str] = Field(default_factory=list)
     known_quiz_ids: List[str] = Field(default_factory=list)
     quiz_labels: dict[str, str] = Field(default_factory=dict)
+    # This study's own default, since Study 1 and Study 2 differ.
+    default_quiz_set_mode: Optional[Literal["preset", "random", "balanced_random"]] = None
+
+    # ── Question supply ──────────────────────────────────────────────────────
+    # Questions per set ("a".."d", "unassigned", "total"), so the admin page can
+    # check a draft live: a participant never sees a question twice in a study.
+    question_counts: dict[str, int] = Field(default_factory=dict)
+    # Study 1's restriction stamped on new sign-ups; quizzes without a set draw from it.
+    default_question_sets: Optional[List[str]] = None
+    # Why the saved settings cannot give every participant different questions.
+    supply_problems: List[str] = Field(default_factory=list)
+    # Participants with at least one quiz not started, for "apply to enrolled".
+    enrolled_with_unstarted_quizzes: int = 0
+    # Set on a save that applied the question sets to enrolled participants.
+    applied_participants: Optional[int] = None
 
 
 # Admin payload for changing the flow. All fields optional - partial update.
@@ -95,3 +110,5 @@ class StudyConfigUpdate(BaseModel):
     quiz_set_mode: Optional[Literal["preset", "random", "balanced_random"]] = None
     # quiz_id -> set letter. Omit a quiz to leave it drawing from the whole pool.
     quiz_set_map: Optional[dict[str, str]] = None
+    # Also move enrolled participants' unstarted quizzes onto the saved question sets.
+    apply_to_enrolled: bool = False

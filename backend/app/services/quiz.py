@@ -95,13 +95,23 @@ def _load_or_create_attempt(
     if not questions:
         raise HTTPException(status_code=400, detail="No questions available for quiz")
 
-    ids = [str(q["_id"]) for q in questions]
-    random.shuffle(ids)
-
     user_doc = db["users"].find_one({"_id": ObjectId(user_id)}) if ObjectId.is_valid(user_id) else None
     user_doc = user_doc or {}
     protocol = user_doc.get("study_protocol") or study_flow.load_study_config(db).as_dict()
     question_count = protocol.get("questions_per_quiz", MAX_QUIZ_QUESTIONS)
+
+    # A participant never sees a question twice within a study, so quizzes can
+    # share a set. Too few unseen questions means the quiz does not start: a
+    # shorter quiz would quietly skew the results.
+    seen = {qid for attempt in col.find({"user_id": user_id, "quiz_id": {"$ne": quiz_id}}, {"question_order": 1})
+            for qid in attempt.get("question_order") or []}
+    ids = [str(q["_id"]) for q in questions if str(q["_id"]) not in seen]
+    if len(ids) < question_count:
+        source = f"set {quiz_set.upper()}" if quiz_set else "the question bank"
+        raise HTTPException(status_code=409, detail=(
+            f"Not enough new questions to start this quiz: {source} has {len(ids)} not used in your other "
+            f"quizzes, and this quiz needs {question_count}. Please contact the study team."))
+    random.shuffle(ids)
     ids = ids[:question_count]
     rate = protocol.get("wrong_ai_rate")
     wrong_count = int(len(ids) * rate + 0.5) if rate is not None else protocol.get("wrong_ai_count", 3)

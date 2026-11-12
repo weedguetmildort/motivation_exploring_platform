@@ -1,7 +1,7 @@
 # backend/tests/test_quiz_service.py
 """Unit tests for app/services/quiz.py."""
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from bson import ObjectId
 import pytest
 from fastapi import HTTPException
@@ -117,31 +117,48 @@ class TestLoadOrCreateAttempt:
         mock_col.find.return_value = [{"_id": qid} for qid in question_ids]
         mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
 
-        result = _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base")
+        two_questions = study_flow.StudyConfig(questions_per_quiz=2)
+        with patch.object(study_flow, "load_study_config", return_value=two_questions):
+            result = _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base")
 
         assert len(result["question_order"]) == 2
         assert len(result["incorrect_question_ids"]) == 2
 
+    def test_a_pool_smaller_than_the_quiz_refuses_to_start(self, mock_db, mock_col):
+        mock_col.find_one.return_value = None
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(MAX_QUIZ_QUESTIONS - 1)]
+
+        with pytest.raises(HTTPException) as exc:
+            _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_set="c")
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail == (
+            f"Not enough new questions to start this quiz: set C has {MAX_QUIZ_QUESTIONS - 1} not used in your "
+            f"other quizzes, and this quiz needs {MAX_QUIZ_QUESTIONS}. Please contact the study team.")
+        mock_col.insert_one.assert_not_called()
+
     def test_restricts_pool_to_quiz_sets(self, mock_db, mock_col):
         """Phase 11: a participant with quiz_sets draws only from those sets."""
         mock_col.find_one.return_value = None
-        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(4)]
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(MAX_QUIZ_QUESTIONS)]
         mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
 
         _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a", "b"])
 
         # The question pool query must filter to the allowed sets.
-        mock_col.find.assert_called_once_with({"set": {"$in": ["a", "b"]}})
+        # The pool query comes first; the next find reads the participant's other attempts.
+        assert mock_col.find.call_args_list[0] == call({"set": {"$in": ["a", "b"]}})
 
     def test_no_restriction_when_quiz_sets_none(self, mock_db, mock_col):
         mock_col.find_one.return_value = None
-        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(4)]
+        mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(MAX_QUIZ_QUESTIONS)]
         mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
 
         _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "base", quiz_sets=None)
 
         # Unrestricted → empty query, historical behavior.
-        mock_col.find.assert_called_once_with({})
+        # The pool query comes first; the next find reads the participant's other attempts.
+        assert mock_col.find.call_args_list[0] == call({})
 
 
 # ── _find_next_unanswered ─────────────────────────────────────────────────────
@@ -951,7 +968,7 @@ class TestBuildPoolQuery:
 
 
 class TestLoadOrCreateAttemptQuizSet:
-    def _prime(self, mock_col, count=4):
+    def _prime(self, mock_col, count=MAX_QUIZ_QUESTIONS):
         mock_col.find_one.return_value = None
         mock_col.find.return_value = [{"_id": ObjectId()} for _ in range(count)]
         mock_col.insert_one.return_value = MagicMock(inserted_id=ObjectId())
@@ -963,7 +980,8 @@ class TestLoadOrCreateAttemptQuizSet:
             mock_db, "u1", "u1@test.edu", "followup", quiz_set="b"
         )
 
-        mock_col.find.assert_called_once_with({"set": "b"})
+        # The pool query comes first; the next find reads the participant's other attempts.
+        assert mock_col.find.call_args_list[0] == call({"set": "b"})
 
     def test_quiz_set_overrides_the_participant_restriction(self, mock_db, mock_col):
         self._prime(mock_col)
@@ -972,14 +990,16 @@ class TestLoadOrCreateAttemptQuizSet:
             mock_db, "u1", "u1@test.edu", "base", quiz_sets=["a"], quiz_set="d"
         )
 
-        mock_col.find.assert_called_once_with({"set": "d"})
+        # The pool query comes first; the next find reads the participant's other attempts.
+        assert mock_col.find.call_args_list[0] == call({"set": "d"})
 
     def test_unmapped_quiz_falls_back_to_the_whole_pool(self, mock_db, mock_col):
         self._prime(mock_col)
 
         _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
 
-        mock_col.find.assert_called_once_with({})
+        # The pool query comes first; the next find reads the participant's other attempts.
+        assert mock_col.find.call_args_list[0] == call({})
 
     def test_unassigned_quiz_falls_back_to_the_configured_map(self, mock_db, mock_col):
         """A participant assigned before the map was configured still picks it up.
@@ -994,7 +1014,8 @@ class TestLoadOrCreateAttemptQuizSet:
             _load_or_create_attempt(mock_db, "u1", "u1@test.edu", "double")
 
         m.assert_called_once_with(mock_db, "double")
-        mock_col.find.assert_called_once_with({"set": "c"})
+        # The pool query comes first; the next find reads the participant's other attempts.
+        assert mock_col.find.call_args_list[0] == call({"set": "c"})
         assert mock_col.insert_one.call_args[0][0]["question_set"] == "c"
 
     def test_an_explicit_set_skips_the_fallback_lookup(self, mock_db, mock_col):

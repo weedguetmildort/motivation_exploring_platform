@@ -64,6 +64,18 @@ describe("study lib", () => {
     );
   });
 
+  it.each(["study-1", "study-2"] as const)("reads and saves %s's settings by name, whatever the workspace", async (study) => {
+    window.history.replaceState({}, "", `/study_flow_panel?study=${study === "study-1" ? "study-2" : "study-1"}`);
+    await getStudyConfig(study);
+    await updateStudyConfig({ questions_per_quiz: 6, apply_to_enrolled: true }, study);
+
+    expect(global.fetch).toHaveBeenNthCalledWith(1, `/api/studies/${study}/study/config`, expect.anything());
+    expect(global.fetch).toHaveBeenNthCalledWith(2, `/api/studies/${study}/study/config`, expect.objectContaining({
+      method: "PUT", body: JSON.stringify({ questions_per_quiz: 6, apply_to_enrolled: true }),
+    }));
+    window.history.replaceState({}, "", "/");
+  });
+
   it("propagates an API error message", async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: false,

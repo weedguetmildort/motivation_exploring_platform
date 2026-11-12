@@ -5,6 +5,7 @@
 // routing ladders that used to live in quiz/[quiz_id].tsx and survey.tsx are
 // now a single call to /study/next.
 import { apiFetch } from "./fetcher";
+import type { StudyId } from "./studySelection";
 
 export type StepKind = "quiz" | "survey";
 
@@ -69,6 +70,15 @@ export type StudyConfig = {
   known_sets: string[];
   known_quiz_ids: string[];
   quiz_labels: Record<string, string>;
+  // This study's own default (Study 1 and Study 2 differ).
+  default_quiz_set_mode?: QuizSetMode | null;
+
+  // Question supply: a participant never sees a question twice in a study.
+  question_counts?: Record<string, number>;  // a..d, unassigned, total
+  default_question_sets?: string[] | null;   // Study 1 new sign-ups only
+  supply_problems?: string[];
+  enrolled_with_unstarted_quizzes?: number;
+  applied_participants?: number | null;
 };
 
 export type StudyConfigUpdate = {
@@ -82,6 +92,8 @@ export type StudyConfigUpdate = {
   counterbalance?: boolean;
   quiz_set_mode?: QuizSetMode;
   quiz_set_map?: Record<string, string>;
+  // Also move enrolled participants' unstarted quizzes onto the saved sets.
+  apply_to_enrolled?: boolean;
 };
 
 export async function getNextStep() {
@@ -94,12 +106,18 @@ export async function getStudyFlow() {
 
 // --- admin ---
 
-export async function getStudyConfig() {
-  return apiFetch<StudyConfig>("/api/study/config");
+// Without a study, the request goes to the study selected in the admin
+// workspace; the Study Flow page names the study it is editing.
+function configPath(study?: StudyId) {
+  return study ? `/api/studies/${study}/study/config` : "/api/study/config";
 }
 
-export async function updateStudyConfig(patch: StudyConfigUpdate) {
-  return apiFetch<StudyConfig>("/api/study/config", {
+export async function getStudyConfig(study?: StudyId) {
+  return apiFetch<StudyConfig>(configPath(study));
+}
+
+export async function updateStudyConfig(patch: StudyConfigUpdate, study?: StudyId) {
+  return apiFetch<StudyConfig>(configPath(study), {
     method: "PUT",
     body: JSON.stringify(patch),
   });

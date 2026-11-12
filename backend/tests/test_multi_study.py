@@ -286,7 +286,9 @@ def test_combined_admin_counts_unique_people_and_separate_enrollments(setup):
     from app.services.quiz import _load_or_create_attempt
     import io, json, zipfile
     raw, db, student, admin, client = setup
-    raw.questions.insert_one({"stem": "Question", "choices": [{"id": "a", "label": "A"}], "correct_choice_id": "a", "set": "a"})
+    # Enough for a full Study 1 quiz (10 questions); a short pool refuses to start.
+    raw.questions.insert_many([{"stem": f"Question {i}", "choices": [{"id": "a", "label": "A"}], "correct_choice_id": "a", "set": "a"}
+                               for i in range(10)])
     approve_study2(raw, student.id, admin, True)
     for sid in ("study-1", "study-2"):
         scoped = StudyDatabase(raw, sid)
@@ -735,3 +737,111 @@ def test_chat_message_export_holds_ai_replies_only(setup):
     rows = list(csv.DictReader(io.StringIO(response.text)))
     assert [row["content"] for row in rows] == ["It is B."] and rows[0]["model_version"] == "gpt-4.1"
     assert "role" not in rows[0] and "intent_labels_heuristic" not in rows[0]
+
+
+# ── Shared question sets without repeats ─────────────────────────────────────
+
+def _bank(raw, per_set):
+    raw.questions.insert_many([{"stem": f"{set_id}{i}", "choices": [{"id": "a", "label": "A"}], "correct_choice_id": "a",
+                                "set": set_id} for set_id in ("a", "b", "c", "d") for i in range(per_set)])
+
+
+ALL_FOUR_ON_C = {"base": "c", "followup": "c", "double": "c", "links": "c"}
+
+
+def test_study2_quizzes_sharing_set_c_never_repeat_a_question(setup, code_mode):
+    from app.services.quiz import _load_or_create_attempt
+    raw, db, student, admin, client = setup
+    _bank(raw, 20)
+    admin_headers = headers("admin@example.com")
+    saved = client.put("/studies/study-2/study/config", headers=admin_headers,
+                       json={"quiz_set_mode": "preset", "quiz_set_map": ALL_FOUR_ON_C})
+    assert saved.status_code == 200, saved.text
+    approve_study2(raw, student.id, admin, True)
+    second = StudyDatabase(raw, "study-2")
+    enrollment = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert enrollment["quiz_set_assignment"] == ALL_FOUR_ON_C
+    drawn = []
+    for quiz_id in ("base", "followup", "double", "links"):
+        attempt = _load_or_create_attempt(second, student.id, student.email, quiz_id, quiz_set="c")
+        drawn += attempt["question_order"]
+    assert len(drawn) == 20 and len(set(drawn)) == 20
+
+
+def test_a_quiz_refuses_to_start_when_the_shared_set_runs_short(setup, code_mode):
+    from app.services.quiz import _load_or_create_attempt
+    raw, db, student, admin, client = setup
+    _bank(raw, 20)
+    client.put("/studies/study-2/study/config", headers=headers("admin@example.com"),
+               json={"quiz_set_mode": "preset", "quiz_set_map": ALL_FOUR_ON_C})
+    approve_study2(raw, student.id, admin, True)
+    second = StudyDatabase(raw, "study-2")
+    for quiz_id in ("base", "followup", "double"):
+        _load_or_create_attempt(second, student.id, student.email, quiz_id, quiz_set="c")
+    raw.questions.delete_one({"set": "c", "_id": {"$nin": [ObjectId(q) for a in second["quiz_attempts"].find({})
+                                                           for q in a["question_order"]]}})
+    with pytest.raises(HTTPException) as refused:
+        _load_or_create_attempt(second, student.id, student.email, "links", quiz_set="c")
+    assert refused.value.status_code == 409
+    assert "set C has 4 not used in your other quizzes, and this quiz needs 5" in refused.value.detail
+    assert second["quiz_attempts"].count_documents({"quiz_id": "links"}) == 0
+
+
+def test_questions_seen_in_study_1_may_appear_again_in_study_2(setup, code_mode):
+    from app.services.quiz import _load_or_create_attempt
+    raw, db, student, admin, client = setup
+    raw.questions.insert_many([{"stem": f"c{i}", "choices": [{"id": "a", "label": "A"}], "correct_choice_id": "a", "set": "c"}
+                               for i in range(10)])
+    first = _load_or_create_attempt(db, student.id, student.email, "base", quiz_set="c")
+    approve_study2(raw, student.id, admin, True)
+    second = _load_or_create_attempt(StudyDatabase(raw, "study-2"), student.id, student.email, "base", quiz_set="c")
+    assert set(second["question_order"]) <= set(first["question_order"])  # all ten were used by Study 1
+
+
+def test_each_study_reports_its_own_question_settings(setup):
+    raw, db, student, admin, client = setup
+    _bank(raw, 25)
+    admin_headers = headers("admin@example.com")
+    first = client.get("/studies/study-1/study/config", headers=admin_headers).json()
+    second = client.get("/studies/study-2/study/config", headers=admin_headers).json()
+    assert (first["study_id"], first["default_quiz_set_mode"], first["mode"]) == ("study-1", "preset", "single_variant")
+    assert (second["study_id"], second["default_quiz_set_mode"], second["mode"]) == ("study-2", "balanced_random", "all_variants")
+    assert first["question_counts"]["c"] == second["question_counts"]["c"] == 25  # one shared bank
+    # Default question sets are stamped on Study 1 sign-ups only.
+    from app.services.users import set_quiz_default_sets
+    set_quiz_default_sets(db["users"], ["a"])
+    assert client.get("/studies/study-1/study/config", headers=admin_headers).json()["default_question_sets"] == ["a"]
+    assert client.get("/studies/study-2/study/config", headers=admin_headers).json()["default_question_sets"] is None
+    # Saving one study leaves the other untouched.
+    client.put("/studies/study-2/study/config", headers=admin_headers, json={"questions_per_quiz": 6})
+    assert client.get("/studies/study-1/study/config", headers=admin_headers).json()["questions_per_quiz"] == 10
+
+
+def test_study2_settings_can_be_applied_to_enrolled_participants(setup, code_mode):
+    raw, db, student, admin, client = setup
+    _bank(raw, 20)
+    approve_study2(raw, student.id, admin, True)
+    before = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})["quiz_set_assignment"]
+    assert len(set(before.values())) == 4  # balanced random by default
+    admin_headers = headers("admin@example.com")
+    config = client.get("/studies/study-2/study/config", headers=admin_headers).json()
+    assert config["enrolled_with_unstarted_quizzes"] == 1
+    saved = client.put("/studies/study-2/study/config", headers=admin_headers, json={
+        "quiz_set_mode": "preset", "quiz_set_map": ALL_FOUR_ON_C, "apply_to_enrolled": True}).json()
+    assert saved["applied_participants"] == 1
+    enrollment = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})
+    assert enrollment["quiz_set_assignment"] == ALL_FOUR_ON_C
+    assert enrollment["quiz_set_history"][0]["previous"] == before
+    # Study 1 progress is a separate record and is not touched.
+    assert "quiz_set_history" not in raw.users.find_one({"_id": ObjectId(student.id)})
+    assert client.get("/studies/study-2/study/next", headers=headers()).status_code == 200
+
+
+def test_applying_is_opt_in(setup, code_mode):
+    raw, db, student, admin, client = setup
+    _bank(raw, 20)
+    approve_study2(raw, student.id, admin, True)
+    before = raw.study_enrollments.find_one({"_id": ObjectId(student.id)})["quiz_set_assignment"]
+    client.put("/studies/study-2/study/config", headers=headers("admin@example.com"),
+               json={"quiz_set_mode": "preset", "quiz_set_map": ALL_FOUR_ON_C})
+    assert raw.study_enrollments.find_one({"_id": ObjectId(student.id)})["quiz_set_assignment"] == before

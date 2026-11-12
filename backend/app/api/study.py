@@ -16,7 +16,8 @@ from ..schemas.study import (
     StudyFlowResponse,
 )
 from ..schemas.question import ALL_SET_IDS
-from ..core.study_profiles import study_id_of
+from ..core.study_profiles import profile_for, study_id_of
+from ..services.users import get_quiz_default_sets
 from ..schemas.user import UserPublic
 from ..services import study_flow
 from ..services.studies import access_policy
@@ -93,8 +94,22 @@ def get_flow(request: Request, user: UserPublic = Depends(get_current_user)):
 
 # ----- admin: flow ordering -----
 
-def _config_public(config: study_flow.StudyConfig, study_id=None) -> StudyConfigPublic:
+def _default_question_sets(db):
+    """Study 1 stamps this restriction on new sign-ups; Study 2 enrollments never carry one."""
+    return get_quiz_default_sets(db["users"]) if study_id_of(db, "study-1") == "study-1" else None
+
+
+def _supply_problems(db, *, mode, quiz_set_mode, quiz_set_map, questions_per_quiz, counts=None):
+    return study_flow.question_supply_problems(
+        mode=mode, quiz_set_mode=quiz_set_mode, quiz_set_map=quiz_set_map, questions_per_quiz=questions_per_quiz,
+        counts=counts if counts is not None else study_flow.question_set_counts(db),
+        default_sets=_default_question_sets(db))
+
+
+def _config_public(config: study_flow.StudyConfig, db, applied_participants=None) -> StudyConfigPublic:
     policy = access_policy()
+    study_id = study_id_of(db)
+    counts = study_flow.question_set_counts(db)
     # Worked example of the orders participants will actually be handed, so the
     # admin can see the effect of a change before saving it.
     if config.counterbalance and config.mode == study_flow.MODE_ALL_VARIANTS:
@@ -139,13 +154,21 @@ def _config_public(config: study_flow.StudyConfig, study_id=None) -> StudyConfig
             q: (step.label if (step := study_flow.get_step(study_flow.quiz_step_id(q))) else q)
             for q in known_quiz_ids
         },
+        default_quiz_set_mode=profile_for(db).get("quiz_set_mode"),
+        question_counts=counts,
+        default_question_sets=_default_question_sets(db),
+        supply_problems=_supply_problems(
+            db, mode=config.mode, quiz_set_mode=config.quiz_set_mode, quiz_set_map=study_flow.quiz_set_map_dict(config),
+            questions_per_quiz=config.questions_per_quiz, counts=counts),
+        enrolled_with_unstarted_quizzes=study_flow.enrolled_with_unstarted_quizzes(db),
+        applied_participants=applied_participants,
     )
 
 
 @router.get("/config", response_model=StudyConfigPublic)
 def get_config(request: Request, user: UserPublic = Depends(require_admin)):
     db = request.app.state.db
-    return _config_public(study_flow.load_study_config(db), study_id_of(db))
+    return _config_public(study_flow.load_study_config(db), db)
 
 
 @router.put("/config", response_model=StudyConfigPublic)
@@ -196,18 +219,20 @@ def update_config(
                 detail=f"Unknown set(s): {', '.join(unknown_sets)}",
             )
 
-        duplicates = sorted(
-            {s for s in data.quiz_set_map.values()
-             if list(data.quiz_set_map.values()).count(s) > 1}
-        )
-        if duplicates:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Each quiz needs its own set, or questions can repeat across "
-                    f"quizzes. Set(s) used more than once: {', '.join(duplicates)}"
-                ),
-            )
+    # Quizzes may share a set: a participant never sees a question twice in a
+    # study. Refuse question settings that cannot give every participant
+    # different questions in every quiz. Other edits are not blocked by a bank
+    # that shrank since; the page shows that problem instead.
+    current = study_flow.load_study_config(db)
+    saved_supply = dict(mode=current.mode, quiz_set_mode=current.quiz_set_mode,
+                        quiz_set_map=study_flow.quiz_set_map_dict(current), questions_per_quiz=current.questions_per_quiz)
+    supply = dict(mode=profile_mode or data.mode or current.mode,
+                  quiz_set_mode=data.quiz_set_mode or current.quiz_set_mode,
+                  quiz_set_map=data.quiz_set_map if data.quiz_set_map is not None else saved_supply["quiz_set_map"],
+                  questions_per_quiz=data.questions_per_quiz or current.questions_per_quiz)
+    if supply != saved_supply and (problems := _supply_problems(db, **supply)):
+        raise HTTPException(400, "Not enough questions to give every participant different questions in each quiz. "
+                                 + " ".join(problems))
 
     config = study_flow.save_study_config(
         db,
@@ -225,4 +250,5 @@ def update_config(
         variant_survey_mode=data.variant_survey_mode,
         survey_stages={key: value.model_dump() for key, value in data.survey_stages.items()} if data.survey_stages is not None else None,
     )
-    return _config_public(config, study_id_of(db))
+    applied = study_flow.apply_quiz_sets_to_enrolled(db, config, user.id) if data.apply_to_enrolled else None
+    return _config_public(config, db, applied)

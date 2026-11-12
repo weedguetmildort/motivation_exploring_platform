@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import random
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Literal, Optional
@@ -587,6 +588,147 @@ def resolve_quiz_set_assignment(
 
     wanted = set(ordered_ids)
     return {q: s for q, s in config.quiz_set_map if q in wanted}
+
+
+# ---------------------------------------------------------------------------
+# Question supply: a participant never sees a question twice within a study
+# ---------------------------------------------------------------------------
+
+def question_set_counts(db) -> dict[str, int]:
+    """How many questions each set holds, plus unassigned ones and the whole bank."""
+    questions = db["questions"]
+    counts = {set_id: questions.count_documents({"set": set_id}) for set_id in ALL_SET_IDS}
+    counts["total"] = questions.count_documents({})
+    counts["unassigned"] = counts["total"] - sum(counts[set_id] for set_id in ALL_SET_IDS)
+    return counts
+
+
+def participant_quiz_combinations(mode: str) -> list[list[str]]:
+    """Every combination of quizzes one participant can be given."""
+    if mode == MODE_SINGLE_VARIANT:
+        return [[BASE_QUIZ_ID, variant] for variant in all_variants()]
+    return [[BASE_QUIZ_ID, *all_variants()]]
+
+
+def _count(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def question_supply_problems(
+    *, mode: str, quiz_set_mode: str, quiz_set_map, questions_per_quiz: int,
+    counts: dict[str, int], default_sets: Optional[list[str]] = None,
+) -> list[str]:
+    """Why some participant could not get different questions in every quiz; [] when all can.
+
+    Quizzes sharing a set need enough questions between them. A quiz without a
+    set draws from the whole bank (or the default sets), which can take
+    questions a set's own quizzes need, so the check assumes that worst case.
+    The Study Flow page runs the same rule live (frontend/lib/questionSupply.ts).
+    """
+    per_quiz = questions_per_quiz
+    if quiz_set_mode != QUIZ_SET_MODE_PRESET:
+        # Any quiz can be handed any set, and each participant uses a set once.
+        return [f"Set {set_id.upper()} has {_count(counts.get(set_id, 0), 'question', 'questions')}; every set needs "
+                f"at least {per_quiz} because any quiz can draw from any set."
+                for set_id in ALL_SET_IDS if counts.get(set_id, 0) < per_quiz]
+
+    set_map = dict(quiz_set_map)
+    pool = [set_id for set_id in ALL_SET_IDS if set_id in (default_sets or [])]
+    pool_size = sum(counts.get(set_id, 0) for set_id in pool) if pool else counts.get("total", 0)
+    in_pool = lambda set_id: not pool or set_id in pool
+    set_quizzes: dict[str, int] = {}
+    pool_quizzes = 0
+    for quizzes in participant_quiz_combinations(mode):
+        mapped = Counter(set_map[quiz] for quiz in quizzes if set_map.get(quiz))
+        unmapped = sum(1 for quiz in quizzes if not set_map.get(quiz))
+        for set_id, used in mapped.items():
+            set_quizzes[set_id] = max(set_quizzes.get(set_id, 0), used + (unmapped if in_pool(set_id) else 0))
+        if unmapped:
+            pool_quizzes = max(pool_quizzes, unmapped + sum(used for set_id, used in mapped.items() if in_pool(set_id)))
+
+    problems = []
+    for set_id in sorted(set_quizzes):
+        quizzes, have = set_quizzes[set_id], counts.get(set_id, 0)
+        if have < quizzes * per_quiz:
+            problems.append(f"Set {set_id.upper()} has {_count(have, 'question', 'questions')}, but "
+                            f"{_count(quizzes, 'quiz', 'quizzes')} × {per_quiz} questions need {quizzes * per_quiz} different ones.")
+    if pool_quizzes and pool_size < pool_quizzes * per_quiz:
+        source = "Default question sets " + ", ".join(s.upper() for s in pool) if pool else "The whole question bank"
+        problems.append(f"{source} has {_count(pool_size, 'question', 'questions')}, but "
+                        f"{_count(pool_quizzes, 'quiz', 'quizzes')} × {per_quiz} questions need {pool_quizzes * per_quiz} different ones.")
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Moving enrolled participants onto new question sets
+# ---------------------------------------------------------------------------
+
+def _started_quizzes(db) -> set[tuple[str, str]]:
+    """(user_id, quiz_id) of every live attempt: those quizzes have drawn their questions."""
+    return {(a.get("user_id"), a.get("quiz_id")) for a in db["quiz_attempts"].find({}, {"user_id": 1, "quiz_id": 1})}
+
+
+def _enrolled_participants(db) -> list[dict]:
+    """This study's participants with a journey; admin previews are excluded."""
+    return [doc for doc in db["users"].find({"is_admin": {"$ne": True}}) if doc.get("step_order")]
+
+
+def enrolled_with_unstarted_quizzes(db) -> int:
+    started = _started_quizzes(db)
+    return sum(1 for doc in _enrolled_participants(db)
+               if any((str(doc["_id"]), quiz) not in started for quiz in quiz_ids_in_order(doc["step_order"])))
+
+
+def _sets_follow_config(config: StudyConfig, quiz_ids: list[str], unstarted: list[str], assignment: dict) -> bool:
+    if config.quiz_set_mode == QUIZ_SET_MODE_PRESET:
+        wanted = dict(config.quiz_set_map)
+        return all(assignment.get(quiz) == wanted.get(quiz) for quiz in unstarted)
+    # Random modes only promise one distinct set per quiz.
+    sets = [assignment.get(quiz) for quiz in quiz_ids[:len(ALL_SET_IDS)]]
+    return all(sets) and len(set(sets)) == len(sets)
+
+
+def _reassigned_sets(db, config: StudyConfig, quiz_ids: list[str], started: set[str], assignment: dict) -> dict[str, str]:
+    kept = {quiz: assignment[quiz] for quiz in quiz_ids if quiz in started and assignment.get(quiz)}
+    unstarted = [quiz for quiz in quiz_ids if quiz not in started]
+    if config.quiz_set_mode == QUIZ_SET_MODE_PRESET:
+        return {**kept, **resolve_quiz_set_assignment(config, unstarted)}
+    if config.quiz_set_mode == QUIZ_SET_MODE_BALANCED_RANDOM and not kept:
+        # Nothing started yet: take a balanced slot, exactly as a new participant would.
+        return resolve_quiz_set_assignment(config, quiz_ids, db=db)
+    free = [set_id for set_id in ALL_SET_IDS if set_id not in kept.values()]
+    random.shuffle(free)
+    return {**kept, **dict(zip(unstarted, free))}
+
+
+def apply_quiz_sets_to_enrolled(db, config: StudyConfig, admin_id: str) -> int:
+    """Move enrolled participants' unstarted quizzes onto the current question sets.
+
+    Started and finished quizzes keep their set, because their questions are
+    already drawn. Participants whose sets already follow the settings are left
+    alone, and every change is recorded in quiz_set_history. Returns the number
+    of participants changed.
+    """
+    started_pairs = _started_quizzes(db)
+    changed = 0
+    for doc in _enrolled_participants(db):
+        quiz_ids = quiz_ids_in_order(doc["step_order"])
+        started = {quiz for quiz in quiz_ids if (str(doc["_id"]), quiz) in started_pairs}
+        unstarted = [quiz for quiz in quiz_ids if quiz not in started]
+        current = dict(doc.get("quiz_set_assignment") or {})
+        if not unstarted or _sets_follow_config(config, quiz_ids, unstarted, current):
+            continue
+        assignment = _reassigned_sets(db, config, quiz_ids, started, current)
+        if assignment == current:
+            continue
+        db["users"].update_one({"_id": doc["_id"]}, {
+            "$set": {"quiz_set_assignment": assignment},
+            "$push": {"quiz_set_history": {
+                "at": datetime.utcnow(), "by": admin_id, "study_flow_version": config.version,
+                "previous": current, "assignment": assignment, "started": sorted(started)}},
+        })
+        changed += 1
+    return changed
 
 
 def assign_flow(db, forced_first: Optional[str] = None) -> dict:

@@ -212,8 +212,11 @@ class TestGetQuizState:
 
         mock_col.insert_one.side_effect = insert_one_side_effect
 
+        from app.services.study_flow import StudyConfig
+        # A one-question bank only starts a one-question quiz.
         with patch("random.shuffle", side_effect=lambda lst: None), \
-                patch("random.sample", return_value=[str(qid1)]):
+                patch("random.sample", return_value=[str(qid1)]), \
+                patch("app.services.study_flow.load_study_config", return_value=StudyConfig(questions_per_quiz=1)):
             resp = regular_quiz_client.get("/quiz/base/state")
 
         assert resp.status_code == 200
