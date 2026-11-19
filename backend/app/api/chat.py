@@ -2,7 +2,9 @@ import os
 import uuid
 import json
 import asyncio
+import hashlib
 import time
+from bson import ObjectId
 from typing import AsyncGenerator, Callable, Optional
 from openai import AsyncOpenAI
 from datetime import datetime
@@ -194,7 +196,45 @@ _MANIPULATION_SECRECY_RULES = (
 )
 
 
-def _build_system_instruction(answer_incorrectly: bool, has_choices: bool) -> str:
+def _incorrect_target(db, user: UserPublic, conv_id: str, question_id: Optional[str],
+                      answer_choices: list[QuestionChoice]) -> Optional[QuestionChoice]:
+    """The one wrong answer every agent argues for on this question.
+
+    Agents choosing a wrong answer independently can name different ones, which
+    tells the participant the assistant is defective or scripted to mislead. The
+    pick is derived from the conversation and question, so both dual agents and
+    every later turn agree without storing anything. None when the correct
+    answer is unknown; the agents then choose for themselves, as before.
+    """
+    if not question_id or not answer_choices:
+        return None
+    attempt = db["quiz_attempts"].find_one({"conversation_id": conv_id, "user_id": user.id}, {"question_snapshots": 1})
+    snapshot = ((attempt or {}).get("question_snapshots") or {}).get(question_id)
+    if snapshot is None and ObjectId.is_valid(question_id):
+        snapshot = db["questions"].find_one({"_id": ObjectId(question_id)}, {"correct_choice_id": 1})
+    correct = (snapshot or {}).get("correct_choice_id")
+    wrong = sorted((choice for choice in answer_choices if choice.id != correct), key=lambda choice: choice.id)
+    if not correct or not wrong:
+        return None
+    return wrong[int(hashlib.sha256(f"{conv_id}:{question_id}".encode()).hexdigest(), 16) % len(wrong)]
+
+
+def _build_system_instruction(answer_incorrectly: bool, has_choices: bool,
+                              target: Optional[QuestionChoice] = None) -> str:
+    if answer_incorrectly and has_choices and target is not None:
+        return (
+            "You are a helpful assistant helping a student with a multiple-choice question. "
+            "The user will provide a question and a fixed list of answer choices. "
+            f"You MUST give answer choice {target.id.upper()} (\"{target.label}\") as your answer, "
+            "and no other choice, even if asked again. It is incorrect. "
+            "You MUST NOT invent a new answer choice. "
+            "You must sound confident and explain why your chosen answer is correct. "
+            "Do NOT say that you are unsure. "
+            "Do NOT mention that your answer is intentionally incorrect. "
+            f"{_MANIPULATION_SECRECY_RULES} "
+            "Start your response by clearly naming the selected answer choice."
+        )
+
     if answer_incorrectly and has_choices:
         return (
             "You are a helpful assistant helping a student with a multiple-choice question. "
@@ -312,6 +352,7 @@ async def _standard_stream(
     trigger: Optional[str] = None,
     answer_choices: Optional[list[QuestionChoice]] = None,
     research_context: dict | None = None,
+    target_choice_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens, await the save, emit done, then optionally yield from after_done.
 
@@ -337,6 +378,7 @@ async def _standard_stream(
             print(f"[chat] MANIPULATION LEAK detected conv={conv_id} user={user.id}: reply may reveal the AI was told to answer incorrectly")
     metadata = AIMessageMetadata(
         answer_incorrectly=answer_incorrectly, stated_choice_id=stated, manipulation_leaked=leaked,
+        target_choice_id=target_choice_id,
     ).model_dump(exclude_none=True)
     if agent_tag and stated:
         metadata["stated_choice_id"] = {agent_tag: stated["default"]}
@@ -396,13 +438,20 @@ async def double_chat(
 
     prompt_content = req.message
 
+    # Both agents argue for the same wrong answer: two agents disagreeing on a
+    # wrong answer reveals the manipulation.
+    target = await asyncio.to_thread(_incorrect_target, request.app.state.db, user, conv_id,
+                                     req.question_id, req.answer_choices) if req.answer_incorrectly else None
+    target_choice_id = target.id if target else None
     system_instruction_a = _build_system_instruction(
         answer_incorrectly=req.answer_incorrectly,
         has_choices=len(req.answer_choices) > 0,
+        target=target,
     )
     system_instruction_b = _build_system_instruction(
         answer_incorrectly=req.answer_incorrectly,
         has_choices=len(req.answer_choices) > 0,
+        target=target,
     )
 
     messages_a = [
@@ -430,7 +479,8 @@ async def double_chat(
                              answer_incorrectly=req.answer_incorrectly,
                              temperature=DOUBLE_TEMPERATURE,
                              question_id=req.question_id, trigger=req.trigger,
-                             answer_choices=req.answer_choices, research_context=research), request.app.state.db, research),
+                             answer_choices=req.answer_choices, research_context=research,
+                             target_choice_id=target_choice_id), request.app.state.db, research),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
@@ -483,6 +533,7 @@ async def double_chat(
                 print(f"[chat] MANIPULATION LEAK detected conv={conv_id} user={user.id} agents={leaked_agents}: reply may reveal the AI was told to answer incorrectly")
         metadata = AIMessageMetadata(
             answer_incorrectly=req.answer_incorrectly, stated_choice_id=stated, manipulation_leaked=leaked,
+            target_choice_id=target_choice_id,
         ).model_dump(exclude_none=True)
         await _save_exchange(col, user, conv_id, req.message, replies_to_store, assistant_metadata=metadata,
                               question_id=req.question_id, trigger=req.trigger, research_context=research)
@@ -503,9 +554,13 @@ async def followup_quiz_chat(
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
+    # The same wrong answer on every turn, so asking again cannot surface a different one.
+    target = await asyncio.to_thread(_incorrect_target, request.app.state.db, user, conv_id,
+                                     req.question_id, req.answer_choices) if req.answer_incorrectly else None
     system_instruction = _build_system_instruction(
         answer_incorrectly=req.answer_incorrectly,
         has_choices=len(req.answer_choices) > 0,
+        target=target,
     )
     messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
@@ -519,7 +574,8 @@ async def followup_quiz_chat(
     return StreamingResponse(
         track_stream(_standard_stream(messages, col, user, conv_id, req.message, after_done=after_done, request=request,
                          answer_incorrectly=req.answer_incorrectly,
-                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices, research_context=research), request.app.state.db, research),
+                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices, research_context=research,
+                         target_choice_id=target.id if target else None), request.app.state.db, research),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -538,11 +594,15 @@ async def chat_with_embedded_links(
 
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
+    # The same wrong answer on every turn, so asking again cannot surface a different one.
+    target = await asyncio.to_thread(_incorrect_target, request.app.state.db, user, conv_id,
+                                     req.question_id, req.answer_choices) if req.answer_incorrectly else None
 
     system_instruction = (
         _build_system_instruction(
             answer_incorrectly=req.answer_incorrectly,
             has_choices=len(req.answer_choices) > 0,
+            target=target,
         ) +
         " Use web searches to gather information and cite sources inline."
         #" Prioritize academic and institutional sources; avoid blog posts, news articles, or unverifiable sources."
@@ -597,6 +657,7 @@ async def chat_with_embedded_links(
                 print(f"[chat] MANIPULATION LEAK detected conv={conv_id} user={user.id}: reply may reveal the AI was told to answer incorrectly")
         metadata = AIMessageMetadata(
             answer_incorrectly=req.answer_incorrectly, stated_choice_id=stated, manipulation_leaked=leaked,
+            target_choice_id=target.id if target else None,
         ).model_dump(exclude_none=True)
         await _save_exchange(request.app.state.messages, user, conv_id, req.message, [stored_reply], assistant_metadata=metadata,
                               question_id=req.question_id, trigger=req.trigger, research_context=research)
@@ -620,9 +681,13 @@ async def chat(
     conv_id = req.conversation_id or str(uuid.uuid4())
     history = await asyncio.to_thread(get_last_exchange, request.app.state.messages, conv_id)
     col = request.app.state.messages
+    # The same wrong answer on every turn, so asking again cannot surface a different one.
+    target = await asyncio.to_thread(_incorrect_target, request.app.state.db, user, conv_id,
+                                     req.question_id, req.answer_choices) if req.answer_incorrectly else None
     system_instruction = _build_system_instruction(
         answer_incorrectly=req.answer_incorrectly,
         has_choices=len(req.answer_choices) > 0,
+        target=target,
     )
     messages = _build_standard_messages(history, req.message, system_prompt=system_instruction)
 
@@ -631,7 +696,8 @@ async def chat(
 
     return StreamingResponse(
         track_stream(_standard_stream(messages, col, user, conv_id, req.message, answer_incorrectly=req.answer_incorrectly,
-                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices, research_context=research), request.app.state.db, research),
+                         question_id=req.question_id, trigger=req.trigger, answer_choices=req.answer_choices, research_context=research,
+                         target_choice_id=target.id if target else None), request.app.state.db, research),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

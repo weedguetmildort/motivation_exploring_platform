@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import bson
+from bson import ObjectId
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -1231,3 +1232,148 @@ class TestStreamAiServedModel:
         )
 
         assert self._collect() == ["Hello", " world"]
+
+
+# ── One agreed wrong answer when the AI must answer incorrectly ──────────────
+
+QID = str(ObjectId())
+CHOICES = [{"id": "a", "label": "2/5"}, {"id": "b", "label": "3/5"}, {"id": "c", "label": "1/6"}, {"id": "d", "label": "2/3"}]
+
+
+def _choices():
+    return [QuestionChoice(**choice) for choice in CHOICES]
+
+
+def _seed_attempt(db, conv_id="conv1", correct="b", user_id="userid1"):
+    db.quiz_attempts.insert_one({"conversation_id": conv_id, "user_id": user_id, "quiz_id": "double",
+                                 "question_order": [QID], "question_snapshots": {QID: {"correct_choice_id": correct}}})
+
+
+def _recording_create(calls, replies=("Choice C is right.", "C, formally.")):
+    """Stream fixed replies and record each request's system prompt."""
+    async def _create(*args, **kwargs):
+        system = kwargs["messages"][0]["content"]
+        calls.append(system)
+        return _FakeStream([replies[1] if "Agent B" in system else replies[0]])
+    return AsyncMock(side_effect=_create)
+
+
+class TestIncorrectTarget:
+    @pytest.fixture
+    def db(self):
+        import mongomock
+        return mongomock.MongoClient().db
+
+    def test_never_picks_the_correct_answer(self, db):
+        user = UserPublic(id="userid1", email="s@test.edu")
+        for index in range(40):
+            _seed_attempt(db, conv_id=f"conv{index}")
+            target = chat_module._incorrect_target(db, user, f"conv{index}", QID, _choices())
+            assert target is not None and target.id != "b"
+
+    def test_is_the_same_for_every_call_on_one_question(self, db):
+        user = UserPublic(id="userid1", email="s@test.edu")
+        _seed_attempt(db)
+        picks = {chat_module._incorrect_target(db, user, "conv1", QID, _choices()).id for _ in range(5)}
+        assert len(picks) == 1
+
+    def test_spreads_across_the_wrong_answers_between_conversations(self, db):
+        user = UserPublic(id="userid1", email="s@test.edu")
+        picks = set()
+        for index in range(60):
+            _seed_attempt(db, conv_id=f"conv{index}")
+            picks.add(chat_module._incorrect_target(db, user, f"conv{index}", QID, _choices()).id)
+        assert picks == {"a", "c", "d"}
+
+    def test_does_not_depend_on_the_order_choices_arrive_in(self, db):
+        user = UserPublic(id="userid1", email="s@test.edu")
+        _seed_attempt(db)
+        forward = chat_module._incorrect_target(db, user, "conv1", QID, _choices())
+        backward = chat_module._incorrect_target(db, user, "conv1", QID, list(reversed(_choices())))
+        assert forward == backward
+
+    def test_falls_back_to_the_question_bank_without_an_attempt(self, db):
+        db.questions.insert_one({"_id": ObjectId(QID), "correct_choice_id": "a"})
+        target = chat_module._incorrect_target(db, UserPublic(id="admin", email="a@test.edu"), "playground", QID, _choices())
+        assert target is not None and target.id != "a"
+
+    def test_another_participants_attempt_is_not_used(self, db):
+        _seed_attempt(db, user_id="someone-else")
+        assert chat_module._incorrect_target(db, UserPublic(id="userid1", email="s@test.edu"), "conv1", QID, _choices()) is None
+
+    @pytest.mark.parametrize("question_id,choices", [(None, CHOICES), (QID, []), ("not-an-id", CHOICES)])
+    def test_unknown_question_or_choices_leave_the_choice_to_the_ai(self, db, question_id, choices):
+        target = chat_module._incorrect_target(db, UserPublic(id="userid1", email="s@test.edu"), "conv1", question_id,
+                                               [QuestionChoice(**choice) for choice in choices])
+        assert target is None
+
+    def test_a_question_with_only_the_correct_choice_has_no_target(self, db):
+        user = UserPublic(id="userid1", email="s@test.edu")
+        _seed_attempt(db)
+        assert chat_module._incorrect_target(db, user, "conv1", QID, [QuestionChoice(id="b", label="3/5")]) is None
+
+    def test_the_instruction_names_the_target_and_forbids_switching(self):
+        text = chat_module._build_system_instruction(True, True, target=QuestionChoice(id="c", label="1/6"))
+        assert 'You MUST give answer choice C ("1/6") as your answer, and no other choice, even if asked again.' in text
+        assert "CRITICAL" in text  # the secrecy rules still apply
+        assert "choose an incorrect answer choice from the provided list" not in text
+
+    def test_a_target_is_ignored_when_answering_honestly(self):
+        honest = chat_module._build_system_instruction(False, True, target=QuestionChoice(id="c", label="1/6"))
+        assert honest == chat_module._build_system_instruction(False, True)
+
+
+class TestAgentsAgreeOnTheWrongAnswer:
+    def _post(self, client, path, **extra):
+        return client.post(path, json={"message": "Which is right?", "conversation_id": "conv1", "question_id": QID,
+                                       "answer_choices": CHOICES, "answer_incorrectly": True, **extra})
+
+    def test_both_dual_agents_are_told_the_same_wrong_answer(self, monkeypatch, chat_client, chat_app, chat_col):
+        _seed_attempt(chat_app.state.db)
+        calls = []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _recording_create(calls))
+        assert self._post(chat_client, "/chat/double", agents=[]).status_code == 200
+        target = chat_module._incorrect_target(chat_app.state.db, UserPublic(id="userid1", email="s@test.edu"), "conv1", QID, _choices())
+        expected = f'You MUST give answer choice {target.id.upper()} ("{target.label}")'
+        assert len(calls) == 2 and all(expected in system for system in calls)
+        assert any("You are Agent A." in system for system in calls) and any("You are Agent B." in system for system in calls)
+        assistant_doc = chat_col.insert_one.call_args_list[1].args[0]
+        assert assistant_doc["metadata"]["target_choice_id"] == target.id
+
+    def test_a_single_mentioned_agent_gets_the_same_target(self, monkeypatch, chat_client, chat_app, chat_col):
+        _seed_attempt(chat_app.state.db)
+        both, solo = [], []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _recording_create(both))
+        self._post(chat_client, "/chat/double", agents=[])
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _recording_create(solo))
+        self._post(chat_client, "/chat/double", agents=["AgentB"])
+        named = lambda system: system.split("You MUST give answer choice ")[1][:1]
+        assert {named(s) for s in both + solo} == {named(both[0])}
+        assert chat_col.insert_one.call_args_list[-1].args[0]["metadata"]["target_choice_id"] == named(both[0]).lower()
+
+    @pytest.mark.parametrize("path", ["/chat/followup", "/chat/links", "/chat/base"])
+    def test_single_assistant_chats_keep_one_wrong_answer_across_turns(self, monkeypatch, chat_client, chat_app, chat_col, path):
+        _seed_attempt(chat_app.state.db)
+        calls = []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _recording_create(calls))
+        for _ in range(2):
+            assert self._post(chat_client, path).status_code == 200
+        named = {system.split("You MUST give answer choice ")[1][:1] for system in calls if "You MUST give answer choice" in system}
+        assert len(named) == 1 and named != {"B"}
+        stored = [c.args[0] for c in chat_col.insert_one.call_args_list if c.args[0]["role"] == "assistant"]
+        assert {doc["metadata"]["target_choice_id"] for doc in stored} == {next(iter(named)).lower()}
+
+    def test_honest_answers_carry_no_target(self, monkeypatch, chat_client, chat_app, chat_col):
+        _seed_attempt(chat_app.state.db)
+        calls = []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _recording_create(calls))
+        self._post(chat_client, "/chat/double", agents=[], answer_incorrectly=False)
+        assert not any("You MUST give answer choice" in system for system in calls)
+        assert "target_choice_id" not in chat_col.insert_one.call_args_list[1].args[0]["metadata"]
+
+    def test_without_a_known_correct_answer_the_agents_choose_as_before(self, monkeypatch, chat_client, chat_col):
+        calls = []
+        monkeypatch.setattr(chat_module._client.chat.completions, "create", _recording_create(calls))
+        self._post(chat_client, "/chat/double", agents=[])
+        assert all("You MUST choose an incorrect answer choice from the provided list." in system for system in calls)
+        assert "target_choice_id" not in chat_col.insert_one.call_args_list[1].args[0]["metadata"]

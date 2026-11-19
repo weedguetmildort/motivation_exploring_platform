@@ -53,6 +53,14 @@ class AIMessageMetadata(BaseModel):
         default=None,
         description="Whether the AI was instructed to answer incorrectly"
     )
+    target_choice_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The wrong answer choice every agent was told to give, so dual agents and "
+            "later turns agree. Absent when the AI chose for itself (correct answer unknown) "
+            "or was not told to answer incorrectly."
+        )
+    )
     stated_choice_id: Optional[dict[str, Optional[str]]] = Field(
         default=None,
         description=(
